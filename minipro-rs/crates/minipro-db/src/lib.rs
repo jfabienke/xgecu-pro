@@ -127,6 +127,9 @@ pub struct XmlDb {
     index: HashMap<String, usize>,
     /// `algorithm.xml` next to `infoic.xml`, if present. Scanned lazily.
     algo_path: Option<PathBuf>,
+    /// Native XGPro `algoT76/` directory of `.alg` bitstream files, if present.
+    /// Preferred over `algorithm.xml` — it's the vendor source, no XML round-trip.
+    algo_dir: Option<PathBuf>,
     fw: FwVersion,
 }
 
@@ -148,10 +151,12 @@ impl XmlDb {
         }
 
         let algo = dir.join("algorithm.xml");
+        let algo_dir = dir.join("algoT76");
         Ok(XmlDb {
             devices,
             index,
             algo_path: algo.is_file().then_some(algo),
+            algo_dir: algo_dir.is_dir().then_some(algo_dir),
             fw: T76_FW_TARGET,
         })
     }
@@ -168,7 +173,25 @@ impl XmlDb {
     ///
     /// `name` is the *algorithm* name (e.g. `"SPI2C"`), which the protocol
     /// layer derives from the device's protocol id/variant — not the chip name.
+    ///
+    /// Native `algoT76/*.alg` files are preferred when present (the vendor
+    /// source), falling back to `algorithm.xml`.
     pub fn algorithm(&self, name: &str) -> Result<Option<Algorithm>> {
+        // Native .alg first: XGPro names files "<algo>.alg" (some builds prefix
+        // "T7_"); the algorithm.xml entry drops that prefix (dump-alg-minipro.bash).
+        if let Some(dir) = &self.algo_dir {
+            for cand in [format!("{name}.alg"), format!("T7_{name}.alg")] {
+                let path = dir.join(&cand);
+                if path.is_file() {
+                    let bytes = std::fs::read(&path)?;
+                    return Ok(Some(Algorithm {
+                        name: name.to_string(),
+                        bitstream: decode_alg(&bytes)?,
+                    }));
+                }
+            }
+        }
+        // Fall back to algorithm.xml.
         let Some(path) = &self.algo_path else {
             return Ok(None);
         };
@@ -472,6 +495,31 @@ fn inflate_bitstream(b64: &str) -> Result<Vec<u8>> {
 /// The embedded CRC is not re-verified here (the C does, for integrity, but a
 /// wrong bitstream is rejected by the device anyway, and matching minipro's
 /// exact CRC seed is unnecessary for correctness).
+/// Offset of the RLE bitstream data inside a native `.alg` file
+/// (`T76_ALG_OFFSET 4097` = 0x1000, `dump-alg-minipro.bash:49`).
+const ALG_DATA_OFFSET: usize = 0x1000;
+
+/// Decode a native XGPro `.alg` bitstream file into the raw Anlogic bitstream.
+///
+/// `.alg` layout: `[0x00..0x04]` magic, `[0x04..0x08]` decompressed size,
+/// `[0x08..0x0C]` crc, `[0x10..0x1000]` ASCII description, `[0x1000..]`
+/// RLE-of-zeros data. The 8-byte size/crc header (`[0x04..0x0C]`) followed by
+/// the RLE data is exactly the two-level blob [`level2_decompress`] consumes —
+/// the same splice `dump-alg-minipro.bash` gzips into `algorithm.xml` — so we
+/// rebuild that blob and reuse the decompressor. No gzip/base64 round-trip.
+fn decode_alg(alg: &[u8]) -> Result<Vec<u8>> {
+    if alg.len() < ALG_DATA_OFFSET {
+        return Err(Error::Format(format!(
+            "alg file too short: {} < {ALG_DATA_OFFSET}",
+            alg.len()
+        )));
+    }
+    let mut blob = Vec::with_capacity(8 + (alg.len() - ALG_DATA_OFFSET));
+    blob.extend_from_slice(&alg[4..12]); // size(4) + crc(4)
+    blob.extend_from_slice(&alg[ALG_DATA_OFFSET..]); // RLE data
+    level2_decompress(&blob)
+}
+
 fn level2_decompress(blob: &[u8]) -> Result<Vec<u8>> {
     const DATA_OFF: usize = 0x08;
     if blob.len() < DATA_OFF {
@@ -583,7 +631,7 @@ mod tests {
         for (i, d) in devices.iter().enumerate() {
             index.entry(d.name.to_ascii_uppercase()).or_insert(i);
         }
-        XmlDb { devices, index, algo_path: None, fw: T76_FW_TARGET }
+        XmlDb { devices, index, algo_path: None, algo_dir: None, fw: T76_FW_TARGET }
     }
 
     #[test]
@@ -713,9 +761,10 @@ mod tests {
     /// two-level `[size:u32][crc:u32][RLE u16 stream]` container (zero words are
     /// run markers, next word is the zero-word count), then gzip + base64. The
     /// inverse of [`inflate_bitstream`], so fixtures round-trip.
-    fn pack_bitstream(raw: &[u8]) -> String {
-        use std::io::Write as _;
-        // RLE-encode over LE u16 words (pad odd length with a trailing zero byte).
+    /// Build the two-level `[size:u32][crc:u32][RLE u16 stream]` blob (the
+    /// inverse of [`level2_decompress`]) that both `algorithm.xml` and `.alg`
+    /// files carry, so fixtures round-trip.
+    fn two_level_blob(raw: &[u8]) -> Vec<u8> {
         let mut padded = raw.to_vec();
         if padded.len() % 2 == 1 {
             padded.push(0);
@@ -741,10 +790,60 @@ mod tests {
         blob.extend_from_slice(&(raw.len() as u32).to_le_bytes()); // decompressed size
         blob.extend_from_slice(&0u32.to_le_bytes()); // crc (not re-verified)
         blob.extend_from_slice(&data);
+        blob
+    }
 
+    /// `algorithm.xml`-style value: gzip + base64 of the two-level blob.
+    fn pack_bitstream(raw: &[u8]) -> String {
+        use std::io::Write as _;
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        gz.write_all(&blob).unwrap();
+        gz.write_all(&two_level_blob(raw)).unwrap();
         base64::engine::general_purpose::STANDARD.encode(gz.finish().unwrap())
+    }
+
+    /// A native `.alg` file: 4-byte magic, then the blob's size/crc header at
+    /// 0x04, a description at 0x10, and the RLE data at 0x1000.
+    fn make_alg(raw: &[u8], desc: &str) -> Vec<u8> {
+        let blob = two_level_blob(raw);
+        let mut alg = vec![0u8; ALG_DATA_OFFSET];
+        alg[0..4].copy_from_slice(&[0x35, 0x4c, 0x01, 0x00]); // arbitrary magic (device id)
+        alg[4..12].copy_from_slice(&blob[..8]); // size + crc
+        let d = desc.as_bytes();
+        let n = d.len().min(ALG_DATA_OFFSET - 0x10);
+        alg[0x10..0x10 + n].copy_from_slice(&d[..n]);
+        alg.extend_from_slice(&blob[8..]); // RLE data at 0x1000
+        alg
+    }
+
+    #[test]
+    fn decode_alg_roundtrips() {
+        for raw in [
+            &b"ROM28P32 bitstream body"[..],
+            &b"zeros\x00\x00\x00\x00\x00\x00then more"[..],
+        ] {
+            let alg = make_alg(raw, "24C02 desc");
+            assert_eq!(decode_alg(&alg).unwrap(), raw, "native .alg round-trip {raw:?}");
+        }
+        // Too short is a clean format error, not a panic.
+        assert_eq!(decode_alg(&[0u8; 16]).unwrap_err().code(), "format");
+    }
+
+    #[test]
+    fn alg_dir_is_preferred_over_algorithm_xml() {
+        let dir = std::env::temp_dir().join(format!("minipro-alg-test-{}", std::process::id()));
+        let algo = dir.join("algoT76");
+        std::fs::create_dir_all(&algo).unwrap();
+        std::fs::write(dir.join("infoic.xml"), FIXTURE).unwrap();
+        // algorithm.xml says "from xml"; the .alg says "from alg" — .alg must win.
+        std::fs::write(dir.join("algorithm.xml"), algo_fixture(b"from xml")).unwrap();
+        std::fs::write(algo.join("SPI2C.alg"), make_alg(b"from alg", "W25Q64BV")).unwrap();
+
+        let db = XmlDb::load(&dir).unwrap();
+        assert_eq!(db.algorithm("SPI2C").unwrap().unwrap().bitstream, b"from alg");
+        // A name only present in algorithm.xml still falls back.
+        assert_eq!(db.algorithm("EE24C").unwrap().unwrap().bitstream, b"wrong section or entry");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
