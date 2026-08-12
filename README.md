@@ -19,7 +19,8 @@ Re-check with: `ioreg -p IOUSB -l -w 0 | grep -A4 'XGecu'` — see [hardware/usb
 
 ```
 software/      Official Xgpro T76 application (Windows installer, RAR-packed)
-docs/          User guide / manuals
+docs/          User guide / manuals; open-source status
+docs/hardware/ FPGA + MCU datasheets, pinouts, schematic (Anlogic EG4X20 + WCH CH569W)
 chip-support/  Official device support list (searchable text)
 hardware/      Notes about this unit and its USB identity
 ```
