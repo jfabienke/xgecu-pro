@@ -39,6 +39,7 @@ const CMD_BEGIN_TRANS_LOGIC: u8 = 0x02; // t76.c:34 — 64-byte NAND FPGA-setup 
 const CMD_BEGIN_TRANS: u8 = 0x03; // t76.c:35
 const CMD_END_TRANS: u8 = 0x04; // t76.c:36
 const CMD_READID: u8 = 0x05; // t76.c:37
+const MP_T76: u8 = 0x08; // device-type byte in the system-info report (minipro.h MP_T76)
 const CMD_READ_CFG: u8 = 0x08; // t76.c:40 — doubles as the eMMC EXT_CSD read
 const CMD_WRITE_USER_DATA: u8 = 0x0a; // t76.c:42
 const CMD_READ_USER_DATA: u8 = 0x0b; // t76.c:43
@@ -98,6 +99,12 @@ const ID_TYPE3: u8 = 0x03;
 const ID_TYPE4: u8 = 0x04;
 
 /// Little-endian store, the Rust `format_int(.., MP_LITTLE_ENDIAN)`.
+/// Decode a fixed-width ASCII report field (NUL/space padded) into a String.
+fn ascii_field(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).trim().to_string()
+}
+
 fn le16(buf: &mut [u8], off: usize, v: u16) {
     buf[off..off + 2].copy_from_slice(&v.to_le_bytes());
 }
@@ -435,10 +442,39 @@ impl T76 {
             link: LinkSpeed::High,
             voltage: 0.0,
         };
-        // TODO(hw): populate firmware/serial/voltage via the report request in
-        // minipro.c `minipro_get_system_info` (not part of t76.c) once the
-        // detect() identity query is ported.
         T76 { tx, info, uploaded_algo: None, emmc_geom: EmmcGeometry::default(), emmc_capacity: 0 }
+    }
+
+    /// Query programmer identity and populate [`ProgrammerInfo`]: firmware,
+    /// serial, and supply voltage. Ported from `minipro_get_system_info`
+    /// (minipro.c:148-289, T76 case) — send a 5-byte zero request, read 80
+    /// bytes: `[4]`=fw minor, `[5]`=fw major, `[6]`=device type (8 = T76),
+    /// `[8..24]`=mfg date, `[24..32]`=device code, `[32..56]`=serial,
+    /// `[56..60]`=voltage (u32 LE mV). Also verifies this really is a T76.
+    pub fn query_info(&mut self) -> Result<()> {
+        // The device replies with a single 64-byte packet (the C reads into an
+        // 80-byte buffer but tolerates the short read); every T76 field lives in
+        // the first 64 bytes (voltage @56, ext-power @62).
+        let msg = self.cmd(&[0u8; 5], 64)?;
+        if msg.len() < 63 {
+            return Err(Error::Protocol);
+        }
+        if msg[6] != MP_T76 {
+            // Only the T76 is supported by this driver (minipro.c dispatch).
+            return Err(Error::Unsupported("attached programmer is not a T76"));
+        }
+        let (minor, major) = (msg[4], msg[5]);
+        let voltage_mv = u32::from_le_bytes([msg[56], msg[57], msg[58], msg[59]]);
+        self.info = ProgrammerInfo {
+            model: "T76".into(),
+            // FwVersion display is "hw.major.minor"; hw is 0 for the T76, so the
+            // low two bytes carry major/minor (0x0107 -> "00.1.07").
+            firmware: FwVersion(((major as u32) << 8) | minor as u32),
+            serial: ascii_field(&msg[32..56]),
+            link: self.tx.link_speed(),
+            voltage: voltage_mv as f32 / 1000.0,
+        };
+        Ok(())
     }
 
     /// Send an 8-byte command and drain `resp_len` bytes from EP81.
