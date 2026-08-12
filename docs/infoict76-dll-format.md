@@ -109,6 +109,27 @@ are **not in the `Ic` struct at all**, so a DLL-only device can't yet program:
 Recovering the device→algorithm assignment is a distinct RE task — the natural
 next step for full DLL-driven programming.
 
+## Coverage (completeness check)
+
+Marking every byte consumed by the Mfc table and the IC arrays gives a coverage
+map of the data sections:
+
+| Section | Size | Covered |
+|---|---|---|
+| `.rdata` | 3.86 MB | **95.9%** |
+| `.data` | 432 KB | **96.8%** |
+
+So the chip DB (Mfc + IC tables) *is* essentially the entire data area — our
+parse is complete. The remainder is the `.rdata` header (other const data), tiny
+inter-array padding, and one ~135 KB string-heavy region at a non-IC stride
+(alias/name or logic-IC data, **not** IC structs).
+
+Crucially, **there is no large unaccounted binary table** — so the
+device→algorithm assignment is *not* a hidden data structure here. It must be
+computed in `.text` (code) or live in another component (`InfoIC.dll` / XGPro's
+XML generation), which is why the algorithm number can't be lifted statically
+from this DLL's data.
+
 ## Other caveats
 
 - Addresses (`0x172790`, count `173`) are specific to this DLL build; the *method*
