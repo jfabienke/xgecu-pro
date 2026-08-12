@@ -2,29 +2,66 @@
 
 *Last checked: 2026-08-12*
 
-**Bottom line: no open-source replacement for Xgpro exists for the T76 yet.** Chip programming still requires the official Windows software. Early reverse-engineering work is underway.
+**Summary:** There is now a substantial open-source effort to *use* the T76 for
+chip programming (Matt Brown's minipro fork), plus separate FPGA-bitstream
+tooling (radiomanV). The T76's per-operation **FPGA bitstreams are open**, the
+**USB host protocol is documented**, and the **firmware-update transport is
+reverse-engineered** — but the **encrypted CH569 firmware image itself has not
+been decrypted** by anyone publicly. The on-device bootloader holds the key.
 
 ## Projects
 
-### radiomanV/Xgecu_T76 — <https://github.com/radiomanV/Xgecu_T76>
+### Matt Brown (nmatt0) — minipro fork — headline effort
 
-The closest thing to an open-source T76 project, by the developer behind the open-source TL866/T48/T56 work. Contains:
+- Repo/branch: <https://gitlab.com/nmatt0/minipro/-/tree/t76-improvements>
+- Talk (June 2026): "Open Source Firmware Extraction – Reversing the XGecu T76" — <https://www.youtube.com/watch?v=rq9d00cgoek>
 
-- `gen_bit.py` — converts Anlogic TD IDE bitstreams into the T76's accepted format
-- `t76_uploader.py` — uploads bitstreams to the device over libusb (works on Linux/macOS)
-- A Verilog test design and docs
+A genuine open-source path to drive the T76 without Xgpro (still a feature
+branch, not mainline minipro). As of the May–June 2026 commits:
 
-This confirms the T76's internal FPGA is an **Anlogic** part and the USB upload path is understood. It is explicitly *not* a chip-programming replacement for Xgpro. Activity is minimal (a handful of commits). **This is the repo to watch.**
+- **USB protocol documented** — see [t76-protocol.md](t76-protocol.md) (vendored
+  from his `t76.md`): endpoints, command bytes, the 128-byte BEGIN_TRANS with
+  the FPGA-setup extension.
+- **Working read / erase / program** for SPI-NOR, parallel-NOR, NAND (parallel +
+  SPI), and eMMC (incl. user/boot1/boot2/rpmb partition selection).
+- **Static RE of the Windows binary** — notes cite `Xgpro_T76.exe` /
+  `InfoICT76.dll` function addresses (e.g. `t76_load_chip_to_state @0x4eed10`).
+- **Chip DB extraction** — a tool parses 35,399 chip descriptors out of
+  `InfoICT76.dll` and reverse-engineers the field/variant transforms to
+  regenerate minipro's `infoic.xml` (2,028 new V13.19 chips added).
+- **FPGA bitstreams** pulled from the XGPro install (the `algoT76/*.alg` files)
+  into `algorithm.xml` via `dump-alg-minipro.bash`. Bitstreams are
+  firmware-version specific (V13.19 pairs with device fw 00.1.17).
+- **Firmware-update transport** reverse-engineered — see
+  [firmware-updater.md](firmware-updater.md). He can flash a vendor update from
+  minipro, but the firmware payload is transported opaquely; it is **not**
+  decrypted host-side.
 
-### minipro — <https://gitlab.com/DavidGriffith/minipro>
+### radiomanV/Xgecu_T76 — FPGA-side tooling
 
-The established open-source CLI for XGecu hardware. Supports TL866CS/A, TL866II+, T48, T56 — **not the T76**. The T76 is a different architecture (new Anlogic FPGA, separate installer line on XGecu's side), so support would be a significant new effort, not a trivial extension.
+- Repo: <https://github.com/radiomanV/Xgecu_T76> (The Unlicense)
 
-## Reverse-engineering activity
+Confirms the internal FPGA is an **Anlogic Eagle EG4X20** (BG256). Contains a
+converter for Anlogic TD IDE bitstreams (`gen_bit.py`), a libusb uploader
+(`t76_uploader.py`, Linux/macOS), and a `clock_sniffer` test design. It lets you
+*load your own* bitstreams onto the T76's FPGA; it is not a chip-programming
+replacement and does **not** touch the firmware updater. radiomanV also maintains
+the long-running open-source `TL866` firmware project, but that targets the
+Microchip-PIC TL866 family, not the T76's WCH CH569.
 
-- "Open Source Firmware Extraction – Reversing the XGecu T76 Universal Programmer" (June 2026): <https://www.youtube.com/watch?v=rq9d00cgoek> (via the [KSEC hardware-hacking feed](https://forum.ksec.co.uk/t/open-source-firmware-extraction-reversing-the-xgecu-t76-universal-programmer/15533)). Firmware-level reversing of this kind usually precedes minipro-style support.
+### minipro (mainline) — <https://gitlab.com/DavidGriffith/minipro>
+
+Mainline supports TL866CS/A, TL866II+, T48, T56 — **not the T76**. T76 support
+lives only in Matt Brown's branch above for now.
+
+## What is still closed
+
+- The **CH569W MCU firmware image** inside `UpdateT76.Dat` is encrypted/obfuscated
+  (measured entropy ≈ 7.9 bits/byte) and has **not** been decrypted or extracted
+  publicly. The device bootloader decrypts on-flash; the host only ships blocks.
 
 ## Re-checking
 
-- Watch the radiomanV repo and minipro changelog for "T76".
-- Quick check: `curl -s https://gitlab.com/DavidGriffith/minipro/-/raw/master/README.md | grep -i t76`
+- Matt Brown's branch: `git ls-remote https://gitlab.com/nmatt0/minipro t76-improvements`
+- Mainline minipro for T76: `curl -s https://gitlab.com/DavidGriffith/minipro/-/raw/master/README.md | grep -i t76`
+- radiomanV repo: watch <https://github.com/radiomanV/Xgecu_T76>

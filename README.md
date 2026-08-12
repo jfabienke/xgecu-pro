@@ -19,7 +19,7 @@ Re-check with: `ioreg -p IOUSB -l -w 0 | grep -A4 'XGecu'` — see [hardware/usb
 
 ```
 software/      Official Xgpro T76 application (Windows installer, RAR-packed)
-docs/          User guide / manuals; open-source status
+docs/          User guide / manuals; open-source status; protocol + firmware notes
 docs/hardware/ FPGA + MCU datasheets, pinouts, schematic (Anlogic EG4X20 + WCH CH569W)
 chip-support/  Official device support list (searchable text)
 hardware/      Notes about this unit and its USB identity
@@ -33,7 +33,7 @@ hardware/      Notes about this unit and its USB identity
 
 ### macOS note
 
-Xgpro is **Windows-only** (XP–Win11) and drives the programmer directly over USB. On this Mac, run it in a Windows VM (Parallels/VMware/UTM) and pass through the USB device with VID `0xA466` / PID `0x1A86`. No open-source alternative supports the T76 yet — see [docs/open-source-status.md](docs/open-source-status.md) for the current state and which projects to watch.
+Xgpro is **Windows-only** (XP–Win11) and drives the programmer directly over USB. On this Mac, run it in a Windows VM (Parallels/VMware/UTM) and pass through the USB device with VID `0xA466` / PID `0x1A86`. An open-source path is emerging — Matt Brown's minipro fork now programs SPI/NOR/NAND/eMMC on the T76 (feature branch). See [docs/open-source-status.md](docs/open-source-status.md), the reverse-engineered [USB protocol](docs/t76-protocol.md), and the [firmware-updater notes](docs/firmware-updater.md).
 
 ## Sources
 
