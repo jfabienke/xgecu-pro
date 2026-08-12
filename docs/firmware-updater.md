@@ -57,10 +57,58 @@ Guards implemented before flashing: file size 16 B–1 MiB, version mask check,
 `blocks*0x114 + 16 == file_size`, and the CRC-32 match. Reference constants in
 the source: `LAST_BLOCK_ADDR 0x049f00`, `LAST_BLOCK_CRC 0xcdef8668`.
 
+## Where does the decryption key come from?
+
+Two different key systems exist on this chip; only the second one protects
+`UpdateT76.Dat`.
+
+**Layer 1 — WCH factory ISP (not the one that matters here).** The CH569's
+built-in ROM bootloader, which [`wch-ch56x-isp`](https://github.com/hydrausb3/wch-ch56x-isp)
+drives, "encrypts" its transport with a trivial XOR keyed to the chip's 64-bit
+**Unique ID**. From `wch-ch56x-isp.c`:
+
+```c
+for (sum = 0, i = 0; i < dev_uid_len; i++) sum += dev_uid[i]; // sum of UID bytes
+memset(xor_key, sum, sizeof(xor_key));                        // all 8 key bytes = that sum
+xor_key[7] = xor_key[0] + dev_id;                             // last byte tweaked by device type
+unk[5 + i] = data[i] ^ key[i % 8];                            // each byte XORed on the wire
+```
+
+The host reads the UID over ISP and derives the key itself, so this is
+obfuscation/pairing, not confidentiality — the host already holds the plaintext.
+**This is not what guards the XGecu firmware.**
+
+**Layer 2 — XGecu's application-layer encryption (the real one).** The
+`UpdateT76.Dat` body is genuinely encrypted (entropy ≈ 7.9) and is moved through
+the flashing protocol above **opaquely** — Xgpro, minipro, the `.Dat` file, and
+the USB traffic never contain the plaintext or the key. So the key is not
+host-side at all; it lives in the **resident XGecu bootloader already running on
+the CH569**, which decrypts each block just before writing flash.
+
+It is almost certainly a **single global key, not per-device.** `UpdateT76.Dat`
+is one file shipped in the Xgpro installer to every T76 owner; a UID-derived key
+(Layer-1 style) could not decrypt on every unit. So the decryption key must be a
+constant baked into every T76's firmware (compiled into XGecu's bootloader, or
+burned into a data-flash/config region at the factory). The CH569 provides the
+means: a hardware **AES/SM4 engine (ECDC module)** plus the read-only Unique ID
+(datasheet §2.2.3, Chapter 15). XGecu plausibly runs each block through that AES
+engine with the embedded key; whether they additionally mix the UID in for
+per-unit *authentication* (while keeping a global *decryption* key) is unknown.
+
+**Why it can't just be dumped.** The obvious attack — read the CH569 flash and
+lift the key out of XGecu's bootloader — is blocked by the chip's flash
+**read-protection**. The datasheet's `RB_ROM_EXT_RE` bit
+("External programmer read Flash ROM enable — `1: Read enabled; 0: Read
+protection`") is cleared on a shipped unit, so an external programmer can erase
+and reflash but **cannot read code flash back out**. Recovering the key would
+require defeating that protection (voltage glitching, decap/microprobing, or an
+ISP/ROM-bootloader vulnerability), not a software crack. This is why no public
+work — including Matt Brown's — has the plaintext CH569 firmware or the key.
+
 ## Open questions
 
 - The header **offset-8 field is unidentified** ("Unknown").
-- The **encryption scheme** guarding the firmware body is unknown; decrypting it
-  would require dumping/reversing the CH569 bootloader (which holds the key).
+- The **exact cipher and mode** (AES vs. SM4, key length, IV/chaining) inside
+  the Layer-2 scheme are unconfirmed — only the container and transport are RE'd.
 - Whether the 284-byte block's 28 bytes of non-data overhead include a per-block
   MAC/CRC vs. addressing metadata is not fully documented upstream.
