@@ -45,6 +45,10 @@ not a fully static one.
 
 ## Core abstractions
 
+*The full trait design — capability sub-traits, the must-drain transport, the
+event/reporter model, error codes, and a worked `minipro read` — is in
+[rust-trait-model.md](rust-trait-model.md). Summary below.*
+
 The C `minipro_handle_t` vtable becomes a trait; drivers implement it and are
 held as `Box<dyn Programmer>` (dispatch mirrors the C `switch` on model).
 
