@@ -57,7 +57,40 @@ so chip lookups work offline:
 | Build | ✅ compiles and runs (`minipro 0.7.4`, branch `t76-improvements`) |
 | T76 chip database | ✅ 34,607 devices; offline search works |
 | `algorithm.xml` bitstreams | ✅ generated, 649 T76 algorithms, fw-matched to 00.1.17 |
-| **Live USB comms to the T76** | ❌ **fails on macOS** — see below |
+| **Live USB comms to the T76** | ✅ **works on macOS via a USB 2.0-only cable** (forces High Speed) — see below |
+
+### RESOLVED: USB comms work at USB 2.0 High Speed
+
+The SuperSpeed blocker below is real but **avoidable**: connect the T76 with a
+**USB 2.0-only cable** (or through a USB 2.0-only hub) so it enumerates at High
+Speed (480 Mbps) instead of SuperSpeed. At High Speed the failing SS bulk path
+is never used and comms work. Verified 2026-08-12 on this Mac:
+
+```
+$ ./minipro -k
+t76: T76
+$ ./minipro -d W25Q64BV@SOIC8
+Found T76 00.1.07 (0x107)
+...
+USB speed: 480Mbps (USB 2.0)
+Supply voltage: 5.16 V (USB)
+```
+
+Cable notes from testing:
+- The **stock XGecu A-to-C cable is a genuine SuperSpeed cable** → still
+  negotiates USB 3.0 → still fails. It cannot be used for the downgrade.
+- A **USB 2.0-only cable works** — e.g. a RØDE mic USB-A-to-C cable (audio
+  cables are USB 2.0). Confirm the link with
+  `ioreg -rc IOUSBHostDevice -n 'XGecu T76' | grep UsbLinkSpeed` →
+  `480000000` = High Speed (good), `5000000000` = SuperSpeed (still broken),
+  `12000000` = fell back to USB 1.1 (swap cable).
+- A **USB 3.0 hub does not help** (it passes SuperSpeed through). Only a
+  USB-2-only cable or a USB-2-only hub forces the downgrade.
+
+> **Firmware caveat:** this unit runs **00.1.07** but `algorithm.xml` is built
+> for **00.1.17**; minipro warns the firmware is out of date. Bitstream-backed
+> operations may need a matching `algorithm.xml` (regenerate for 00.1.07) or a
+> firmware update to 00.1.17. See [Firmware note](#firmware-note).
 
 ### The macOS USB blocker (root-caused)
 
