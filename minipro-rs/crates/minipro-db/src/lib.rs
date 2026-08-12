@@ -815,6 +815,24 @@ mod tests {
         alg
     }
 
+    /// Opt-in: prove the native `.alg` path yields a byte-identical bitstream to
+    /// the `algorithm.xml` path on the *real* files.
+    /// `MINIPRO_XML_DIR=../minipro-t76 MINIPRO_ALG_DIR=/tmp/alg-native cargo test -p minipro-db alg_matches_xml`
+    #[test]
+    fn alg_matches_xml_real() {
+        let (Ok(xdir), Ok(adir)) =
+            (std::env::var("MINIPRO_XML_DIR"), std::env::var("MINIPRO_ALG_DIR"))
+        else {
+            return;
+        };
+        let xdb = XmlDb::load(Path::new(&xdir)).unwrap(); // uses algorithm.xml
+        let adb = XmlDb::load(Path::new(&adir)).unwrap(); // uses algoT76/*.alg
+        let x = xdb.algorithm("ROM28P32").unwrap().expect("xml ROM28P32");
+        let a = adb.algorithm("ROM28P32").unwrap().expect("alg ROM28P32");
+        assert_eq!(a.bitstream.len(), x.bitstream.len(), "length");
+        assert_eq!(a.bitstream, x.bitstream, "native .alg vs algorithm.xml bitstream");
+    }
+
     #[test]
     fn decode_alg_roundtrips() {
         for raw in [
