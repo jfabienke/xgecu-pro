@@ -108,6 +108,10 @@ pub trait ChipDb {
     fn search(&self, query: &str, limit: usize) -> Search<'_>;
     /// The device firmware these bitstreams target (drives the mismatch check).
     fn firmware_target(&self) -> FwVersion;
+    /// All devices, for reverse lookups (e.g. by electronic id). Default empty.
+    fn all(&self) -> &[Device] {
+        &[]
+    }
     /// Resolve and inflate the FPGA bitstream a device needs before a session
     /// (derives the algorithm name via [`algorithm_name`], then loads it).
     /// Default `None` for backends without bitstreams.
@@ -198,6 +202,10 @@ impl ChipDb for XmlDb {
 
     fn firmware_target(&self) -> FwVersion {
         self.fw
+    }
+
+    fn all(&self) -> &[Device] {
+        &self.devices
     }
 
     fn load_algorithm(&self, dev: &Device) -> Result<Option<Algorithm>> {

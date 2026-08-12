@@ -110,6 +110,16 @@ enum Command {
     },
     /// Interactive terminal UI (chip browser, ZIF contact map, hex view)
     Tui,
+    /// Read the seated chip's electronic id and match it in the database.
+    ///
+    /// Parallel chips need a bitstream loaded before they can be talked to at
+    /// all, so `--like` names a same-package chip to establish the socket /
+    /// algorithm family; the id that comes back is the *actual* seated chip's.
+    Detect {
+        /// A chip of the same package to borrow the socket/algorithm from
+        #[arg(long, default_value = "M27C256B@DIP28")]
+        like: String,
+    },
 }
 
 impl Command {
@@ -122,6 +132,7 @@ impl Command {
             Command::Info => "info",
             Command::Search { .. } => "search",
             Command::Tui => "tui",
+            Command::Detect { .. } => "detect",
         }
     }
 }
@@ -222,6 +233,7 @@ fn main() -> ExitCode {
         }
         Command::Erase { chip } => run_erase(db_dir, chip, &mut *reporter_for(mode)),
         Command::Info => run_info(db_dir, &mut *reporter_for(mode)),
+        Command::Detect { like } => run_detect(db_dir, like, mode),
     };
 
     match result {
@@ -401,6 +413,89 @@ fn run_info(db_dir: Option<&Path>, rep: &mut dyn Reporter) -> Result<()> {
         link: info.link,
         vcc: info.voltage,
     });
+    Ok(())
+}
+
+/// Decode a JEDEC manufacturer id byte to a name (common vendors only).
+fn manufacturer_name(id: u8) -> &'static str {
+    match id {
+        0x01 => "AMD",
+        0x04 => "Fujitsu",
+        0x1c => "EON",
+        0x1e | 0x1f => "Atmel",
+        0x20 => "STMicroelectronics",
+        0x37 => "AMIC",
+        0x89 => "Intel",
+        0x9d => "ISSI",
+        0xad => "Hynix",
+        0xbf => "SST",
+        0xc2 => "Macronix",
+        0xc8 => "GigaDevice",
+        0xda => "Winbond (old)",
+        0xec => "Samsung",
+        0xef => "Winbond",
+        _ => "unknown vendor",
+    }
+}
+
+/// Read the seated chip's electronic id (through the `--like` socket family) and
+/// report which database devices share that id.
+fn run_detect(db_dir: Option<&Path>, like: &str, mode: Mode) -> Result<()> {
+    let db = load_db(db_dir)?;
+    let dev = lookup_device(&*db, like)?;
+    let mut prog = open_programmer()?;
+
+    let id = {
+        let mut txn = Txn::begin(&mut *prog, &dev)?; // uploads the socket-family bitstream
+        let (p, s) = txn.parts();
+        p.identify(s)? // reads the ACTUAL chip's signature
+    };
+
+    let mut matches: Vec<&str> = if id.bytes == 0 {
+        Vec::new()
+    } else {
+        db.all()
+            .iter()
+            .filter(|d| d.chip_id_bytes == id.bytes && d.chip_id == id.raw)
+            .map(|d| d.name.as_str())
+            .collect()
+    };
+    matches.sort_unstable();
+    matches.dedup();
+
+    let width = (id.bytes.max(1) as usize) * 2;
+    let mfr = manufacturer_name((id.raw >> (id.bytes.saturating_sub(1) as u32 * 8)) as u8);
+    let shown: Vec<&str> = matches.iter().copied().take(12).collect();
+
+    match mode {
+        Mode::Json => {
+            let arr: Vec<String> = shown.iter().map(|s| format!("{s:?}")).collect();
+            println!(
+                "{{\"op\":\"detect\",\"ok\":true,\"id\":\"{:0width$x}\",\"bytes\":{},\"manufacturer\":\"{}\",\"n\":{},\"matches\":[{}]}}",
+                id.raw,
+                id.bytes,
+                mfr,
+                matches.len(),
+                arr.join(",")
+            );
+        }
+        _ => {
+            anstream::println!("Electronic id: 0x{:0width$X}  ({} bytes) — {}", id.raw, id.bytes, mfr);
+            if matches.is_empty() {
+                anstream::println!(
+                    "No database match (chip may be blank/mis-seated, or the id isn't in the DB)."
+                );
+            } else {
+                anstream::println!("Matches {} database device(s):", matches.len());
+                for name in &shown {
+                    anstream::println!("  {name}");
+                }
+                if matches.len() > shown.len() {
+                    anstream::println!("  … and {} more", matches.len() - shown.len());
+                }
+            }
+        }
+    }
     Ok(())
 }
 
