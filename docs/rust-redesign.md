@@ -31,8 +31,17 @@ minipro/                         (cargo workspace)
 └─ minipro-ffi      (cdylib, optional)  C ABI shim for existing libminipro users
 ```
 
-A single statically-linked binary (musl / pure-Rust deps) — which **directly
-fixes the pkg-config/libusb/zlib build pain** we hit on macOS.
+**Dependency graph is 100% pure Rust** — no vendored/compiled C, and crucially
+none of the current tool's C libs: `nusb` replaces libusb, and `flate2`'s
+`miniz_oxide` backend replaces zlib. This **directly fixes the
+pkg-config/libusb/zlib build pain** we hit on macOS.
+
+The only C left is the OS's own interface (unavoidable in any language, since the
+syscall/driver boundary is C): Linux reaches usbfs via raw syscalls (→ a truly
+static **musl** binary, zero dynamic deps); macOS links `IOKit.framework` and
+Windows the WinUSB system DLLs — so those targets produce a *self-contained*
+binary that still dynamically links system frameworks (normal and unavoidable),
+not a fully static one.
 
 ## Core abstractions
 
