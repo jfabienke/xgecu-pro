@@ -443,7 +443,14 @@ impl T76 {
 
     /// Send an 8-byte command and drain `resp_len` bytes from EP81.
     fn cmd(&mut self, pkt: &[u8], resp_len: usize) -> Result<Vec<u8>> {
-        command(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, pkt, resp_len)?.read()
+        if std::env::var_os("MINIPRO_TRACE").is_some() {
+            eprintln!("[t76] cmd op={:02x}/{:02x} out={} want={resp_len}", pkt[0], pkt.get(1).copied().unwrap_or(0), pkt.len());
+        }
+        let r = command(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, pkt, resp_len)?.read();
+        if std::env::var_os("MINIPRO_TRACE").is_some() {
+            match &r { Ok(v) => eprintln!("[t76]   -> {} bytes: {:02x?}", v.len(), &v[..v.len().min(8)]), Err(e) => eprintln!("[t76]   -> ERR {e}") }
+        }
+        r
     }
 
     /// Send a command with no reply (the T76 has genuinely reply-less

@@ -256,8 +256,15 @@ fn load_db(dir: Option<&Path>) -> Result<Box<dyn ChipDb>> {
     }
 }
 
+/// Look up a chip and attach its FPGA bitstream from `algorithm.xml` (the DB
+/// stores chip parameters and bitstreams separately; `begin` needs both).
 fn lookup_device(db: &dyn ChipDb, chip: &str) -> Result<minipro_core::device::Device> {
-    db.get(chip).cloned().ok_or(Error::Unsupported("unknown chip (try `minipro search`)"))
+    let mut dev = db
+        .get(chip)
+        .cloned()
+        .ok_or(Error::Unsupported("unknown chip (try `minipro search`)"))?;
+    dev.algorithm = db.load_algorithm(&dev)?;
+    Ok(dev)
 }
 
 /// Warn (typed, not printf) when the programmer firmware differs from the

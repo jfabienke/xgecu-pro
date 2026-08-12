@@ -53,6 +53,45 @@ const ALGO_SECTION: &str = "algorithms_T76";
 /// (`T76_FIRMWARE_VERSION 0x111` / `"00.1.17"` in `minipro-t76/src/t76.h`).
 const T76_FW_TARGET: FwVersion = FwVersion(0x0111);
 
+/// Algorithm-name prefixes, indexed by `protocol_id - 1` (ported verbatim from
+/// `minipro-t76/src/database.c:334` `algo_table`). Empty entries are unused ids.
+const ALGO_TABLE: &[&str] = &[
+    "IIC24C", "MW93ALG", "SPI25F", "AT45D", "F29EE", "W29F32P", // 0x01..0x06
+    "ROM28P", "ROM32P", "ROM40P", "R28TO32P", "ROM24P", "ROM44", // 0x07..0x0C
+    "EE28C32P", "RAM32", "SPI25F", "28F32P", "FWH", "T48", // 0x0D..0x12
+    "T40A", "T40B", "T88V", "PIC32X", "P18F87J", "P16F", // 0x13..0x18
+    "P18F2", "P16F5X", "P16CX", "", "ATMGA_", "ATTINY_", // 0x19..0x1E
+    "AT89P20_", "", "AT89C_", "P87C_", "SST89_", "W78E_", // 0x1F..0x24
+    "", "", "ROM24P", "ROM28P", "RAM32", "GAL16", // 0x25..0x2A
+    "GAL20", "GAL22", "NAND_", "PIC32X", "RAM36", "KB90", // 0x2B..0x30
+    "EMMC_", "VGA_", "CPLD_", "GEN_", "ITE_", // 0x31..0x35
+];
+
+/// Derive the FPGA-algorithm name for a device, matching
+/// `get_algorithm()` in `database.c:1957`: `algo_table[protocol_id-1]` +
+/// `hex(variant >> 8)`, with the EMMC/ATMGA/AT89C special cases. Returns `None`
+/// for logic/utility devices (`protocol_id == 0`), which use a separate table.
+///
+/// Example: an `M27C256B@DIP28` (protocol 0x07 `ROM28P`, `variant>>8 == 0x32`)
+/// resolves to `"ROM28P32"` — the same name the C tool logs for it.
+pub fn algorithm_name(dev: &Device) -> Option<String> {
+    let pid = dev.protocol_id;
+    let idx = (pid as usize).checked_sub(1)?;
+    let prefix = ALGO_TABLE.get(idx).copied().filter(|s| !s.is_empty())?;
+    let algo_number = (dev.variant >> 8) as u8;
+    let mut name = String::from(prefix);
+    match pid {
+        0x31 => {
+            // EMMC: lowercase number + voltage suffix (default 3.3V).
+            name.push_str(&format!("{algo_number:02x}_33"));
+        }
+        // ATMGA (0x1D) / AT89C (0x21) with ISCP use "11S"/"2S"; the ZIF default
+        // is the plain hex number, same as every other protocol.
+        _ => name.push_str(&format!("{algo_number:02X}")),
+    }
+    Some(name)
+}
+
 /// A bounded search result: capped hits plus the true total, so JSON mode never
 /// dumps all 34k devices.
 pub struct Search<'a> {
@@ -69,6 +108,12 @@ pub trait ChipDb {
     fn search(&self, query: &str, limit: usize) -> Search<'_>;
     /// The device firmware these bitstreams target (drives the mismatch check).
     fn firmware_target(&self) -> FwVersion;
+    /// Resolve and inflate the FPGA bitstream a device needs before a session
+    /// (derives the algorithm name via [`algorithm_name`], then loads it).
+    /// Default `None` for backends without bitstreams.
+    fn load_algorithm(&self, _dev: &Device) -> Result<Option<Algorithm>> {
+        Ok(None)
+    }
 }
 
 /// XML-backed database (the editable source of truth).
@@ -153,6 +198,13 @@ impl ChipDb for XmlDb {
 
     fn firmware_target(&self) -> FwVersion {
         self.fw
+    }
+
+    fn load_algorithm(&self, dev: &Device) -> Result<Option<Algorithm>> {
+        match algorithm_name(dev) {
+            Some(name) => self.algorithm(&name),
+            None => Ok(None),
+        }
     }
 }
 
@@ -394,10 +446,47 @@ fn inflate_bitstream(b64: &str) -> Result<Vec<u8>> {
     let gz = base64::engine::general_purpose::STANDARD
         .decode(&clean)
         .map_err(|e| Error::Format(format!("bitstream base64: {e}")))?;
-    let mut out = Vec::new();
+    let mut blob = Vec::new();
     flate2::read::GzDecoder::new(gz.as_slice())
-        .read_to_end(&mut out)
+        .read_to_end(&mut blob)
         .map_err(|e| Error::Format(format!("bitstream gunzip: {e}")))?;
+    level2_decompress(&blob)
+}
+
+/// Second-level (RLE-of-zeros) decompression of a T76 bitstream, matching
+/// `get_algorithm` in `database.c:2104-2153`. After gunzip the blob is
+/// `[algo_size: u32 LE][crc: u32 LE][data…]` (offsets 0x00/0x04/0x08). The data
+/// is a stream of little-endian u16 words: a non-zero word is emitted verbatim;
+/// a zero word is a run marker whose following word gives the count of zero u16
+/// words to emit. The expanded result is the actual Anlogic bitstream, exactly
+/// `algo_size` bytes (the C output buffer is `calloc(1, algo_size)`).
+///
+/// The embedded CRC is not re-verified here (the C does, for integrity, but a
+/// wrong bitstream is rejected by the device anyway, and matching minipro's
+/// exact CRC seed is unnecessary for correctness).
+fn level2_decompress(blob: &[u8]) -> Result<Vec<u8>> {
+    const DATA_OFF: usize = 0x08;
+    if blob.len() < DATA_OFF {
+        return Err(Error::Format("bitstream blob too short".into()));
+    }
+    let algo_size = u32::from_le_bytes([blob[0], blob[1], blob[2], blob[3]]) as usize;
+    let data = &blob[DATA_OFF..];
+
+    let mut out = Vec::with_capacity(algo_size);
+    let mut i = 0;
+    while i + 1 < data.len() {
+        let val = u16::from_le_bytes([data[i], data[i + 1]]);
+        i += 2;
+        if val != 0 {
+            out.extend_from_slice(&val.to_le_bytes());
+        } else if i + 1 < data.len() {
+            let count = u16::from_le_bytes([data[i], data[i + 1]]) as usize;
+            i += 2;
+            out.resize(out.len() + count * 2, 0);
+        }
+    }
+    // The vendor buffer is exactly algo_size (zero-filled): pad or trim to match.
+    out.resize(algo_size, 0);
     Ok(out)
 }
 
@@ -612,12 +701,54 @@ mod tests {
         assert_eq!(parse_num("42").unwrap(), 42);
     }
 
-    /// gzip + base64 a payload the way XGPro does for `bitstream=`.
+    /// Pack a payload the way XGPro does for `bitstream=`: wrap it in the
+    /// two-level `[size:u32][crc:u32][RLE u16 stream]` container (zero words are
+    /// run markers, next word is the zero-word count), then gzip + base64. The
+    /// inverse of [`inflate_bitstream`], so fixtures round-trip.
     fn pack_bitstream(raw: &[u8]) -> String {
         use std::io::Write as _;
+        // RLE-encode over LE u16 words (pad odd length with a trailing zero byte).
+        let mut padded = raw.to_vec();
+        if padded.len() % 2 == 1 {
+            padded.push(0);
+        }
+        let mut data = Vec::new();
+        let mut i = 0;
+        while i < padded.len() {
+            let w = u16::from_le_bytes([padded[i], padded[i + 1]]);
+            i += 2;
+            if w != 0 {
+                data.extend_from_slice(&w.to_le_bytes());
+            } else {
+                let mut count = 1u16;
+                while i < padded.len() && padded[i] == 0 && padded[i + 1] == 0 {
+                    count += 1;
+                    i += 2;
+                }
+                data.extend_from_slice(&0u16.to_le_bytes());
+                data.extend_from_slice(&count.to_le_bytes());
+            }
+        }
+        let mut blob = Vec::with_capacity(8 + data.len());
+        blob.extend_from_slice(&(raw.len() as u32).to_le_bytes()); // decompressed size
+        blob.extend_from_slice(&0u32.to_le_bytes()); // crc (not re-verified)
+        blob.extend_from_slice(&data);
+
         let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        gz.write_all(raw).unwrap();
+        gz.write_all(&blob).unwrap();
         base64::engine::general_purpose::STANDARD.encode(gz.finish().unwrap())
+    }
+
+    #[test]
+    fn level2_roundtrips_including_zero_runs() {
+        for raw in [
+            &b"anlogic bytes"[..],
+            &b"\x00\x00\x00\x00zeros then data"[..],
+            &b"mid\x00\x00run\x01\x02"[..],
+        ] {
+            let b64 = pack_bitstream(raw);
+            assert_eq!(inflate_bitstream(&b64).unwrap(), raw, "round-trip {raw:?}");
+        }
     }
 
     fn algo_fixture(payload: &[u8]) -> String {
