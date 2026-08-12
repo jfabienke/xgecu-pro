@@ -6,12 +6,25 @@
 //! walks those tables *statically* (no DLL execution, no Wine, no decompilation).
 //! The full binary format is documented in `docs/infoict76-dll-format.md`.
 //!
-//! Scope: this extracts the chip *catalog* (name, protocol, id, sizes, package)
-//! — enough for lookup, search, and id-based detection. The per-chip
-//! voltage/flags/pin-map programming parameters come from `opts` fields whose
-//! decode (XGPro's `json_to_devices` transforms) is not yet ported, so devices
-//! from here are catalog-complete but not yet fully programmable. Bitstreams are
-//! resolved from `algoT76/` or `algorithm.xml` next to the DLL, as usual.
+//! Decoded fields (verified against `infoic.xml`): name, protocol_id, variant
+//! (low byte), code/data sizes, read/write buffers, chip_id, chip_id_bytes,
+//! package, and the ported `opts` programming params — **voltages** (`vpp:vcc`
+//! at 0x50:0x4c), **chip_info** (0x44), **pulse_delay** (0x58), **page_size**
+//! (0x54), **pages_per_block** (0x68). Bitstreams resolve from `algoT76/` or
+//! `algorithm.xml` next to the DLL.
+//!
+//! **Reads are still blocked** — but by a *different* thing than the opts
+//! transforms. Two parameters are not present in the `Ic` struct at all:
+//! - The **algorithm number** (the high byte of `infoic.xml`'s `variant`, e.g.
+//!   `0x32` making `M27C256B` → `ROM28P32`). The DLL stores only the low byte
+//!   (`0x11`), so [`crate::algorithm_name`] derives `ROM28P00` and the wrong
+//!   bitstream loads. XGPro assigns algorithms externally (not in this table).
+//! - **`flags`** (0x70 holds a value that needs an unknown transform) and
+//!   **`pin_map`** (derived from the package layout, not stored).
+//!
+//! So the catalog and most programming params are recoverable statically; a
+//! working read additionally needs the device→algorithm assignment, which is a
+//! separate reverse-engineering task, not an `opts` decode.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -31,15 +44,21 @@ const MFC_SHORT_NAME: usize = 0x08; // char[20]
 const MFC_IC_PTR: usize = 0x44; // u32 VA -> this vendor's Ic array
 const MFC_NUM_ICS: usize = 0x48; // u32
 const IC_NAME: usize = 0x0c; // char[40]
-const IC_VARIANT: usize = 0x34;
+const IC_VARIANT: usize = 0x34; // low byte of the infoic variant (algo number is NOT here)
 const IC_CODE_SIZE: usize = 0x38;
 const IC_DATA_SIZE: usize = 0x3c;
 const IC_DATA2_SIZE: usize = 0x40;
+const IC_CHIP_INFO: usize = 0x44; // -> Device.chip_info (verified: M27C256B=6, W25Q64BV=0x90)
 const IC_RBUF: usize = 0x48;
 const IC_WBUF: usize = 0x4a;
+const IC_VOLT_VCC: usize = 0x4c; // voltages low byte
+const IC_VOLT_VPP: usize = 0x50; // voltages high byte
+const IC_PAGE_SIZE: usize = 0x54; // -> Device.page_size (W25Q64BV=0x100)
+const IC_PULSE_DELAY: usize = 0x58; // -> Device.pulse_delay (M27C256B=0x64, W25Q64BV=0x1388)
 const IC_CHIP_ID: usize = 0x5c; // u8[8]
 const IC_CHIP_ID_LEN: usize = 0x64; // u32
-const IC_PACKAGE: usize = 0x70; // u32
+const IC_PAGES_PER_BLOCK: usize = 0x68; // -> Device.pages_per_block (W25Q64BV=2)
+const IC_PACKAGE: usize = 0x6c; // u32 (0x70 is `flags`, which needs a transform)
 
 /// A minimally-parsed PE image: just enough to map virtual addresses to file
 /// offsets and read the data sections.
@@ -288,6 +307,14 @@ fn decode_ic(pe: &Pe, ic: usize) -> Option<Device> {
     let data_memory2_size = pe.u32(ic + IC_DATA2_SIZE)? as u16;
     let read_buffer_size = pe.u16(ic + IC_RBUF)?;
     let write_buffer_size = pe.u16(ic + IC_WBUF)?;
+    let page_size = u32::from(pe.u16(ic + IC_PAGE_SIZE)?);
+    let pulse_delay = pe.u16(ic + IC_PULSE_DELAY)?;
+    let pages_per_block = pe.u16(ic + IC_PAGES_PER_BLOCK)?;
+    let chip_info = pe.data.get(ic + IC_CHIP_INFO).copied()?;
+    // Voltages pack as vpp:vcc (verified: M27C256B 0x50:0x70=0x5070, W25Q64BV 0x00:0x01=0x0001).
+    let vcc = pe.data.get(ic + IC_VOLT_VCC).copied()?;
+    let vpp = pe.data.get(ic + IC_VOLT_VPP).copied()?;
+    let raw_voltages = (u32::from(vpp) << 8) | u32::from(vcc);
     let id_len = pe.u32(ic + IC_CHIP_ID_LEN)?.min(4) as usize;
     let id_bytes = pe.data.get(ic + IC_CHIP_ID..ic + IC_CHIP_ID + id_len)?;
     // Big-endian assembly: [ef,40,17] -> 0x00ef4017 (matches infoic.xml).
@@ -304,15 +331,17 @@ fn decode_ic(pe: &Pe, ic: usize) -> Option<Device> {
         code_size,
         data_size,
         data_memory2_size,
-        page_size: 0,
+        page_size,
         chip_id,
-        raw_voltages: 0, // TODO: decode from opts fields (json_to_devices transforms)
-        chip_info: 0,
+        raw_voltages,
+        chip_info,
+        // pin_map isn't stored in the Ic struct (it's derived from the package
+        // layout by XGPro tooling); raw_flags@0x70 needs an unknown transform.
         pin_map: 0,
-        pulse_delay: 0,
+        pulse_delay,
         read_buffer_size,
         write_buffer_size,
-        pages_per_block: 0,
+        pages_per_block,
         raw_flags: 0,
         packed_package: package_details,
         icsp: ((package_details & 0x0000_ff00) >> 8) as u8,
@@ -339,5 +368,16 @@ mod tests {
         assert_eq!(w.chip_id_bytes, 3);
         assert_eq!(w.protocol_id, 0x03);
         assert_eq!(w.code_size, 0x80_0000);
+        // Newly-decoded programming params (verified vs infoic.xml W25Q64BV):
+        assert_eq!(w.raw_voltages, 0x0001, "voltages");
+        assert_eq!(w.chip_info, 0x90, "chip_info");
+        assert_eq!(w.pulse_delay, 0x1388, "pulse_delay");
+        assert_eq!(w.page_size, 0x100, "page_size");
+        assert_eq!(w.pages_per_block, 2, "pages_per_block");
+        assert_eq!(w.package.pin_count, 8, "pin_count (package offset fix)");
+        // The algorithm number (variant high byte) is NOT in the struct:
+        let m = db.get("M27C256B@DIP28").expect("M27C256B present");
+        println!("M27C256B: dll variant=0x{:04x}, algorithm_name={:?} (infoic has variant 0x3211 -> ROM28P32)",
+                 m.variant, crate::algorithm_name(m));
     }
 }

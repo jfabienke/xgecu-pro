@@ -77,14 +77,43 @@ GetIcStru(m, k, out): base = *(mfcTable[m] + 0x44)        ; per-mfc IC-array poi
 
 No DLL execution, no Wine, no decompilation, no PDB.
 
-## Caveats
+## Ic field map (verified against `infoic.xml`)
+
+| Ic offset | Device field | Notes |
+|---|---|---|
+| 0x00 | protocol_id | low byte |
+| 0x0c | name | `NAME` or `NAME @PKG` |
+| 0x34 | variant (low byte) | **algo number NOT here** — see below |
+| 0x38/0x3c/0x40 | code / data / data2 size | |
+| 0x44 | chip_info | M27C256B=6, W25Q64BV=0x90 |
+| 0x48/0x4a | read / write buffer | |
+| 0x4c/0x50 | voltages = `(vpp@0x50<<8)|vcc@0x4c` | M27C256B 0x5070, W25Q64BV 0x0001 |
+| 0x54 | page_size | W25Q64BV 0x100 |
+| 0x58 | pulse_delay | M27C256B 0x64, W25Q64BV 0x1388 |
+| 0x5c / 0x64 | chip_id (big-endian) / chip_id_bytes | |
+| 0x68 | pages_per_block | W25Q64BV 2 |
+| 0x6c | package_details | (**not 0x70** — that's `flags`) |
+
+## What blocks a full read (not the `opts` transforms)
+
+The `opts`→params decode above is done and verified. Two parameters, however,
+are **not in the `Ic` struct at all**, so a DLL-only device can't yet program:
+
+- **Algorithm number** — the *high* byte of `infoic.xml`'s `variant` (e.g. `0x32`
+  → `M27C256B` uses `ROM28P32`). The DLL stores only the low byte (`0x11`), so a
+  straight read derives `ROM28P00` and loads the wrong bitstream. XGPro assigns
+  algorithms through a separate mechanism outside this table.
+- **`flags`** (a transform of the value at 0x70) and **`pin_map`** (derived from
+  the package layout, not stored).
+
+Recovering the device→algorithm assignment is a distinct RE task — the natural
+next step for full DLL-driven programming.
+
+## Other caveats
 
 - Addresses (`0x172790`, count `173`) are specific to this DLL build; the *method*
   (signature-scan for the table) is version-portable.
-- The `Ic` `name` field is the vendor's raw name and occasionally embeds a package
-  (`NAME @PKG`). `infoic.xml`'s exact names come from additional
-  `json_to_devices.py` transforms; a straight DLL read normalizes lightly
-  (`NAME @PKG` → `NAME@PKG`) but is not guaranteed byte-for-byte identical to the
-  generated XML names.
-- The T76 `InfoICT76.dll` delegates some data to the base `InfoIC.dll` it imports;
-  the chip table itself is self-contained in `InfoICT76.dll` as mapped above.
+- `infoic.xml`'s exact names include extra grouping/aliasing; a straight DLL read
+  normalizes lightly (`NAME @PKG` → `NAME@PKG`).
+- `InfoICT76.dll` imports the base `InfoIC.dll`, but the chip table itself is
+  self-contained as mapped above.
