@@ -1,0 +1,13 @@
+# minipro-proto — packet types and the per-programmer drivers.
+#
+# The T76 driver is the reference implementation; TL866/T48/T56 follow the same
+# traits. Planned real deps: byteorder/zerocopy (packet framing), flate2
+# (bitstream inflate). Std-only in the scaffold.
+[package]
+name = "minipro-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+minipro-core = { path = "../minipro-core" }

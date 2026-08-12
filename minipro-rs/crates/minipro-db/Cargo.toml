@@ -1,0 +1,13 @@
+# minipro-db — the chip database (infoic.xml) + FPGA bitstreams (algorithm.xml).
+#
+# Planned real deps: quick-xml + serde (parse the editable XML source),
+# flate2/miniz_oxide (inflate bitstreams), postcard (compiled DB baked in via
+# build.rs and include_bytes!). Std-only in the scaffold.
+[package]
+name = "minipro-db"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+minipro-core = { path = "../minipro-core" }

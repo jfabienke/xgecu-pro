@@ -1,0 +1,26 @@
+# minipro-rs — Rust redesign of the minipro CLI (scaffold).
+#
+# This is a STUB workspace: types and traits from docs/rust-trait-model.md are
+# defined, but operation bodies are `todo!()`. It compiles std-only so it builds
+# offline; each crate documents the real crates it will pull in when implemented.
+[workspace]
+resolver = "2"
+members = [
+    "crates/minipro-core",
+    "crates/minipro-db",
+    "crates/minipro-proto",
+    "crates/minipro-usb",
+    "crates/minipro-cli",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+repository = "https://gitlab.com/nmatt0/minipro"
+
+# Intended external dependencies once stubs are implemented (kept out of the
+# scaffold so it builds offline). See each crate's header for which it uses.
+#   nusb, flate2 (miniz_oxide), quick-xml, serde, thiserror, anyhow,
+#   clap, indicatif, anstream/owo-colors, comfy-table, ratatui, crossterm,
+#   crc32fast, sha2, postcard, tracing

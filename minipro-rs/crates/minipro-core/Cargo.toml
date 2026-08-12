@@ -1,0 +1,19 @@
+# minipro-core — device model, traits, errors, and op orchestration.
+#
+# Deliberately std-only so the trait model is proven object-safe without pulling
+# any registry crates. When implemented it will add (behind features):
+#   serde        — derive Serialize on Event/Outcome/Device (the JSON mode)
+#   thiserror    — replace the hand-rolled Error impl
+#   bitflags     — replace the hand-rolled Caps newtype
+[package]
+name = "minipro-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# serde = ["dep:serde"]   # planned: derive Serialize/Deserialize on data types
+
+[dependencies]
+# (none — std only for the scaffold)

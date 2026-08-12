@@ -1,0 +1,26 @@
+//! # minipro-core
+//!
+//! The load-bearing abstractions for the Rust redesign of minipro, per
+//! `docs/rust-trait-model.md`. Four trait families:
+//!
+//! - [`transport::Transport`] — bytes on the wire, with a must-drain response guard.
+//! - [`programmer::Programmer`] + the capability traits in [`caps`] — what a
+//!   programmer *does*, discovered at runtime via object-safe accessor upcasts.
+//! - [`report::Reporter`] — one event stream, rendered by human / JSON / TUI.
+//! - [`error::Error`] — typed errors carrying machine-stable JSON codes.
+//!
+//! Everything used behind `dyn` is object-safe and `Send`. Operation bodies here
+//! are `todo!()` stubs; this crate exists to pin the shapes and prove they compose.
+#![forbid(unsafe_code)]
+
+pub mod caps;
+pub mod device;
+pub mod error;
+pub mod ops;
+pub mod programmer;
+pub mod report;
+pub mod transport;
+
+pub use error::{Error, Result};
+pub use programmer::{Caps, Programmer, ProgrammerInfo, Session};
+pub use transport::{Ep, LinkSpeed, Transport};

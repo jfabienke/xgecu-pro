@@ -1,0 +1,13 @@
+# minipro-usb — the Transport implementation.
+#
+# Planned real dep: `nusb` (pure-Rust USB; no libusb). Drivers only see
+# `dyn Transport`, so `MockTransport` here backs the protocol unit tests with no
+# hardware. Std-only in the scaffold.
+[package]
+name = "minipro-usb"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+minipro-core = { path = "../minipro-core" }

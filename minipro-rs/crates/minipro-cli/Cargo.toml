@@ -1,0 +1,21 @@
+# minipro-cli — the binary. Wires transport -> programmer -> db and renders via
+# one of three Reporters (human / JSON / TUI).
+#
+# Planned real deps: clap (derive CLI), anyhow, indicatif + anstream/comfy-table
+# (human), serde_json (JSON mode), ratatui + crossterm (TUI), tracing.
+# Std-only arg handling in the scaffold.
+[package]
+name = "minipro-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "minipro"
+path = "src/main.rs"
+
+[dependencies]
+minipro-core = { path = "../minipro-core" }
+minipro-db = { path = "../minipro-db" }
+minipro-proto = { path = "../minipro-proto" }
+minipro-usb = { path = "../minipro-usb" }
