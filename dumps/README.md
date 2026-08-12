@@ -7,8 +7,9 @@ Microcode ("MCODE") EPROM from an Adaptec **AHA-1542CP** ISA SCSI host adapter.
 | Field | Value |
 |---|---|
 | Source card | Adaptec AHA-1542CP |
-| Socket / label | U15, Adaptec "553801-00 … MCODE" |
-| Chip (as read) | **Atmel AT27C256R** (electronic ID `0x1E8C`), 32K×8, DIP-28 EPROM |
+| Socket | U15 |
+| Adaptec label (this unit) | **`908301-00 G` / "MCODE 144C" / © 1996** (rev G) |
+| Silicon (as read) | **Atmel AT27C256R** (electronic ID `0x1E8C`), 32K×8, DIP-28 EPROM |
 | Read with | XGecu T76 + minipro `t76-improvements`, `M27C256B@DIP28` algorithm, USB 2.0 |
 | Size | 32,768 bytes (full ROM, no padding) |
 | SHA-256 | `7809fa1003b74d4f4f14eb7f27e224425ae92644b8bfe6d821a312382c8429e8` |
