@@ -19,7 +19,7 @@ use minipro_core::ops;
 use minipro_core::programmer::Txn;
 use minipro_core::report::{Event, Outcome, Reporter, Warning};
 use minipro_core::Programmer;
-use minipro_db::{ChipDb, XmlDb};
+use minipro_db::{ChipDb, DllDb, XmlDb};
 use reporters::{HumanReporter, JsonReporter};
 
 /// The XGecu T76's USB identity (see `UsbTransport::open`).
@@ -259,12 +259,16 @@ pub(crate) fn open_programmer() -> Result<Box<dyn Programmer>> {
 
 /// Load the chip database. Boxed so callers stay backend-agnostic once a
 /// compiled/embedded backend implements `ChipDb` too.
+/// Load the chip database from a directory, preferring the native
+/// `InfoICT76.dll` (read directly) over `infoic.xml` when both are present.
 fn load_db(dir: Option<&Path>) -> Result<Box<dyn ChipDb>> {
-    match dir {
-        Some(dir) => Ok(Box::new(XmlDb::load(dir)?)),
-        None => Err(Error::Format(
-            "no chip database: pass --db <dir> or set MINIPRO_DB_DIR".into(),
-        )),
+    let dir = dir.ok_or_else(|| {
+        Error::Format("no chip database: pass --db <dir> or set MINIPRO_DB_DIR".into())
+    })?;
+    if dir.join("InfoICT76.dll").is_file() {
+        Ok(Box::new(DllDb::load(dir)?))
+    } else {
+        Ok(Box::new(XmlDb::load(dir)?))
     }
 }
 

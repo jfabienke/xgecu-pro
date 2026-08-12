@@ -45,13 +45,16 @@ use quick_xml::Reader;
 use minipro_core::device::{Algorithm, Device, Package};
 use minipro_core::error::{Error, FwVersion, Result};
 
+mod dll;
+pub use dll::DllDb;
+
 /// The `<database type=…>` section of `infoic.xml` this crate targets.
 const INFOIC_DB_TYPE: &str = "INFOICT76";
 /// The bitstream container in `algorithm.xml` for the T76.
 const ALGO_SECTION: &str = "algorithms_T76";
 /// The device firmware the vendored T76 bitstreams pair with
 /// (`T76_FIRMWARE_VERSION 0x111` / `"00.1.17"` in `minipro-t76/src/t76.h`).
-const T76_FW_TARGET: FwVersion = FwVersion(0x0111);
+pub(crate) const T76_FW_TARGET: FwVersion = FwVersion(0x0111);
 
 /// Algorithm-name prefixes, indexed by `protocol_id - 1` (ported verbatim from
 /// `minipro-t76/src/database.c:334` `algo_table`). Empty entries are unused ids.
@@ -177,27 +180,43 @@ impl XmlDb {
     /// Native `algoT76/*.alg` files are preferred when present (the vendor
     /// source), falling back to `algorithm.xml`.
     pub fn algorithm(&self, name: &str) -> Result<Option<Algorithm>> {
-        // Native .alg first: XGPro names files "<algo>.alg" (some builds prefix
-        // "T7_"); the algorithm.xml entry drops that prefix (dump-alg-minipro.bash).
-        if let Some(dir) = &self.algo_dir {
-            for cand in [format!("{name}.alg"), format!("T7_{name}.alg")] {
-                let path = dir.join(&cand);
-                if path.is_file() {
-                    let bytes = std::fs::read(&path)?;
-                    return Ok(Some(Algorithm {
-                        name: name.to_string(),
-                        bitstream: decode_alg(&bytes)?,
-                    }));
-                }
+        resolve_bitstream(self.algo_dir.as_deref(), self.algo_path.as_deref(), name)
+    }
+}
+
+/// Locate the two bitstream sources next to a DB file: `algoT76/` (native .alg)
+/// and `algorithm.xml`. Shared by [`XmlDb`] and [`DllDb`].
+pub(crate) fn locate_bitstreams(dir: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
+    let xml = dir.join("algorithm.xml");
+    let algo = dir.join("algoT76");
+    (algo.is_dir().then_some(algo), xml.is_file().then_some(xml))
+}
+
+/// Resolve one FPGA bitstream by algorithm name: native `algoT76/*.alg` first
+/// (the vendor source), then `algorithm.xml`. Shared by [`XmlDb`]/[`DllDb`].
+pub(crate) fn resolve_bitstream(
+    algo_dir: Option<&Path>,
+    algo_path: Option<&Path>,
+    name: &str,
+) -> Result<Option<Algorithm>> {
+    if let Some(dir) = algo_dir {
+        // XGPro names files "<algo>.alg" (some builds prefix "T7_").
+        for cand in [format!("{name}.alg"), format!("T7_{name}.alg")] {
+            let path = dir.join(&cand);
+            if path.is_file() {
+                let bytes = std::fs::read(&path)?;
+                return Ok(Some(Algorithm {
+                    name: name.to_string(),
+                    bitstream: decode_alg(&bytes)?,
+                }));
             }
         }
-        // Fall back to algorithm.xml.
-        let Some(path) = &self.algo_path else {
-            return Ok(None);
-        };
-        let file = std::fs::File::open(path)?;
-        find_algorithm(std::io::BufReader::new(file), ALGO_SECTION, name)
     }
+    if let Some(path) = algo_path {
+        let file = std::fs::File::open(path)?;
+        return find_algorithm(std::io::BufReader::new(file), ALGO_SECTION, name);
+    }
+    Ok(None)
 }
 
 impl ChipDb for XmlDb {
@@ -388,7 +407,7 @@ fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
 }
 
 /// Significant bytes in a chip id — the C `get_id_bytes_count`.
-fn id_bytes_count(chip_id: u32) -> u8 {
+pub(crate) fn id_bytes_count(chip_id: u32) -> u8 {
     match chip_id {
         0 => 0,
         id => (4 - id.leading_zeros() / 8) as u8,
@@ -397,7 +416,7 @@ fn id_bytes_count(chip_id: u32) -> u8 {
 
 /// Pin count packed into bits 24..30 of `package_details`, with the C parser's
 /// PLCC-adapter special values (`database.c: get_pin_count`).
-fn pin_count(package_details: u32) -> u8 {
+pub(crate) fn pin_count(package_details: u32) -> u8 {
     match (package_details >> 24) & 0x3f {
         0x38 => 20, // PLCC20 adapter
         0x3d => 44, // PLCC44 adapter
@@ -409,7 +428,7 @@ fn pin_count(package_details: u32) -> u8 {
 
 /// Package label: the `@SOIC8`-style suffix of the chip name when present,
 /// otherwise the default DIP/ZIF socket for the pin count.
-fn package_name(chip_name: &str, pin_count: u8) -> String {
+pub(crate) fn package_name(chip_name: &str, pin_count: u8) -> String {
     match chip_name.split_once('@') {
         Some((_, pkg)) if !pkg.is_empty() => pkg.to_string(),
         _ if pin_count > 0 => format!("DIP{pin_count}"),
