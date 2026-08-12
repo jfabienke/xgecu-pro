@@ -9,8 +9,11 @@
 //! - [`report::Reporter`] — one event stream, rendered by human / JSON / TUI.
 //! - [`error::Error`] — typed errors carrying machine-stable JSON codes.
 //!
-//! Everything used behind `dyn` is object-safe and `Send`. Operation bodies here
-//! are `todo!()` stubs; this crate exists to pin the shapes and prove they compose.
+//! Everything used behind `dyn` is object-safe and `Send`. The [`ops`] module
+//! carries the real orchestration (block loops, progress, verification with
+//! crc32/sha256), written once over `dyn Programmer` + `dyn Reporter` so
+//! drivers stay block-granular. With the default-on `serde` feature the
+//! reporting/data types serialize to the documented JSON schema.
 #![forbid(unsafe_code)]
 
 pub mod caps;

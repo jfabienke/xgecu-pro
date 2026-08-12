@@ -7,40 +7,279 @@
 //!
 //! [`MockTransport`] replays capture fixtures, turning the T76 protocol into
 //! hardware-free unit tests.
+//!
+//! `nusb` is async at heart, but every call site here uses its blocking
+//! surface (`MaybeFuture::wait()` and `Endpoint::transfer_blocking`), so the
+//! [`Transport`] trait stays synchronous and no executor leaks upward.
 #![forbid(unsafe_code)]
+
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::time::Duration;
 
 use minipro_core::error::{Error, Result};
 use minipro_core::transport::{Ep, LinkSpeed, Transport};
+use nusb::transfer::{Buffer, Bulk, In, Out};
+use nusb::{Endpoint, MaybeFuture, Speed};
 
-/// Real USB transport over `nusb` (stub).
+/// XGecu T76 vendor id.
+pub const T76_VID: u16 = 0xA466;
+/// XGecu T76 product id.
+pub const T76_PID: u16 = 0x1A86;
+
+/// The T76 bulk command endpoints (vendor protocol: commands OUT, responses IN).
+const EP_CMD_OUT: u8 = 0x01;
+const EP_CMD_IN: u8 = 0x81;
+
+/// Vendor `MP_USBTIMEOUT`: every OUT transfer, and IN transfers on the payload
+/// and status endpoints, complete within seconds or not at all.
+const SHORT_TIMEOUT: Duration = Duration::from_millis(5_000);
+/// Vendor `MP_USB_READ_TIMEOUT`: command responses on EP 0x81 can lag by a full
+/// chip-erase (minutes), so that endpoint alone gets the long deadline.
+const CMD_READ_TIMEOUT: Duration = Duration::from_millis(360_000);
+
+/// Interface-claim retry (vendor: 5 attempts, 200 ms apart — the pipes need a
+/// moment to settle after the T76 config-cycle re-arm below).
+const CLAIM_ATTEMPTS: u32 = 5;
+const CLAIM_RETRY_DELAY: Duration = Duration::from_millis(200);
+
+/// Real USB transport over `nusb`.
 pub struct UsbTransport {
+    device: nusb::Device,
+    interface: nusb::Interface,
+    /// Bulk OUT endpoints, claimed lazily and cached (0x01 command, 0x05 payload…).
+    out_eps: HashMap<u8, Endpoint<Bulk, Out>>,
+    /// Bulk IN endpoints, claimed lazily and cached (0x81 command, 0x82 payload…).
+    in_eps: HashMap<u8, Endpoint<Bulk, In>>,
     link: LinkSpeed,
-    // device: nusb::Device, iface: nusb::Interface, ...
+    vid: u16,
+    pid: u16,
 }
 
 impl UsbTransport {
     /// Open the T76 (`0xA466:0x1A86`) and claim interface 0.
-    pub fn open(_vid: u16, _pid: u16) -> Result<Self> {
-        // TODO: nusb enumerate + open + claim; read negotiated speed.
-        todo!("nusb open + claim interface")
+    ///
+    /// Enumerates with `nusb`, opens the first matching device, applies the
+    /// T76 endpoint-arming workaround, claims interface 0 (with retry), claims
+    /// the bulk command endpoints 0x01 OUT / 0x81 IN, and records the
+    /// negotiated link speed.
+    pub fn open(vid: u16, pid: u16) -> Result<Self> {
+        let (device, interface, link) = open_device(vid, pid)?;
+        let mut tx = UsbTransport {
+            device,
+            interface,
+            out_eps: HashMap::new(),
+            in_eps: HashMap::new(),
+            link,
+            vid,
+            pid,
+        };
+        // Claim the command pair eagerly: if 0x01/0x81 are missing or not bulk
+        // this is the wrong device, and we want to fail in open(), not on the
+        // first command.
+        tx.out_ep(EP_CMD_OUT)?;
+        tx.in_ep(EP_CMD_IN)?;
+        Ok(tx)
     }
 
     /// On macOS + SuperSpeed the T76 bulk path fails; surface a clear diagnostic.
     pub fn check_link(&self) -> Result<()> {
-        if cfg!(target_os = "macos") && self.link == LinkSpeed::Super {
-            return Err(Error::Usb(
-                "T76 on macOS SuperSpeed: bulk transfers fail; use a USB 2.0 cable".into(),
-            ));
+        superspeed_diagnostic(cfg!(target_os = "macos"), self.link)
+    }
+
+    /// Get (claiming and caching on first use) a bulk OUT endpoint.
+    fn out_ep(&mut self, addr: u8) -> Result<&mut Endpoint<Bulk, Out>> {
+        if addr & 0x80 != 0 {
+            return Err(Error::Usb(format!("endpoint 0x{addr:02x} is not an OUT endpoint")));
         }
-        Ok(())
+        match self.out_eps.entry(addr) {
+            Entry::Occupied(e) => Ok(e.into_mut()),
+            Entry::Vacant(v) => {
+                let ep = self
+                    .interface
+                    .endpoint::<Bulk, Out>(addr)
+                    .map_err(|e| Error::Usb(format!("claim bulk OUT 0x{addr:02x}: {e}")))?;
+                Ok(v.insert(ep))
+            }
+        }
+    }
+
+    /// Get (claiming and caching on first use) a bulk IN endpoint.
+    fn in_ep(&mut self, addr: u8) -> Result<&mut Endpoint<Bulk, In>> {
+        if addr & 0x80 == 0 {
+            return Err(Error::Usb(format!("endpoint 0x{addr:02x} is not an IN endpoint")));
+        }
+        match self.in_eps.entry(addr) {
+            Entry::Occupied(e) => Ok(e.into_mut()),
+            Entry::Vacant(v) => {
+                let ep = self
+                    .interface
+                    .endpoint::<Bulk, In>(addr)
+                    .map_err(|e| Error::Usb(format!("claim bulk IN 0x{addr:02x}: {e}")))?;
+                Ok(v.insert(ep))
+            }
+        }
     }
 }
 
 impl Transport for UsbTransport {
-    fn send(&mut self, _ep: Ep, _data: &[u8]) -> Result<()> { todo!() }
-    fn recv(&mut self, _ep: Ep, _len: usize) -> Result<Vec<u8>> { todo!() }
-    fn link_speed(&self) -> LinkSpeed { self.link }
-    fn reset(&mut self) -> Result<()> { todo!() }
+    fn send(&mut self, ep: Ep, data: &[u8]) -> Result<()> {
+        let endpoint = self.out_ep(ep.0)?;
+        let mut buf = Buffer::new(data.len());
+        buf.extend_from_slice(data);
+        let completion = endpoint.transfer_blocking(buf, SHORT_TIMEOUT);
+        completion
+            .status
+            .map_err(|e| Error::Usb(format!("bulk OUT 0x{:02x}: {e}", ep.0)))?;
+        if completion.actual_len != data.len() {
+            return Err(Error::Usb(format!(
+                "bulk OUT 0x{:02x}: short write {}/{}",
+                ep.0,
+                completion.actual_len,
+                data.len()
+            )));
+        }
+        Ok(())
+    }
+
+    fn recv(&mut self, ep: Ep, len: usize) -> Result<Vec<u8>> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        // Command responses (EP 0x81) may take a full chip operation to arrive;
+        // payload/status endpoints answer within seconds (vendor timeouts).
+        let timeout = if ep.0 == EP_CMD_IN { CMD_READ_TIMEOUT } else { SHORT_TIMEOUT };
+        let endpoint = self.in_ep(ep.0)?;
+        // IN transfers must request a nonzero multiple of the max packet size
+        // (the same libusb-overflow rule the C code worked around by rounding
+        // short reads up to 64 bytes).
+        let mps = endpoint.max_packet_size();
+        let request = len.div_ceil(mps) * mps;
+        let completion = endpoint.transfer_blocking(Buffer::new(request), timeout);
+        completion
+            .status
+            .map_err(|e| Error::Usb(format!("bulk IN 0x{:02x}: {e}", ep.0)))?;
+        if completion.actual_len < len {
+            return Err(Error::Usb(format!(
+                "bulk IN 0x{:02x}: short read {}/{len}",
+                ep.0, completion.actual_len
+            )));
+        }
+        let mut data = completion.buffer.into_vec();
+        data.truncate(len);
+        Ok(data)
+    }
+
+    fn link_speed(&self) -> LinkSpeed {
+        self.link
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        // A nusb reset re-enumerates the device and invalidates every handle,
+        // so drop the claimed endpoints/interface and reopen from scratch.
+        self.out_eps.clear();
+        self.in_eps.clear();
+        self.device
+            .reset()
+            .wait()
+            .map_err(|e| Error::Usb(format!("device reset: {e}")))?;
+        // TODO(hw): re-enumeration timing after reset needs validation on a
+        // live T76; 25 x 200 ms (5 s) matches the vendor claim-retry cadence.
+        let mut last_err = Error::Usb("device did not re-enumerate after reset".into());
+        for _ in 0..25 {
+            std::thread::sleep(CLAIM_RETRY_DELAY);
+            match open_device(self.vid, self.pid) {
+                Ok((device, interface, link)) => {
+                    self.device = device;
+                    self.interface = interface;
+                    self.link = link;
+                    self.out_ep(EP_CMD_OUT)?;
+                    self.in_ep(EP_CMD_IN)?;
+                    return Ok(());
+                }
+                Err(e) => last_err = e,
+            }
+        }
+        Err(last_err)
+    }
+}
+
+/// Enumerate, open, arm (T76 only), and claim interface 0 of `vid:pid`.
+fn open_device(vid: u16, pid: u16) -> Result<(nusb::Device, nusb::Interface, LinkSpeed)> {
+    let devices = nusb::list_devices()
+        .wait()
+        .map_err(|e| Error::Usb(format!("enumerate: {e}")))?;
+    let info = devices
+        .into_iter()
+        .find(|d| d.vendor_id() == vid && d.product_id() == pid)
+        .ok_or_else(|| Error::Usb(format!("no programmer found ({vid:04x}:{pid:04x})")))?;
+    let link = link_speed_from(info.speed());
+    let device = info
+        .open()
+        .wait()
+        .map_err(|e| Error::Usb(format!("open {vid:04x}:{pid:04x}: {e}")))?;
+
+    // T76 (0xA466:0x1A86) on macOS: at USB 3.0 SuperSpeed the bulk endpoints
+    // often come up unresponsive (kIOReturnNotResponding on the first OUT)
+    // even though control transfers and interface-claim succeed. Cycling the
+    // configuration (0 -> 1) re-arms the endpoints. Harmless on other OSes and
+    // guarded to the T76 so it can't disturb the TL866/T48/T56 devices.
+    // (Ported from minipro-t76/src/usb_nix.c; errors deliberately ignored,
+    // exactly as the C code ignores libusb_set_configuration's return.)
+    if vid == T76_VID && pid == T76_PID {
+        let _ = device.set_configuration(0).wait();
+        let _ = device.set_configuration(1).wait();
+    }
+
+    // Claim with a short retry: the pipes need a moment to settle after the
+    // reconfigure above, and macOS occasionally returns a transient error on
+    // the first claim.
+    let mut interface = None;
+    let mut last_err = None;
+    for attempt in 0..CLAIM_ATTEMPTS {
+        if attempt > 0 {
+            std::thread::sleep(CLAIM_RETRY_DELAY);
+        }
+        match device.claim_interface(0).wait() {
+            Ok(iface) => {
+                interface = Some(iface);
+                break;
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    let interface = interface.ok_or_else(|| {
+        let detail = last_err.map(|e| e.to_string()).unwrap_or_default();
+        Error::Usb(format!("claim interface 0: {detail}"))
+    })?;
+
+    Ok((device, interface, link))
+}
+
+/// Map nusb's negotiated speed onto the trait's three-way [`LinkSpeed`].
+///
+/// `None` (platform could not report a speed) maps to `High`: the practical
+/// default for this hardware, and one that never false-triggers the macOS
+/// SuperSpeed diagnostic.
+fn link_speed_from(speed: Option<Speed>) -> LinkSpeed {
+    match speed {
+        Some(Speed::Low | Speed::Full) => LinkSpeed::Full,
+        Some(Speed::High) | None => LinkSpeed::High,
+        // Super, SuperPlus, and any future (faster) variants of the
+        // non-exhaustive enum: all take the SuperSpeed bulk path.
+        Some(_) => LinkSpeed::Super,
+    }
+}
+
+/// The macOS-lesson check behind [`UsbTransport::check_link`], parameterized on
+/// the OS so it is unit-testable on any host.
+fn superspeed_diagnostic(is_macos: bool, link: LinkSpeed) -> Result<()> {
+    if is_macos && link == LinkSpeed::Super {
+        return Err(Error::Usb(
+            "T76 on macOS SuperSpeed: bulk transfers fail; use a USB 2.0 cable".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// A record/replay transport for protocol unit tests. Each `send` must match the
@@ -95,5 +334,55 @@ mod tests {
     fn mock_rejects_wrong_packet() {
         let mut tx = MockTransport::from_script(vec![(vec![0x01], vec![0x00])]);
         assert!(tx.send(Ep(0x01), &[0x99]).is_err()); // desync -> Protocol error
+    }
+
+    // check_link() delegates to superspeed_diagnostic(cfg!(macos), link); the
+    // helper is what makes the macOS+Super rejection testable on every host
+    // without a live device.
+    #[test]
+    fn check_link_rejects_macos_superspeed() {
+        let err = superspeed_diagnostic(true, LinkSpeed::Super).unwrap_err();
+        assert_eq!(err.code(), "usb");
+        assert!(err.to_string().contains("SuperSpeed"));
+        assert!(err.to_string().contains("USB 2.0"));
+        // The typed error carries the hard-won remediation hint.
+        assert_eq!(
+            err.hint(),
+            Some("on macOS + T76, connect via a USB 2.0 cable to force High Speed")
+        );
+    }
+
+    #[test]
+    fn check_link_accepts_other_combinations() {
+        assert!(superspeed_diagnostic(true, LinkSpeed::High).is_ok());
+        assert!(superspeed_diagnostic(true, LinkSpeed::Full).is_ok());
+        assert!(superspeed_diagnostic(false, LinkSpeed::Super).is_ok());
+        assert!(superspeed_diagnostic(false, LinkSpeed::High).is_ok());
+    }
+
+    #[test]
+    fn link_speed_mapping_matches_trait_serialization() {
+        assert_eq!(link_speed_from(Some(Speed::Low)), LinkSpeed::Full);
+        assert_eq!(link_speed_from(Some(Speed::Full)), LinkSpeed::Full);
+        assert_eq!(link_speed_from(Some(Speed::High)), LinkSpeed::High);
+        assert_eq!(link_speed_from(Some(Speed::Super)), LinkSpeed::Super);
+        assert_eq!(link_speed_from(Some(Speed::SuperPlus)), LinkSpeed::Super);
+        // Unknown never false-triggers the macOS SuperSpeed diagnostic.
+        assert_eq!(link_speed_from(None), LinkSpeed::High);
+    }
+
+    #[test]
+    fn open_fails_cleanly_with_no_device() {
+        // No T76 is attached in CI; open() must fail with a typed USB error
+        // (enumeration succeeding but finding no match), never panic.
+        // TODO(hw): a live-device open/claim/transfer test needs real hardware.
+        match UsbTransport::open(T76_VID, T76_PID) {
+            Err(e) => assert_eq!(e.code(), "usb"),
+            // If a real T76 *is* plugged in, open should have succeeded and
+            // the command endpoints must have been claimed.
+            Ok(tx) => {
+                let _ = tx.link_speed();
+            }
+        }
     }
 }

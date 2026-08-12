@@ -11,3 +11,4 @@ license.workspace = true
 
 [dependencies]
 minipro-core = { path = "../minipro-core" }
+nusb = "0.2.7"

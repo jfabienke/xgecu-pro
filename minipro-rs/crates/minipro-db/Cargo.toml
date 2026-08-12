@@ -10,4 +10,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+base64 = "0.23.1"
+flate2 = "1.1.9"
 minipro-core = { path = "../minipro-core" }
+quick-xml = "0.41.0"

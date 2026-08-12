@@ -12,8 +12,17 @@ pub struct Ep(pub u8);
 
 /// Negotiated USB link speed. `link_speed()` surfaces it because on macOS the
 /// T76's SuperSpeed bulk path fails and we want to diagnose, not guess.
+/// Serializes as the short codes the JSON schema documents: `fs` / `hs` / `ss`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LinkSpeed { Full, High, Super }
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub enum LinkSpeed {
+    #[cfg_attr(feature = "serde", serde(rename = "fs"))]
+    Full,
+    #[cfg_attr(feature = "serde", serde(rename = "hs"))]
+    High,
+    #[cfg_attr(feature = "serde", serde(rename = "ss"))]
+    Super,
+}
 
 /// The command channel. Object-safe and `Send`.
 pub trait Transport: Send {

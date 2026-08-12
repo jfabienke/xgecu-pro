@@ -19,8 +19,13 @@ edition = "2021"
 license = "GPL-3.0-or-later"
 repository = "https://gitlab.com/nmatt0/minipro"
 
-# Intended external dependencies once stubs are implemented (kept out of the
-# scaffold so it builds offline). See each crate's header for which it uses.
-#   nusb, flate2 (miniz_oxide), quick-xml, serde, thiserror, anyhow,
-#   clap, indicatif, anstream/owo-colors, comfy-table, ratatui, crossterm,
-#   crc32fast, sha2, postcard, tracing
+# Shared dependency versions. Crates opt in with `dep = { workspace = true }`.
+# Still intended as stubs are implemented (see each crate's header):
+#   nusb, flate2 (miniz_oxide), quick-xml, anyhow, clap, indicatif,
+#   anstream/owo-colors, comfy-table, ratatui, crossterm, postcard, tracing
+[workspace.dependencies]
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+crc32fast = "1.5"
+sha2 = "0.11"

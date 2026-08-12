@@ -1,24 +1,175 @@
 //! `minipro` — the CLI entry point.
 //!
-//! Selects one of three output modes and dispatches a subcommand. The real CLI
-//! uses `clap` derive; this scaffold parses `std::env::args` just enough to show
-//! the mode-selection skeleton and wire the pieces together.
+//! Selects one of three output modes and dispatches a subcommand. Mode
+//! precedence (see `docs/rust-redesign.md`, "Output modes"): the `tui`
+//! subcommand wins, then `--json` / `MINIPRO_OUTPUT=json`, then the default
+//! human console. Old-style `-p`/`-r`/`-w` flags are kept as aliases for the
+//! `read`/`write` subcommands.
 
 mod reporters;
+mod tui;
 
-use minipro_core::report::Reporter;
-use reporters::{HumanReporter, JsonReporter, TuiReporter};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use clap::{CommandFactory, Parser, Subcommand};
+use minipro_core::device::{EraseKind, Image, Region};
+use minipro_core::error::{Error, Result};
+use minipro_core::ops;
+use minipro_core::programmer::Txn;
+use minipro_core::report::{Event, Outcome, Reporter, Warning};
+use minipro_core::Programmer;
+use minipro_db::{ChipDb, XmlDb};
+use reporters::{HumanReporter, JsonReporter};
+
+/// The XGecu T76's USB identity (see `UsbTransport::open`).
+const T76_VID: u16 = 0xA466;
+const T76_PID: u16 = 0x1A86;
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "minipro",
+    version,
+    about = "CLI for XGecu USB device programmers (T76 first)",
+    long_about = None
+)]
+struct Cli {
+    /// Emit NDJSON: the final outcome on stdout, events on stderr
+    /// (equivalently: MINIPRO_OUTPUT=json)
+    #[arg(long, global = true)]
+    json: bool,
+
+    /// Chip database directory (infoic.xml / algorithm.xml)
+    #[arg(long, global = true, env = "MINIPRO_DB_DIR", value_name = "DIR")]
+    db: Option<PathBuf>,
+
+    /// Select chip (legacy flag; pairs with -r/-w)
+    #[arg(short = 'p', value_name = "CHIP", help_heading = "Legacy flags")]
+    legacy_chip: Option<String>,
+
+    /// Read chip into FILE (legacy alias for `minipro read`)
+    #[arg(short = 'r', value_name = "FILE", help_heading = "Legacy flags", requires = "legacy_chip")]
+    legacy_read: Option<PathBuf>,
+
+    /// Write FILE to chip (legacy alias for `minipro write`)
+    #[arg(
+        short = 'w',
+        value_name = "FILE",
+        help_heading = "Legacy flags",
+        requires = "legacy_chip",
+        conflicts_with = "legacy_read"
+    )]
+    legacy_write: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum Command {
+    /// Read a chip into FILE, with re-read verification (crc32/sha256/stable)
+    Read {
+        /// Chip name, e.g. "M27C256B@DIP28"
+        chip: String,
+        /// Output file for the dump
+        file: PathBuf,
+        /// Proceed despite a chip-id mismatch
+        #[arg(long)]
+        force: bool,
+        /// Skip the pin-contact check
+        #[arg(long)]
+        skip_pincheck: bool,
+    },
+    /// Write FILE to a chip, verified by read-back
+    Write {
+        /// Chip name, e.g. "M27C256B@DIP28"
+        chip: String,
+        /// Image file to program
+        file: PathBuf,
+        /// Proceed despite a chip-id mismatch
+        #[arg(long)]
+        force: bool,
+        /// Skip the pin-contact check
+        #[arg(long)]
+        skip_pincheck: bool,
+    },
+    /// Erase the whole chip
+    Erase {
+        /// Chip name, e.g. "W25Q64BV@SOIC8"
+        chip: String,
+    },
+    /// Show programmer identity and firmware status
+    Info,
+    /// Search the chip database (capped and counted)
+    Search {
+        /// Substring to match against device names
+        query: String,
+        /// Maximum number of hits to show
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// Interactive terminal UI (chip browser, ZIF contact map, hex view)
+    Tui,
+}
+
+impl Command {
+    /// The `op` string used in JSON error lines.
+    fn op_name(&self) -> &'static str {
+        match self {
+            Command::Read { .. } => "read",
+            Command::Write { .. } => "write",
+            Command::Erase { .. } => "erase",
+            Command::Info => "info",
+            Command::Search { .. } => "search",
+            Command::Tui => "tui",
+        }
+    }
+}
+
+impl Cli {
+    /// Resolve subcommand vs. legacy `-p/-r/-w` flags into one command.
+    fn resolve_command(&self) -> Result<Option<Command>> {
+        if let Some(cmd) = &self.command {
+            if self.legacy_chip.is_some() {
+                return Err(Error::Format(
+                    "use either a subcommand or the legacy -p/-r/-w flags, not both".into(),
+                ));
+            }
+            return Ok(Some(cmd.clone()));
+        }
+        match (&self.legacy_chip, &self.legacy_read, &self.legacy_write) {
+            (Some(chip), Some(file), None) => Ok(Some(Command::Read {
+                chip: chip.clone(),
+                file: file.clone(),
+                force: false,
+                skip_pincheck: false,
+            })),
+            (Some(chip), None, Some(file)) => Ok(Some(Command::Write {
+                chip: chip.clone(),
+                file: file.clone(),
+                force: false,
+                skip_pincheck: false,
+            })),
+            (Some(_), None, None) => {
+                Err(Error::Format("-p needs -r FILE (read) or -w FILE (write)".into()))
+            }
+            _ => Ok(None),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Mode { Human, Json, Tui }
+enum Mode {
+    Human,
+    Json,
+    Tui,
+}
 
-fn select_mode(args: &[String]) -> Mode {
-    // Precedence: `tui` subcommand > --json/env > default human.
-    if args.iter().any(|a| a == "tui") {
+/// Precedence: `tui` subcommand > `--json` / `MINIPRO_OUTPUT=json` > human.
+fn select_mode(command: Option<&Command>, json_flag: bool, env_output: Option<&str>) -> Mode {
+    if matches!(command, Some(Command::Tui)) {
         Mode::Tui
-    } else if args.iter().any(|a| a == "--json")
-        || std::env::var("MINIPRO_OUTPUT").as_deref() == Ok("json")
-    {
+    } else if json_flag || env_output == Some("json") {
         Mode::Json
     } else {
         Mode::Human
@@ -27,25 +178,463 @@ fn select_mode(args: &[String]) -> Mode {
 
 fn reporter_for(mode: Mode) -> Box<dyn Reporter> {
     match mode {
-        Mode::Human => Box::new(HumanReporter),
-        Mode::Json => Box::new(JsonReporter),
-        Mode::Tui => Box::new(TuiReporter),
+        Mode::Json => Box::new(JsonReporter::new()),
+        // The TUI builds its own channel-backed reporter inside `tui::run`;
+        // human is the fallback for anything else.
+        Mode::Human | Mode::Tui => Box::new(HumanReporter::new()),
     }
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let mode = select_mode(&args);
-    let _reporter = reporter_for(mode);
+fn render_error(mode: Mode, op: &'static str, err: &Error) {
+    match mode {
+        Mode::Json => println!("{}", reporters::json_error_line(op, err)),
+        Mode::Human | Mode::Tui => reporters::human_error(err),
+    }
+}
 
-    // Real flow (see docs/rust-trait-model.md §7):
-    //   let tx   = minipro_usb::UsbTransport::open(0xA466, 0x1A86)?;
-    //   let prog = minipro_proto::detect(Box::new(tx))?;
-    //   let db   = minipro_db::CompiledDb::embedded()?;
-    //   let dev  = db.get(&chip)...;
-    //   let s    = prog.begin(dev)?;
-    //   let img  = minipro_core::ops::read_verified(&mut *prog, &s, region, &mut *reporter)?;
-    //   reporter.finish(&outcome);
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    let env_output = std::env::var("MINIPRO_OUTPUT").ok();
+    let mode = select_mode(cli.command.as_ref(), cli.json, env_output.as_deref());
 
-    eprintln!("minipro-rs scaffold — mode: {mode:?} (operations are stubs)");
+    let command = match cli.resolve_command() {
+        Ok(Some(cmd)) => cmd,
+        Ok(None) => {
+            let _ = Cli::command().print_help();
+            return ExitCode::FAILURE;
+        }
+        Err(e) => {
+            render_error(mode, "cli", &e);
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let op = command.op_name();
+    let db_dir = cli.db.as_deref();
+    let result = match &command {
+        Command::Tui => tui::run(cli.db.clone()),
+        Command::Search { query, limit } => run_search(db_dir, query, *limit, mode),
+        Command::Read { chip, file, force, skip_pincheck } => {
+            run_read(db_dir, chip, file, *force, *skip_pincheck, &mut *reporter_for(mode))
+        }
+        Command::Write { chip, file, force, skip_pincheck } => {
+            run_write(db_dir, chip, file, *force, *skip_pincheck, &mut *reporter_for(mode))
+        }
+        Command::Erase { chip } => run_erase(db_dir, chip, &mut *reporter_for(mode)),
+        Command::Info => run_info(db_dir, &mut *reporter_for(mode)),
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            render_error(mode, op, &e);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Wiring: transport -> programmer -> db -> ops
+// ---------------------------------------------------------------------------
+
+/// Open the USB transport and detect the attached programmer.
+/// With nothing plugged in this returns the transport's "no device" error.
+pub(crate) fn open_programmer() -> Result<Box<dyn Programmer>> {
+    let tx = minipro_usb::UsbTransport::open(T76_VID, T76_PID)?;
+    tx.check_link()?; // macOS + SuperSpeed diagnosis, not a bare I/O error
+    minipro_proto::detect(Box::new(tx))
+}
+
+/// Load the chip database. Boxed so callers stay backend-agnostic once a
+/// compiled/embedded backend implements `ChipDb` too.
+fn load_db(dir: Option<&Path>) -> Result<Box<dyn ChipDb>> {
+    match dir {
+        Some(dir) => Ok(Box::new(XmlDb::load(dir)?)),
+        None => Err(Error::Format(
+            "no chip database: pass --db <dir> or set MINIPRO_DB_DIR".into(),
+        )),
+    }
+}
+
+fn lookup_device(db: &dyn ChipDb, chip: &str) -> Result<minipro_core::device::Device> {
+    db.get(chip).cloned().ok_or(Error::Unsupported("unknown chip (try `minipro search`)"))
+}
+
+/// Warn (typed, not printf) when the programmer firmware differs from the
+/// version the DB's bitstreams target.
+fn warn_firmware(prog: &dyn Programmer, db: &dyn ChipDb, rep: &mut dyn Reporter) {
+    if prog.info().firmware != db.firmware_target() {
+        rep.event(&Event::Warn(Warning::FirmwareMismatch));
+    }
+}
+
+/// Contact check (advisory hardware permitting): errors with `BadContact`
+/// unless skipped; programmers without pin-test support silently pass.
+fn pincheck(prog: &mut dyn Programmer, s: &minipro_core::Session, skip: bool, rep: &mut dyn Reporter) -> Result<()> {
+    if skip {
+        return Ok(());
+    }
+    let Some(pins) = prog.pins() else { return Ok(()) };
+    let open = pins.contact_check(s)?;
+    if open.is_empty() {
+        return Ok(());
+    }
+    rep.event(&Event::Warn(Warning::BadContact(open.clone())));
+    Err(Error::BadContact(open))
+}
+
+/// Compare the electronic id against the DB entry; `--force` downgrades a
+/// mismatch to a warning.
+fn check_chip_id(
+    prog: &mut dyn Programmer,
+    s: &minipro_core::Session,
+    dev: &minipro_core::device::Device,
+    force: bool,
+    rep: &mut dyn Reporter,
+) -> Result<()> {
+    if dev.chip_id_bytes == 0 {
+        return Ok(()); // chip has no electronic id
+    }
+    let id = prog.identify(s)?;
+    if id.raw == dev.chip_id {
+        return Ok(());
+    }
+    if force {
+        rep.event(&Event::Warn(Warning::ChipIdMismatch { expected: dev.chip_id, got: id.raw }));
+        Ok(())
+    } else {
+        Err(Error::ChipIdMismatch { expected: dev.chip_id, got: id.raw, alias: None })
+    }
+}
+
+fn run_read(
+    db_dir: Option<&Path>,
+    chip: &str,
+    file: &Path,
+    force: bool,
+    skip_pincheck: bool,
+    rep: &mut dyn Reporter,
+) -> Result<()> {
+    let db = load_db(db_dir)?;
+    let dev = lookup_device(&*db, chip)?;
+    let mut prog = open_programmer()?;
+    warn_firmware(&*prog, &*db, rep);
+    let link = prog.info().link;
+
+    let verified = {
+        let mut txn = Txn::begin(&mut *prog, &dev)?; // ends (de-energizes) on drop
+        let (p, s) = txn.parts();
+        pincheck(p, s, skip_pincheck, rep)?;
+        check_chip_id(p, s, &dev, force, rep)?;
+        ops::read_verified(p, s, Region::code(&dev), rep)?
+    };
+
+    std::fs::write(file, &verified.image.bytes)?;
+    rep.finish(&verified.outcome(&dev.name, link));
+    Ok(())
+}
+
+fn run_write(
+    db_dir: Option<&Path>,
+    chip: &str,
+    file: &Path,
+    force: bool,
+    skip_pincheck: bool,
+    rep: &mut dyn Reporter,
+) -> Result<()> {
+    let db = load_db(db_dir)?;
+    let dev = lookup_device(&*db, chip)?;
+    let image = Image { bytes: std::fs::read(file)? };
+    let mut prog = open_programmer()?;
+    warn_firmware(&*prog, &*db, rep);
+
+    {
+        let mut txn = Txn::begin(&mut *prog, &dev)?;
+        let (p, s) = txn.parts();
+        pincheck(p, s, skip_pincheck, rep)?;
+        check_chip_id(p, s, &dev, force, rep)?;
+        ops::write_region(p, s, Region::code(&dev), &image, rep)?;
+    }
+
+    rep.finish(&Outcome::Ok { op: "write" });
+    Ok(())
+}
+
+fn run_erase(db_dir: Option<&Path>, chip: &str, rep: &mut dyn Reporter) -> Result<()> {
+    let db = load_db(db_dir)?;
+    let dev = lookup_device(&*db, chip)?;
+    let mut prog = open_programmer()?;
+    warn_firmware(&*prog, &*db, rep);
+
+    {
+        let mut txn = Txn::begin(&mut *prog, &dev)?;
+        let (p, s) = txn.parts();
+        let mem = p.memory().ok_or(Error::Unsupported("memory ops"))?;
+        mem.erase(s, EraseKind::Chip)?;
+    }
+
+    rep.finish(&Outcome::Ok { op: "erase" });
+    Ok(())
+}
+
+fn run_info(db_dir: Option<&Path>, rep: &mut dyn Reporter) -> Result<()> {
+    let prog = open_programmer()?;
+    let info = prog.info();
+    let firmware = info.firmware.to_string();
+    // Without a DB we have no bitstream target to compare against, so the
+    // expected version mirrors the device's (i.e. "no known mismatch").
+    let firmware_expected = match db_dir {
+        Some(dir) => load_db(Some(dir))?.firmware_target().to_string(),
+        None => firmware.clone(),
+    };
+    rep.finish(&Outcome::Info {
+        model: info.model.clone(),
+        firmware,
+        firmware_expected,
+        link: info.link,
+        vcc: info.voltage,
+    });
+    Ok(())
+}
+
+fn run_search(db_dir: Option<&Path>, query: &str, limit: usize, mode: Mode) -> Result<()> {
+    let db = load_db(db_dir)?;
+    let found = db.search(query, limit);
+    match mode {
+        Mode::Json => println!("{}", reporters::search_json_line(query, &found)),
+        Mode::Human | Mode::Tui => anstream::println!("{}", reporters::search_table(query, &found)),
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::try_parse_from(args).expect("args parse")
+    }
+
+    #[test]
+    fn clap_definition_is_consistent() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn mode_precedence_tui_beats_json() {
+        let tui = Command::Tui;
+        assert_eq!(select_mode(Some(&tui), true, Some("json")), Mode::Tui);
+        assert_eq!(select_mode(Some(&tui), false, None), Mode::Tui);
+    }
+
+    #[test]
+    fn mode_json_from_flag_or_env() {
+        let info = Command::Info;
+        assert_eq!(select_mode(Some(&info), true, None), Mode::Json);
+        assert_eq!(select_mode(Some(&info), false, Some("json")), Mode::Json);
+        assert_eq!(select_mode(Some(&info), false, Some("human")), Mode::Human);
+        assert_eq!(select_mode(Some(&info), false, None), Mode::Human);
+        assert_eq!(select_mode(None, false, None), Mode::Human);
+    }
+
+    #[test]
+    fn subcommands_parse() {
+        let cli = parse(&["minipro", "read", "M27C256B@DIP28", "dump.bin", "--force"]);
+        match cli.resolve_command().unwrap().unwrap() {
+            Command::Read { chip, file, force, skip_pincheck } => {
+                assert_eq!(chip, "M27C256B@DIP28");
+                assert_eq!(file, PathBuf::from("dump.bin"));
+                assert!(force);
+                assert!(!skip_pincheck);
+            }
+            other => panic!("expected read, got {other:?}"),
+        }
+        let cli = parse(&["minipro", "search", "W25Q64", "--limit", "5"]);
+        match cli.resolve_command().unwrap().unwrap() {
+            Command::Search { query, limit } => {
+                assert_eq!(query, "W25Q64");
+                assert_eq!(limit, 5);
+            }
+            other => panic!("expected search, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_read_flags_map_to_read_command() {
+        let cli = parse(&["minipro", "-p", "M27C256B@DIP28", "-r", "dump.bin"]);
+        match cli.resolve_command().unwrap().unwrap() {
+            Command::Read { chip, file, .. } => {
+                assert_eq!(chip, "M27C256B@DIP28");
+                assert_eq!(file, PathBuf::from("dump.bin"));
+            }
+            other => panic!("expected read, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_write_flags_map_to_write_command() {
+        let cli = parse(&["minipro", "-p", "AT28C256@DIP28", "-w", "image.bin"]);
+        match cli.resolve_command().unwrap().unwrap() {
+            Command::Write { chip, file, .. } => {
+                assert_eq!(chip, "AT28C256@DIP28");
+                assert_eq!(file, PathBuf::from("image.bin"));
+            }
+            other => panic!("expected write, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_flag_misuse_is_rejected() {
+        // -r without -p: clap-level `requires`.
+        assert!(Cli::try_parse_from(["minipro", "-r", "dump.bin"]).is_err());
+        // -r and -w together: clap-level conflict.
+        assert!(Cli::try_parse_from(["minipro", "-p", "X", "-r", "a", "-w", "b"]).is_err());
+        // -p alone: resolve-level error.
+        let cli = parse(&["minipro", "-p", "X"]);
+        assert_eq!(cli.resolve_command().unwrap_err().code(), "format");
+        // Mixing legacy flags with a subcommand: resolve-level error.
+        let cli = parse(&["minipro", "-p", "X", "info"]);
+        assert_eq!(cli.resolve_command().unwrap_err().code(), "format");
+    }
+
+    #[test]
+    fn no_args_resolves_to_none_for_help() {
+        let cli = parse(&["minipro"]);
+        assert!(cli.resolve_command().unwrap().is_none());
+    }
+
+    #[test]
+    fn global_json_flag_parses_after_subcommand() {
+        let cli = parse(&["minipro", "info", "--json"]);
+        assert!(cli.json);
+        assert_eq!(select_mode(cli.command.as_ref(), cli.json, None), Mode::Json);
+    }
+
+    #[test]
+    fn missing_db_is_a_clear_error() {
+        let err = match load_db(None) {
+            Err(e) => e,
+            Ok(_) => panic!("load_db(None) must fail"),
+        };
+        assert_eq!(err.code(), "format");
+        assert!(err.to_string().contains("MINIPRO_DB_DIR"));
+    }
+
+    /// End-to-end over the trait surface without hardware: a fake programmer
+    /// (like minipro-core's own test double) driven through the same
+    /// `run_*`-style flow, rendered by the real JSON reporter.
+    #[test]
+    fn read_flow_over_fake_programmer_produces_json_outcome() {
+        use minipro_core::caps::MemoryOps;
+        use minipro_core::device::{BlockReq, ChipId, Device, Package};
+        use minipro_core::error::FwVersion;
+        use minipro_core::programmer::{Caps, ProgrammerInfo, Session};
+        use minipro_core::transport::LinkSpeed;
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        struct Fake {
+            info: ProgrammerInfo,
+            mem: Vec<u8>,
+        }
+        impl Programmer for Fake {
+            fn info(&self) -> &ProgrammerInfo {
+                &self.info
+            }
+            fn caps(&self) -> Caps {
+                Caps::MEMORY
+            }
+            fn begin(&mut self, dev: &Device) -> Result<Session> {
+                Ok(Session { device: dev.clone(), emmc_capacity: 0 })
+            }
+            fn end(&mut self, _s: Session) -> Result<()> {
+                Ok(())
+            }
+            fn identify(&mut self, s: &Session) -> Result<ChipId> {
+                Ok(ChipId { raw: s.device.chip_id, bytes: s.device.chip_id_bytes })
+            }
+            fn reset(&mut self) -> Result<()> {
+                Ok(())
+            }
+            fn memory(&mut self) -> Option<&mut dyn MemoryOps> {
+                Some(self)
+            }
+        }
+        impl MemoryOps for Fake {
+            fn read_block(&mut self, _s: &Session, req: &BlockReq) -> Result<Vec<u8>> {
+                let start = req.address as usize;
+                Ok(self.mem[start..start + req.len as usize].to_vec())
+            }
+            fn write_block(&mut self, _s: &Session, req: &BlockReq, data: &[u8]) -> Result<()> {
+                let start = req.address as usize;
+                self.mem[start..start + data.len()].copy_from_slice(data);
+                Ok(())
+            }
+            fn erase(&mut self, _s: &Session, _k: EraseKind) -> Result<()> {
+                self.mem.fill(0xff);
+                Ok(())
+            }
+            fn blank_check(&mut self, _s: &Session, _r: Region) -> Result<bool> {
+                Ok(self.mem.iter().all(|&b| b == 0xff))
+            }
+        }
+
+        #[derive(Clone, Default)]
+        struct Shared(Arc<Mutex<Vec<u8>>>);
+        impl Write for Shared {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let dev = Device {
+            name: "TEST@DIP8".into(),
+            protocol_id: 1,
+            code_size: 16,
+            data_size: 0,
+            page_size: 8,
+            chip_id: 0x1234,
+            chip_id_bytes: 2,
+            package: Package { pin_count: 8, name: "DIP8".into() },
+            algorithm: None,
+            fw_target: FwVersion(0x00_01_11),
+            ..Device::default()
+        };
+        let mut prog: Box<dyn Programmer> = Box::new(Fake {
+            info: ProgrammerInfo {
+                model: "FAKE".into(),
+                firmware: FwVersion(0x00_01_11),
+                serial: "0".into(),
+                link: LinkSpeed::High,
+                voltage: 5.0,
+            },
+            mem: (0u8..16).collect(),
+        });
+
+        let out = Shared::default();
+        let mut rep =
+            JsonReporter::with_writers(Box::new(out.clone()), Box::new(Shared::default()));
+        let link = prog.info().link;
+        let verified = {
+            let mut txn = Txn::begin(&mut *prog, &dev).unwrap();
+            let (p, s) = txn.parts();
+            pincheck(p, s, false, &mut rep).unwrap(); // no PinTest cap -> pass
+            check_chip_id(p, s, &dev, false, &mut rep).unwrap();
+            ops::read_verified(p, s, Region::code(&dev), &mut rep).unwrap()
+        };
+        rep.finish(&verified.outcome(&dev.name, link));
+
+        let stdout = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+        assert_eq!(v["op"], "read");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["dev"], "TEST@DIP8");
+        assert_eq!(v["bytes"], 16);
+        assert_eq!(v["stable"], true);
+        assert_eq!(v["reads"], 2);
+    }
 }

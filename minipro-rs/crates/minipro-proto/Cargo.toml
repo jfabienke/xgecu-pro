@@ -10,4 +10,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+crc32fast.workspace = true
 minipro-core = { path = "../minipro-core" }
+
+[dev-dependencies]
+minipro-usb = { path = "../minipro-usb" }
