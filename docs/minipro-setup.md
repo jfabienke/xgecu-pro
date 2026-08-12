@@ -59,30 +59,56 @@ so chip lookups work offline:
 | `algorithm.xml` bitstreams | ✅ generated, 649 T76 algorithms, fw-matched to 00.1.17 |
 | **Live USB comms to the T76** | ❌ **fails on macOS** — see below |
 
-### The macOS USB blocker
+### The macOS USB blocker (root-caused)
 
-`minipro --version` (which queries the attached programmer) returns:
+**Symptom.** `minipro --version` (which queries the attached programmer) returns:
 
 ```
-IO error: bulk_transfer: LIBUSB_ERROR_TIMEOUT
+IO error: bulk_transfer: LIBUSB_ERROR_IO
 IO error: expected 5 bytes but 0 bytes transferred
 ```
 
-Direct libusb probing (bypassing minipro) confirms the device is **fine**, but
-macOS/libusb **cannot move data on its bulk endpoints**:
+**Root cause (confirmed at the IOKit level via `LIBUSB_DEBUG=4`).** The device
+enumerates and does control transfers perfectly, but every **bulk** transfer to
+the command endpoint fails with a kernel status of **`kIOReturnNotResponding`
+(`0xe00002ed`, "device not responding")** at USB 3.0 **SuperSpeed**. That error
+is emitted by the Mac's **xHCI controller**, i.e. *below* libusb — the controller
+sent the token and the device gave no response at the SuperSpeed link layer. The
+likely mechanism is a SuperSpeed link-power-management (U1/U2) or burst
+disagreement between this Apple Silicon controller and the T76.
+
+What was verified:
 
 - Enumerates correctly: VID `0xA466` / PID `0x1A86`, config 1, **interface 0**,
   vendor class `0xFF`, 14 bulk endpoints incl. **EP `0x01` OUT / `0x81` IN**,
-  1024-byte packets (USB 3.0 SuperSpeed) — exactly what minipro targets.
-- `libusb_open` + `libusb_claim_interface(0)` both succeed.
-- Yet an 8-byte OUT transfer to EP `0x01` times out with **0 bytes sent**
-  (`LIBUSB_ERROR_TIMEOUT`, then `LIBUSB_ERROR_IO` after `libusb_reset_device` +
-  `libusb_clear_halt`).
+  1024-byte packets, **no streams** (`MaxStreams=0`). Connected **directly to the
+  built-in `AppleT6000USBXHCI` controller at SuperSpeed** — not behind a hub.
+- Control endpoint works (full descriptor reads succeed).
+- `libusb_open` + `libusb_claim_interface(0)` succeed.
+- Bulk OUT to EP `0x01` → `kIOReturnNotResponding`; the *unused* OUT endpoints
+  (`0x02`–`0x07`) merely time out — so the firmware knows EP `0x01`, it just
+  won't service it at SuperSpeed.
 
-So it is not wrong addressing, a busy interface, or a stale process — it's the
-macOS IOUSBHost + libusb layer failing to service this device's bulk pipes.
-Matt Brown's T76 work is **Linux-developed and marked experimental**; macOS is
-untested territory.
+**Everything tried in software (all failed):** `SET_INTERFACE` alt-setting,
+`SET_CONFIGURATION` re-set, config de/reconfigure cycle, `reset_device`,
+`clear_halt`, fresh reopen, a 115-iteration warming loop with control keepalives,
+a first-touch-after-re-enumeration test, and a faithful replay of the *one*
+transient success (a config-cycle that armed the endpoints exactly once, never
+reproducible cold). Because the error originates in the controller, swapping USB
+libraries or using Apple's native IOKit API would hit the same wall, and macOS
+exposes no user-space API to force a device's link speed down.
+
+**What's in the tree for it.** `src/usb_nix.c` `usb_open()` now cycles the T76's
+configuration (`0 → 1`) and retries the claim before use — this is the arming
+sequence that produced the single success, guarded to VID/PID `0xA466:0x1A86` so
+it can't affect the TL866/T48/T56. It makes minipro robust for when the device is
+reachable, but does **not** by itself overcome the SuperSpeed controller failure.
+
+**The fix is physical:** force the T76 off SuperSpeed by connecting it through a
+**USB 2.0 hub** (High-Speed enumeration sidesteps the failing SuperSpeed bulk
+path; minipro treats link speed as cosmetic). Or move it to a **Linux host**. A
+Linux VM *on this Mac* likely inherits the same controller limitation via
+device-passthrough unless the hypervisor forces USB 2.0.
 
 ### Recommended path to actually program a chip
 
