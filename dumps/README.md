@@ -32,11 +32,28 @@ electronic-ID check false-alarmed on the oxidized 30-year-old pins (contact spra
   zero-sum over the 16 KB option-ROM length (it's 254, not 0) — expected, because
   the 1542CP serves its PC BIOS via Z80/banking logic rather than a flat map.
 
-## Preservation note
+## Preservation status (checked 2026-08-12)
 
-These revisions appear **newer than MAME's** archived 1542CP set (MAME has BIOS
-rev D "A91E" / MCODE rev F "17C9"; these are BIOS rev **E** "C7AA" v1.03 / MCODE
-rev **G** "144C"). Candidates to contribute to MAME (`src/devices/bus/isa/aha1542c.cpp`).
+Compared against MAME (`src/devices/bus/isa/aha1542c.cpp`) and TheRetroWeb
+(card ID 697). **Neither ROM is correctly preserved elsewhere:**
+
+**BIOS v1.03 (rev E, `C7AA`, CRC `CFC15E6C`) — new.** MAME and TheRetroWeb both
+have only the older **rev D** (`A91E`, 1995, CRC `0646C35E`; TheRetroWeb labels
+it "v1.02"). Ours differs in 77.7% of bytes — a genuinely newer revision.
+
+**MCODE rev G (`144C`, CRC `59318A17`) — new, and corrects a broken dump.**
+MAME has only the older **rev F** (`17C9`). TheRetroWeb's file *labeled* "144C"
+(U12) is **corrupted**: it is byte-for-byte this ROM but with **data bit D3
+(0x08) stuck high** on all 12,996 differing bytes — its reset vector reads
+`CB 6A 08` instead of the valid `C3 6A 00` (`JP 0x006A`), and it sums to `AA6C`,
+not the `144C` on the sticker. Our dump matches the factory label checksum and
+has a valid Z80 entry point, so it is the first correct capture of rev G and a
+replacement for TheRetroWeb's bad file.
+
+Both are worth submitting to MAME; the MCODE also warrants a correction report
+to TheRetroWeb. MAME ROM-naming convention:
+`adaptec_inc_908501-00_e_bios_c7aa_1997.u7`,
+`adaptec_inc_908301-00_g_mcode_144c_1996.u12`.
 
 ## Socket designators
 
