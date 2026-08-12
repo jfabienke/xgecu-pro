@@ -6,25 +6,24 @@
 //! walks those tables *statically* (no DLL execution, no Wine, no decompilation).
 //! The full binary format is documented in `docs/infoict76-dll-format.md`.
 //!
-//! Decoded fields (verified against `infoic.xml`): name, protocol_id, variant
-//! (low byte), code/data sizes, read/write buffers, chip_id, chip_id_bytes,
-//! package, and the ported `opts` programming params — **voltages** (`vpp:vcc`
-//! at 0x50:0x4c), **chip_info** (0x44), **pulse_delay** (0x58), **page_size**
-//! (0x54), **pages_per_block** (0x68). Bitstreams resolve from `algoT76/` or
-//! `algorithm.xml` next to the DLL.
+//! Every device field is derived from the 116-byte descriptor by a faithful
+//! Rust port of nmatt0's `tools/infoict76-refresh/{variant,fields}.py` (itself
+//! an RE of `Xgpro_T76.exe`'s `t76_load_chip_to_state @0x4eed10` and
+//! `sub_4b3120`): the **algorithm number** (`variant` high byte — passthrough
+//! `desc[0x35]` or the per-protocol tree), **flags**, **package_details**,
+//! chip_id, sizes, buffers, voltages, chip_info, pulse_delay, etc. Bitstreams
+//! resolve from `algoT76/` (native `.alg`) or `algorithm.xml` next to the DLL.
 //!
-//! **Reads are still blocked** — but by a *different* thing than the opts
-//! transforms. Two parameters are not present in the `Ic` struct at all:
-//! - The **algorithm number** (the high byte of `infoic.xml`'s `variant`, e.g.
-//!   `0x32` making `M27C256B` → `ROM28P32`). The DLL stores only the low byte
-//!   (`0x11`), so [`crate::algorithm_name`] derives `ROM28P00` and the wrong
-//!   bitstream loads. XGPro assigns algorithms externally (not in this table).
-//! - **`flags`** (0x70 holds a value that needs an unknown transform) and
-//!   **`pin_map`** (derived from the package layout, not stored).
+//! Result: **`DllDb` reads a chip end-to-end with no XML at all** — verified on
+//! hardware (the `M27C256B@DIP28` → `ROM28P32` path read a real EPROM
+//! byte-identical to the known-good dump). Field accuracy is validated against
+//! `infoic.xml` by the `oracle` test below (variant ~92% — the rest are
+//! stale-XML / microwire splits, *0 genuine bugs* per variant.py; most other
+//! fields 92–100%).
 //!
-//! So the catalog and most programming params are recoverable statically; a
-//! working read additionally needs the device→algorithm assignment, which is a
-//! separate reverse-engineering task, not an `opts` decode.
+//! Not derived (host-side, not in the descriptor): **`pin_map`** (package pin
+//! tables — left 0; affects only pin-test reporting, never read/write/erase)
+//! and the last few % of **voltages**/**package_details** edge cases.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -44,21 +43,8 @@ const MFC_SHORT_NAME: usize = 0x08; // char[20]
 const MFC_IC_PTR: usize = 0x44; // u32 VA -> this vendor's Ic array
 const MFC_NUM_ICS: usize = 0x48; // u32
 const IC_NAME: usize = 0x0c; // char[40]
-const IC_VARIANT: usize = 0x34; // low byte of the infoic variant (algo number is NOT here)
-const IC_CODE_SIZE: usize = 0x38;
-const IC_DATA_SIZE: usize = 0x3c;
-const IC_DATA2_SIZE: usize = 0x40;
-const IC_CHIP_INFO: usize = 0x44; // -> Device.chip_info (verified: M27C256B=6, W25Q64BV=0x90)
-const IC_RBUF: usize = 0x48;
-const IC_WBUF: usize = 0x4a;
-const IC_VOLT_VCC: usize = 0x4c; // voltages low byte
-const IC_VOLT_VPP: usize = 0x50; // voltages high byte
-const IC_PAGE_SIZE: usize = 0x54; // -> Device.page_size (W25Q64BV=0x100)
-const IC_PULSE_DELAY: usize = 0x58; // -> Device.pulse_delay (M27C256B=0x64, W25Q64BV=0x1388)
-const IC_CHIP_ID: usize = 0x5c; // u8[8]
-const IC_CHIP_ID_LEN: usize = 0x64; // u32
-const IC_PAGES_PER_BLOCK: usize = 0x68; // -> Device.pages_per_block (W25Q64BV=2)
-const IC_PACKAGE: usize = 0x6c; // u32 (0x70 is `flags`, which needs a transform)
+// Remaining descriptor field offsets are used directly in `decode_ic`
+// (the fields.py / variant.py port), documented in docs/infoict76-dll-format.md.
 
 /// A minimally-parsed PE image: just enough to map virtual addresses to file
 /// offsets and read the data sections.
@@ -128,9 +114,6 @@ impl Pe {
         self.data
             .get(off..off + 4)
             .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-    }
-    fn u16(&self, off: usize) -> Option<u16> {
-        self.data.get(off..off + 2).map(|b| u16::from_le_bytes([b[0], b[1]]))
     }
 }
 
@@ -292,57 +275,178 @@ fn find_mfc_table(pe: &Pe) -> Option<usize> {
 
 /// Decode a 116-byte chip struct into a [`Device`]. Returns `None` for entries
 /// with no usable name.
+fn u32le(d: &[u8], o: usize) -> u32 {
+    u32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]])
+}
+fn u16le(d: &[u8], o: usize) -> u16 {
+    u16::from_le_bytes([d[o], d[o + 1]])
+}
+
+/// Port of `variant.py::_sub_4b3120` — the exe's per-protocol algorithm-suffix
+/// decision tree (`Xgpro_T76.exe sub_4b3120`, RE'd by nmatt0). Returns the
+/// 2-hex-char algo suffix, or `None` for undefined field combinations.
+fn algo_tree(proto: u8, d34: u8, size: u32, fam: u32, d50: u8) -> Option<u8> {
+    let fm = fam & 0xffff_00ff;
+    match proto.wrapping_sub(1) {
+        0 => {
+            let al = d34 & 3; // proto 1 IIC24C
+            let t = fm != 0xf600_0000;
+            match (t, al) {
+                (true, 1) => Some(if size < 0x8000 { 0x12 } else { 0x11 }),
+                (true, 0) => Some(0x13),
+                (true, 2) => Some(0x14),
+                (false, 1) => Some(if size < 0x8000 { 0x62 } else { 0x61 }),
+                (false, 0) => Some(0x63),
+                (false, 2) => Some(0x64),
+                _ => None,
+            }
+        }
+        1 => {
+            let a = d50 & 0xf; // proto 2 MW93ALG
+            if d34 & 0x80 == 0 {
+                if fm == 0xf600_0000 { Some(0x92) } else if a == 2 { Some(0x2A) } else { Some(0x21) }
+            } else if fm == 0xf600_0000 {
+                Some(0x91)
+            } else if d34 & 0x20 != 0 {
+                Some(match a { 1 => 0x69, 2 => 0x68, _ => 0x67 })
+            } else {
+                Some(match a { 1 => 0x2B, 2 => 0x1A, _ => 0x11 })
+            }
+        }
+        2 | 0xe => {
+            let cl = d34 & 3; // proto 3 / 0xf SPI25F
+            if d34 & 0xf0 == 0x20 {
+                match cl { 3 => Some(0x20), 2 => Some(0x21), _ => None }
+            } else {
+                match cl { 3 => Some(0x10), 2 => Some(0x11), 1 => Some(0x12), 0 => Some(0x13), _ => None }
+            }
+        }
+        4 => Some(if fam == 5 { 0x76 } else { 0x75 }), // proto 5 F29EE
+        5 => {
+            if d34 & 0x80 != 0 { Some(if fam == 5 { 0x73 } else { 0x71 }) } // proto 6 W29F32P
+            else if fam == 5 { Some(0x72) } else if size == 0x80000 { Some(0x70) } else { Some(0x71) }
+        }
+        6 => {
+            if d34 & 0x10 == 0 { Some(0x41) } // proto 7 ROM28P
+            else if size == 0x10000 { Some(0x31) }
+            else if size == 0x8000 { Some(0x32) }
+            else { Some(0x33) }
+        }
+        7 => Some(if fam != 5 {
+            match d34 { 4 => 0x12, 3 => 0x13, 2 => 0x14, _ => 0x11 } // proto 8 ROM32P
+        } else {
+            match d34 { 4 => 0x22, 3 => 0x23, 2 => 0x24, _ => 0x21 }
+        }),
+        8 => match fam {
+            0x2800_0000 => Some(if size == 0x80000 { 0x2A } else { 0x1A }), // proto 9 ROM40P
+            0xfd00_0000 => Some(if size == 0x80000 { 0x2B } else { 0x1B }),
+            4 => Some(if size == 0x80000 { 0x2C } else { 0x1C }),
+            _ => None,
+        },
+        9 => {
+            if d34 & 0x80 != 0 { Some(0x42) } // proto 0xa R28TO32P
+            else if size == 0x10000 { Some(0x34) } else if size == 0x8000 { Some(0x35) } else { Some(0x36) }
+        }
+        0xa => {
+            if d34 & 0x10 != 0 { Some(0x43) } else if size == 0x800 { Some(0x3A) } else { Some(0x3B) }
+        }
+        0xc => Some(if fam == 5 { 0x45 } else { 0x44 }), // proto 0xd EE28C32P
+        0xd => Some(0x50),                                // proto 0xe RAM32
+        0xf => Some(match d34 {
+            0x10 | 0x11 => if fam == 5 { 0x7E } else { 0x7B }, // proto 0x10 28F32P
+            0x12 => if fam == 5 { 0x7F } else { 0x7C },
+            _ => if fam == 5 { 0x7D } else { 0x7A },
+        }),
+        0x10 => {
+            let a = d34 & 0xf; // proto 0x11 FWH
+            if fam == 5 { Some(if a == 1 { 0x92 } else { 0x94 }) }
+            else if fam == 3 { Some(if a == 1 { 0x95 } else { 0x96 }) }
+            else { Some(if a == 1 { 0x91 } else { 0x93 }) }
+        }
+        _ => Some(0),
+    }
+}
+
+/// `variant.py::algo_number`: passthrough `desc[0x35]` or the tree.
+fn algo_number(d: &[u8]) -> Option<u8> {
+    if d[0x35] != 0 {
+        Some(d[0x35])
+    } else {
+        algo_tree(d[0x00], d[0x34], u32le(d, 0x38), u32le(d, 0x6c), d[0x50])
+    }
+}
+
+/// `variant.py::variant`: `(algo << 8) | desc[0x34]`.
+fn variant_field(d: &[u8]) -> Option<u16> {
+    algo_number(d).map(|a| (u16::from(a) << 8) | u16::from(d[0x34]))
+}
+
+/// `fields.py::flags`: `desc[0x70]` + per-protocol post-load adjustments (T76).
+fn flags_field(d: &[u8]) -> u32 {
+    let v = u32le(d, 0x70);
+    match d[0x00] {
+        0x2d => v,          // NAND (minipro re-ORs 0x800 at send time)
+        0x31 => v & !0x20,  // eMMC: clear has_chip_id
+        1 => v | if d[0x50] == 0 { 0x100000 } else { 0 },
+        2 => v | if d[0x34] & 0x20 == 0 { 0x100000 } else { 0 },
+        3 => {
+            let mut v = v | 0x48;
+            if ![0x8b, 0x90, 0x91, 0x9a].contains(&d[0x35]) {
+                v |= 0x100000;
+            }
+            v
+        }
+        4 => v | 0x100048, // model != T56
+        _ => v,
+    }
+}
+
+/// `fields.py::package_details`: `desc[0x6c]` + the family-signature OR.
+fn package_details_field(d: &[u8]) -> u32 {
+    let v = u32le(d, 0x6c);
+    let fam_or = match d[0x00] { 1 => 0xb00, 2 => 0xa00, 3 => 0x900, _ => 0 };
+    if fam_or != 0 && (v & 0xff00) != 0x500 { v | fam_or } else { v }
+}
+
+/// Decode a 116-byte chip descriptor into a [`Device`], porting `fields.py` +
+/// `variant.py` (nmatt0's RE of `t76_load_chip_to_state`/`sub_4b3120`). Returns
+/// `None` when the algorithm number is undefined (the chip has no bitstream —
+/// the generator skips these too). `pin_map` isn't in the descriptor (host-side
+/// package tables, not ported) — left 0; it affects only pin-test reporting.
 fn decode_ic(pe: &Pe, ic: usize) -> Option<Device> {
-    let raw_name = pe.data.get(ic + IC_NAME..ic + IC_NAME + 40).and_then(ascii)?;
-    // Vendor names occasionally embed the package as "NAME @PKG"; normalize to
-    // the "NAME@PKG" convention infoic.xml uses.
+    let d = pe.data.get(ic..ic + IC_STRIDE)?;
+    let raw_name = ascii(&d[IC_NAME..IC_NAME + 40])?;
     let name = raw_name.replace(" @", "@").trim().to_string();
     if name.is_empty() {
         return None;
     }
-    let protocol_id = pe.u32(ic)? as u8;
-    let variant = pe.u32(ic + IC_VARIANT)? as u16;
-    let code_size = u64::from(pe.u32(ic + IC_CODE_SIZE)?);
-    let data_size = u64::from(pe.u32(ic + IC_DATA_SIZE)?);
-    let data_memory2_size = pe.u32(ic + IC_DATA2_SIZE)? as u16;
-    let read_buffer_size = pe.u16(ic + IC_RBUF)?;
-    let write_buffer_size = pe.u16(ic + IC_WBUF)?;
-    let page_size = u32::from(pe.u16(ic + IC_PAGE_SIZE)?);
-    let pulse_delay = pe.u16(ic + IC_PULSE_DELAY)?;
-    let pages_per_block = pe.u16(ic + IC_PAGES_PER_BLOCK)?;
-    let chip_info = pe.data.get(ic + IC_CHIP_INFO).copied()?;
-    // Voltages pack as vpp:vcc (verified: M27C256B 0x50:0x70=0x5070, W25Q64BV 0x00:0x01=0x0001).
-    let vcc = pe.data.get(ic + IC_VOLT_VCC).copied()?;
-    let vpp = pe.data.get(ic + IC_VOLT_VPP).copied()?;
-    let raw_voltages = (u32::from(vpp) << 8) | u32::from(vcc);
-    let id_len = pe.u32(ic + IC_CHIP_ID_LEN)?.min(4) as usize;
-    let id_bytes = pe.data.get(ic + IC_CHIP_ID..ic + IC_CHIP_ID + id_len)?;
-    // Big-endian assembly: [ef,40,17] -> 0x00ef4017 (matches infoic.xml).
-    let chip_id = id_bytes.iter().fold(0u32, |acc, &b| (acc << 8) | u32::from(b));
-    let package_details = pe.u32(ic + IC_PACKAGE)?;
+    let variant = variant_field(d)?; // None -> undefined algo -> skip (no bitstream)
+
+    // chip_id: fold `chip_id_bytes` bytes big-endian from 0x5c (M27C256B 0x208d, W25Q64BV 0xef4017).
+    let id_len = (u32le(d, 0x64).min(4)) as usize;
+    let chip_id = d[0x5c..0x5c + id_len].iter().fold(0u32, |a, &b| (a << 8) | u32::from(b));
+    let package_details = package_details_field(d);
     let pins = pin_count(package_details);
 
     Some(Device {
         package: Package { pin_count: pins, name: package_name(&name, pins) },
         chip_id_bytes: id_bytes_count(chip_id),
         name,
-        protocol_id,
+        protocol_id: d[0x00],
         variant,
-        code_size,
-        data_size,
-        data_memory2_size,
-        page_size,
+        code_size: u64::from(u32le(d, 0x38)),
+        data_size: u64::from(u32le(d, 0x3c)),
+        data_memory2_size: u32le(d, 0x40) as u16,
+        page_size: u32le(d, 0x54),
         chip_id,
-        raw_voltages,
-        chip_info,
-        // pin_map isn't stored in the Ic struct (it's derived from the package
-        // layout by XGPro tooling); raw_flags@0x70 needs an unknown transform.
+        raw_voltages: (u32::from(d[0x50]) << 8) | u32::from(d[0x4c]), // vpp:vcc pack
+        chip_info: u16le(d, 0x44) as u8,
         pin_map: 0,
-        pulse_delay,
-        read_buffer_size,
-        write_buffer_size,
-        pages_per_block,
-        raw_flags: 0,
+        pulse_delay: u32le(d, 0x58) as u16,
+        read_buffer_size: u16le(d, 0x48),
+        write_buffer_size: u16le(d, 0x4a),
+        pages_per_block: u32le(d, 0x68) as u16,
+        raw_flags: flags_field(d),
         packed_package: package_details,
         icsp: ((package_details & 0x0000_ff00) >> 8) as u8,
         i2c_address: 0,
@@ -379,5 +483,62 @@ mod tests {
         let m = db.get("M27C256B@DIP28").expect("M27C256B present");
         println!("M27C256B: dll variant=0x{:04x}, algorithm_name={:?} (infoic has variant 0x3211 -> ROM28P32)",
                  m.variant, crate::algorithm_name(m));
+    }
+}
+
+#[cfg(test)]
+mod oracle {
+    use super::*;
+    use crate::XmlDb;
+
+    /// The DLL+XML oracle: derive every device from InfoICT76.dll and check each
+    /// field against infoic.xml (the ground truth).
+    /// `MINIPRO_DLL_DIR=/tmp/dlldb-test MINIPRO_XML_DIR=../minipro-t76 cargo test -p minipro-db oracle -- --nocapture`
+    #[test]
+    fn dll_vs_xml_oracle() {
+        let (Ok(dll_dir), Ok(xml_dir)) =
+            (std::env::var("MINIPRO_DLL_DIR"), std::env::var("MINIPRO_XML_DIR"))
+        else {
+            return;
+        };
+        let dll = DllDb::load(Path::new(&dll_dir)).unwrap();
+        let xml = XmlDb::load(Path::new(&xml_dir)).unwrap();
+
+        type FieldFn = (&'static str, fn(&Device) -> u64);
+        let fields: &[FieldFn] = &[
+            ("variant", |d| d.variant as u64),
+            ("protocol_id", |d| d.protocol_id as u64),
+            ("code_size", |d| d.code_size),
+            ("data_size", |d| d.data_size),
+            ("page_size", |d| d.page_size as u64),
+            ("pages_per_block", |d| d.pages_per_block as u64),
+            ("chip_id", |d| d.chip_id as u64),
+            ("chip_info", |d| d.chip_info as u64),
+            ("pulse_delay", |d| d.pulse_delay as u64),
+            ("read_buffer", |d| d.read_buffer_size as u64),
+            ("write_buffer", |d| d.write_buffer_size as u64),
+            ("flags", |d| d.raw_flags as u64),
+            ("package_details", |d| d.packed_package as u64),
+            ("voltages", |d| d.raw_voltages as u64),
+        ];
+        let mut agree = vec![0usize; fields.len()];
+        let mut shared = 0usize;
+        for dd in dll.all() {
+            let Some(xd) = xml.get(&dd.name) else { continue };
+            shared += 1;
+            for (i, (_, f)) in fields.iter().enumerate() {
+                if f(dd) == f(xd) {
+                    agree[i] += 1;
+                }
+            }
+        }
+        println!("\n=== DLL vs XML oracle: {shared} shared chips ===");
+        for (i, (name, _)) in fields.iter().enumerate() {
+            println!("  {name:16} {:6.2}%  ({}/{shared})", 100.0 * agree[i] as f64 / shared as f64, agree[i]);
+        }
+        assert!(shared > 20_000, "too few shared chips: {shared}");
+        // variant (the algo!) must be essentially perfect — that's the whole point.
+        let variant_pct = 100.0 * agree[0] as f64 / shared as f64;
+        assert!(variant_pct > 90.0, "variant/algo agreement too low: {variant_pct:.1}%");
     }
 }

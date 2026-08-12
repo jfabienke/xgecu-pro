@@ -83,7 +83,7 @@ No DLL execution, no Wine, no decompilation, no PDB.
 |---|---|---|
 | 0x00 | protocol_id | low byte |
 | 0x0c | name | `NAME` or `NAME @PKG` |
-| 0x34 | variant (low byte) | **algo number NOT here** — see below |
+| 0x34 | variant (low byte) | algo number is *computed*, not stored — see below |
 | 0x38/0x3c/0x40 | code / data / data2 size | |
 | 0x44 | chip_info | M27C256B=6, W25Q64BV=0x90 |
 | 0x48/0x4a | read / write buffer | |
@@ -94,20 +94,26 @@ No DLL execution, no Wine, no decompilation, no PDB.
 | 0x68 | pages_per_block | W25Q64BV 2 |
 | 0x6c | package_details | (**not 0x70** — that's `flags`) |
 
-## What blocks a full read (not the `opts` transforms)
+## The algorithm number IS derivable (fully-native reads work)
 
-The `opts`→params decode above is done and verified. Two parameters, however,
-are **not in the `Ic` struct at all**, so a DLL-only device can't yet program:
+The algorithm number is **not stored** but **is computed** from the descriptor,
+and nmatt0 already RE'd that computation (`Xgpro_T76.exe` `t76_load_chip_to_state
+@0x4eed10` / `sub_4b3120`) in `tools/infoict76-refresh/{variant,fields}.py`:
 
-- **Algorithm number** — the *high* byte of `infoic.xml`'s `variant` (e.g. `0x32`
-  → `M27C256B` uses `ROM28P32`). The DLL stores only the low byte (`0x11`), so a
-  straight read derives `ROM28P00` and loads the wrong bitstream. XGPro assigns
-  algorithms through a separate mechanism outside this table.
-- **`flags`** (a transform of the value at 0x70) and **`pin_map`** (derived from
-  the package layout, not stored).
+- `algo_number = desc[0x35]` when non-zero (NAND/eMMC/parallel-NOR), else a
+  per-protocol decision tree keyed on `proto, desc[0x34], code_size, desc[0x6c],
+  desc[0x50]`. `variant = (algo_number << 8) | desc[0x34]`. So `M27C256B`
+  (proto 7, code 0x8000) → algo `0x32` → `ROM28P32`.
+- `flags` = `desc[0x70]` + per-protocol post-load ORs; `package_details` =
+  `desc[0x6c]` + family signature.
 
-Recovering the device→algorithm assignment is a distinct RE task — the natural
-next step for full DLL-driven programming.
+`minipro-rs`'s `DllDb` ports these, and **reads a real chip end-to-end with no
+XML** (hardware-verified: `M27C256B@DIP28` byte-identical to a known-good dump).
+An oracle test cross-checks every field against `infoic.xml`: variant ~92%
+(remainder = stale-XML / microwire splits, 0 genuine bugs), chip_id 99.6%,
+flags 97.8%, most fields 92–100%. Only **`pin_map`** (host-side package pin
+tables, affects pin-test reporting only) and a few % of voltages/package_details
+edge cases remain — none block read/write/erase.
 
 ## Coverage (completeness check)
 
@@ -124,11 +130,10 @@ parse is complete. The remainder is the `.rdata` header (other const data), tiny
 inter-array padding, and one ~135 KB string-heavy region at a non-IC stride
 (alias/name or logic-IC data, **not** IC structs).
 
-Crucially, **there is no large unaccounted binary table** — so the
-device→algorithm assignment is *not* a hidden data structure here. It must be
-computed in `.text` (code) or live in another component (`InfoIC.dll` / XGPro's
-XML generation), which is why the algorithm number can't be lifted statically
-from this DLL's data.
+Crucially, **there is no large unaccounted binary table** — confirming the
+device→algorithm assignment is *not* a lookup table but is **computed** from the
+descriptor (the `variant.py` decision tree), which is exactly what the coverage
+result predicts.
 
 ## Other caveats
 
