@@ -58,6 +58,7 @@ so chip lookups work offline:
 | T76 chip database | ✅ 34,607 devices; offline search works |
 | `algorithm.xml` bitstreams | ✅ generated, 649 T76 algorithms, fw-matched to 00.1.17 |
 | **Live USB comms to the T76** | ✅ **works on macOS via a USB 2.0-only cable** (forces High Speed) — see below |
+| First real chip read | ✅ dumped an AHA-1542CP MCODE EPROM (Atmel AT27C256R, 32 KB), two reads byte-identical — see [`dumps/`](../dumps/) |
 
 ### RESOLVED: USB comms work at USB 2.0 High Speed
 
