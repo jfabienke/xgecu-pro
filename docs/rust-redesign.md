@@ -134,6 +134,69 @@ struct AlgorithmSet { firmware: FwVersion, algos: HashMap<AlgoName, Lazy<Bitstre
   warning; on old/oxidized chips the read may still be fine (exactly our
   AHA-1542CP case).
 
+## Output modes: human / JSON / TUI
+
+**One core, three renderers.** The core never prints — it emits typed `Event`s
+during an operation and a typed `Outcome` at the end. Presentation is a
+`Reporter` trait, so the three modes share one source of truth and duplicate no
+logic. `#[derive(Serialize)]` on those types *is* the JSON mode.
+
+```rust
+enum Event { Progress { done: u64, total: u64 }, Warn(Warning), Note(Cow<str>) }
+trait Reporter { fn event(&mut self, e: &Event); fn finish(&mut self, o: &Outcome); }
+// Human → indicatif/anstream · Json → serde_json/NDJSON · Tui → ratatui widgets
+```
+
+**Selection:** default **human**; `--json` (or `MINIPRO_OUTPUT=json`, ideal for
+an agent that sets it once) → **JSON**; `minipro tui` → **TUI**. TTY detection
+only decides color/progress, never silently switches format (explicit is safer
+for pipes).
+
+### 1. Human console (default)
+Colored (`anstream`, honors `NO_COLOR`), `indicatif` progress bars, `comfy-table`
+for `info`/search, and errors that carry remediation hints (the USB-2.0 cable
+tip, "reseat/clean pins"). Diagnostics go to stderr; results to stdout.
+
+### 2. JSON — LLM-ergonomic, token-frugal
+Rules that make it cheap and safe for an agent to drive:
+- **NDJSON on stdout, one object per line; the final line is the `Outcome`.**
+  Progress/diagnostics go to **stderr** so they never spend the model's tokens.
+- **Compact, stable schema:** short-but-readable keys, omit null/default fields,
+  no pretty-print, numbers as numbers, hex as bare lowercase strings (documented).
+- **Machine-stable `code` on every error** so the agent branches on a value, not
+  prose — plus a short `hint`. Never blocks for input; missing input is a
+  structured error naming the flag to pass.
+- **Progress suppressed by default** (final outcome only); `--events` opts into
+  streamed NDJSON progress for long eMMC/NAND dumps.
+- **Lists are capped + counted, never dumped** — the DB is 34k devices.
+
+```jsonc
+// read ok — verification fields let the agent trust the dump without re-asking
+{"op":"read","dev":"M27C256B@DIP28","ok":true,"bytes":32768,"crc32":"59318a17","sha256":"7809fa10…","reads":2,"stable":true,"link":"hs"}
+// chip-id mismatch — branch on code, not text
+{"op":"read","ok":false,"code":"chip_id_mismatch","expected":"208d","got":"1e8c","alias":"AT27C256R","hint":"add --force to read anyway"}
+// bad contact — the exact AHA-1542CP situation, made actionable
+{"op":"pincheck","ok":false,"code":"bad_contact","pins":[3,4,5,6],"hint":"reseat/clean pins or --skip-pincheck"}
+// search — bounded, with counts instead of 70 rows
+{"op":"search","q":"W25Q64","n":70,"shown":10,"more":true,"hits":["W25Q64BV@SOIC8","W25Q64CV@SOIC8"]}
+```
+
+Why this is LLM-ergonomic: predictable keys to branch on `ok`/`code`,
+complete-but-minimal payloads, no ANSI to strip, no progress spam eating context,
+and built-in `crc32`/`sha256`/`stable` so an agent can confirm a dump in one call.
+
+### 3. TUI (`ratatui` + `crossterm`)
+Consumes the **same event stream**, routed to widgets:
+- Programmer status (model / firmware / link speed / voltage / OVC).
+- **Searchable chip-DB browser** — a real win over typing `W25Q64BV@SOIC8` by hand.
+- Operation panel with live progress; hex viewer for dumps; log pane.
+- **Live 40-pin ZIF contact map** (good/bad pins highlighted) — straight out of
+  our contact-spray saga; makes reseating visual.
+- Real-time voltage/overcurrent; confirm-before-destructive prompts.
+
+JSON and TUI are literally the same events — one serializes them, the other draws
+them. No third code path.
+
 ## Safety/correctness wins that fall out for free
 
 | C hazard | Rust outcome |
