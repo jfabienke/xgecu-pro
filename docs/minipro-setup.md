@@ -75,7 +75,10 @@ the command endpoint fails with a kernel status of **`kIOReturnNotResponding`
 is emitted by the Mac's **xHCI controller**, i.e. *below* libusb — the controller
 sent the token and the device gave no response at the SuperSpeed link layer. The
 likely mechanism is a SuperSpeed link-power-management (U1/U2) or burst
-disagreement between this Apple Silicon controller and the T76.
+disagreement between this Apple Silicon controller and the T76 — **since
+confirmed**: see [ch569-usb3-notes.md](ch569-usb3-notes.md) for the full
+root-cause research (firmware-serviced U1/U2 on the CH569, worst-case
+advertised exit latencies, strict Apple xHCI).
 
 What was verified:
 
