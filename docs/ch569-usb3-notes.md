@@ -107,3 +107,41 @@ host gives up on the transfer.
 4. If a future test matters: a **USB 3.0 hub** in the path may *also* mask the
    issue (hubs terminate the upstream link and often re-time LPM), but the
    USB 2.0 hub is the deterministic option.
+
+## 6. A Linux VM on this Mac (OrbStack etc.) does *not* bypass it
+
+Running the fork under a macOS-hosted Linux VM is tempting — Linux has the
+exact quirk knobs (`usbcore.quirks=a466:1a86:k`,
+`echo disabled > .../power/usb3_hardware_lpm`) that would fix this on real
+hardware. On this Mac they can't reach the failing layer, for an architectural
+reason that holds across *every* hypervisor here:
+
+- **No physical-USB / controller passthrough exists on Apple Silicon.** Apple's
+  Virtualization.framework has **no API to capture a physical USB device** —
+  confirmed by Apple DTS; the macOS-15 `VZXHCIController` / `VZUSBDevice` APIs
+  only attach *emulated* mass-storage and HID, not arbitrary hardware
+  ([Apple forums](https://developer.apple.com/forums/thread/757096),
+  [VZUSBDevice](https://developer.apple.com/documentation/virtualization/vzusbdevice)).
+  And there is no VFIO/PCI passthrough of the built-in xHCI to a guest. So a
+  guest can never drive the physical controller natively.
+- **Therefore OrbStack's arbitrary-device passthrough is userspace forwarding.**
+  macOS claims the T76 through its own IOKit/`IOUSBHost` (or libusb) stack and
+  tunnels the transfers into the Linux guest (USB/IP-style over the VM channel).
+  OrbStack does expose the device now — [`orb usb attach`](https://docs.orbstack.dev/features/usb)
+  — but every bulk transfer the guest issues is still executed by the **host
+  macOS xHCI driver**, i.e. the layer that already returns
+  `kIOReturnNotResponding`.
+- **The Linux quirks apply to the wrong controller.** Inside the guest,
+  `usbcore` sees a *virtual* device/controller; `usb3_hardware_lpm` and the
+  quirk table act on that, not on Apple's physical link. The U1/U2 negotiation
+  that breaks the T76 was already done by macOS at plug-in, before the VM ever
+  attached the device.
+
+Net: OrbStack (and Docker Desktop, UTM's host-USB mode, Parallels, etc. — all
+built on Virtualization.framework or the same libusb forwarding) inherit the
+host controller's failure. The physical USB 2.0 downgrade is still the fix, and
+once applied, native macOS `minipro` works — so the VM is not needed for the
+USB problem (only as a clean-room Linux env if wanted). Cheap way to confirm on
+the T76: `orb usb attach 0xa466:0x1a86`, then in the guest watch `dmesg` for a
+`-71` / "device not responding" reset on the first bulk op — the same wall,
+one layer up.

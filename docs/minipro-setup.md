@@ -110,8 +110,12 @@ reachable, but does **not** by itself overcome the SuperSpeed controller failure
 **The fix is physical:** force the T76 off SuperSpeed by connecting it through a
 **USB 2.0 hub** (High-Speed enumeration sidesteps the failing SuperSpeed bulk
 path; minipro treats link speed as cosmetic). Or move it to a **Linux host**. A
-Linux VM *on this Mac* likely inherits the same controller limitation via
-device-passthrough unless the hypervisor forces USB 2.0.
+Linux VM *on this Mac* (OrbStack, UTM host-USB, Parallels, Docker Desktop) does
+**not** help: all are built on Apple's Virtualization.framework, which cannot
+capture a physical USB device or pass through the xHCI controller, so macOS
+keeps ownership of the physical link and the guest's Linux quirks never reach
+it. See [ch569-usb3-notes.md §6](ch569-usb3-notes.md#6-a-linux-vm-on-this-mac-orbstack-etc-does-not-bypass-it).
+A native Linux host, or the physical USB 2.0 downgrade, remain the only fixes.
 
 ### Recommended path to actually program a chip
 
