@@ -1,1 +1,4 @@
 .DS_Store
+
+# Local minipro build (fork clone + generated algorithm.xml + downloaded RARs/firmware)
+minipro-t76/
