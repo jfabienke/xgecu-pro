@@ -9,8 +9,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# `net`: the CachedDb backend that provisions InfoICT76.dll + .alg files from a
+# mirror over HTTP(S), cached locally. Opt-in so the core stays dependency-lean.
+net = ["dep:ureq", "dep:sha2"]
+
 [dependencies]
 base64 = "0.23.1"
 flate2 = "1.1.9"
 minipro-core = { path = "../minipro-core" }
 quick-xml = "0.41.0"
+sha2 = { version = "0.10", optional = true }
+ureq = { version = "2", optional = true }

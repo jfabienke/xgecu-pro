@@ -48,6 +48,11 @@ use minipro_core::error::{Error, FwVersion, Result};
 mod dll;
 pub use dll::DllDb;
 
+#[cfg(feature = "net")]
+mod net;
+#[cfg(feature = "net")]
+pub use net::CachedDb;
+
 /// The `<database type=…>` section of `infoic.xml` this crate targets.
 const INFOIC_DB_TYPE: &str = "INFOICT76";
 /// The bitstream container in `algorithm.xml` for the T76.

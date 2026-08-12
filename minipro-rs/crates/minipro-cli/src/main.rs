@@ -19,7 +19,7 @@ use minipro_core::ops;
 use minipro_core::programmer::Txn;
 use minipro_core::report::{Event, Outcome, Reporter, Warning};
 use minipro_core::Programmer;
-use minipro_db::{ChipDb, DllDb, XmlDb};
+use minipro_db::{CachedDb, ChipDb, DllDb, XmlDb};
 use reporters::{HumanReporter, JsonReporter};
 
 /// The XGecu T76's USB identity (see `UsbTransport::open`).
@@ -39,9 +39,16 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
 
-    /// Chip database directory (infoic.xml / algorithm.xml)
+    /// Chip database directory (infoic.xml / algorithm.xml / InfoICT76.dll)
     #[arg(long, global = true, env = "MINIPRO_DB_DIR", value_name = "DIR")]
     db: Option<PathBuf>,
+
+    /// Provision the native DB from a mirror over HTTP(S), opt-in. Fetches
+    /// InfoICT76.dll (once) + .alg files (on demand) into the --db cache dir
+    /// (or a default cache). Serves the *extracted* files:
+    /// `<url>/InfoICT76.dll`, `<url>/algoT76/<algo>.alg`.
+    #[arg(long, global = true, env = "MINIPRO_DB_URL", value_name = "URL")]
+    db_url: Option<String>,
 
     /// Select chip (legacy flag; pairs with -r/-w)
     #[arg(short = 'p', value_name = "CHIP", help_heading = "Legacy flags")]
@@ -205,6 +212,9 @@ fn render_error(mode: Mode, op: &'static str, err: &Error) {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    if let Some(u) = cli.db_url.as_deref() {
+        std::env::set_var("MINIPRO_DB_URL", u);
+    }
     let env_output = std::env::var("MINIPRO_OUTPUT").ok();
     let mode = select_mode(cli.command.as_ref(), cli.json, env_output.as_deref());
 
@@ -259,11 +269,28 @@ pub(crate) fn open_programmer() -> Result<Box<dyn Programmer>> {
 
 /// Load the chip database. Boxed so callers stay backend-agnostic once a
 /// compiled/embedded backend implements `ChipDb` too.
-/// Load the chip database from a directory, preferring the native
-/// `InfoICT76.dll` (read directly) over `infoic.xml` when both are present.
+/// Cache directory for a provisioned (`--db-url`) database.
+fn default_cache_dir() -> PathBuf {
+    if let Ok(x) = std::env::var("XDG_CACHE_HOME") {
+        return PathBuf::from(x).join("minipro");
+    }
+    if let Ok(h) = std::env::var("HOME") {
+        return PathBuf::from(h).join(".cache/minipro");
+    }
+    std::env::temp_dir().join("minipro-cache")
+}
+
+/// Load the chip database. Precedence: `--db-url` (mirror, cached) > a `--db`
+/// directory with `InfoICT76.dll` (native `DllDb`) > `infoic.xml` (`XmlDb`).
 fn load_db(dir: Option<&Path>) -> Result<Box<dyn ChipDb>> {
+    if let Ok(url) = std::env::var("MINIPRO_DB_URL") {
+        if !url.is_empty() {
+            let cache = dir.map(Path::to_path_buf).unwrap_or_else(default_cache_dir);
+            return Ok(Box::new(CachedDb::provision(&url, &cache, None)?));
+        }
+    }
     let dir = dir.ok_or_else(|| {
-        Error::Format("no chip database: pass --db <dir> or set MINIPRO_DB_DIR".into())
+        Error::Format("no chip database: pass --db <dir>, set MINIPRO_DB_DIR, or --db-url <mirror>".into())
     })?;
     if dir.join("InfoICT76.dll").is_file() {
         Ok(Box::new(DllDb::load(dir)?))
