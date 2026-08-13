@@ -82,10 +82,61 @@ autodetect — plus eMMC/NAND, pin-contact test and firmware update on the T76.
 Full capability matrix in the [`minipro-rs` README](minipro-rs/README.md).
 
 Design notes worth knowing: reads are **verified by default** (re-read stability
-plus crc32/sha256 in the outcome), errors carry **stable machine codes** for
-`--json` consumers, and the type system encodes the T76's nastiest hardware
-quirk — an undrained USB response wedges the device until replug, so the
+plus crc32/sha256 in the outcome), and the type system encodes the T76's nastiest
+hardware quirk — an undrained USB response wedges the device until replug, so the
 must-drain guard makes forgetting it a compile error.
+
+## Output modes
+
+Every command renders through one of three reporters over the same event stream —
+the core never prints, so no mode is a scraped afterthought.
+
+| Mode | Selected by | For |
+|---|---|---|
+| **Human** | default | Reading at a terminal |
+| **JSON** | `--json` or `MINIPRO_OUTPUT=json` | Scripts, CI, agents |
+| **TUI** | `minipro tui` | Interactive exploration |
+
+Precedence: the `tui` subcommand wins, then `--json` / `MINIPRO_OUTPUT`, else human.
+
+**Human** — tables, colour, progress bars:
+
+```
+$ minipro info
+┌─────────────┬──────────────────────┐
+│ programmer  ┆ value                │
+╞═════════════╪══════════════════════╡
+│ model       ┆ T76                  │
+│ firmware    ┆ 00.1.07              │
+│ link        ┆ High Speed (USB 2.0) │
+│ vcc         ┆ 5.1 V                │
+└─────────────┴──────────────────────┘
+```
+
+**JSON** — NDJSON, with the **final outcome on stdout** and progress events on
+stderr, so `minipro --json read … > outcome.json` captures exactly the result:
+
+```console
+$ minipro --json info
+{"op":"info","ok":true,"model":"T76","fw":"00.1.07","fw_expected":"00.1.07","serial":"…","mfg_date":"…","device_code":"…","link":"hs","vcc":5.149}
+```
+
+Failures are structured too, and carry a **stable machine code** — `code` is a
+contract (never localized, safe to branch on); `msg` is human-facing and may change:
+
+```console
+$ minipro --json read M27C256B@DIP28 rom.bin
+{"code":"format","msg":"no chip database: pass --db <dir>, set MINIPRO_DB_DIR, or --db-url <mirror>","ok":false,"op":"read"}
+```
+
+Codes include `usb`, `protocol`, `chip_id_mismatch`, `bad_contact`,
+`overcurrent`, `firmware_mismatch`, `verify_failed`, `unsupported`, `format`,
+`io`. Where a remediation exists, the outcome carries a `hint` — e.g. a `usb`
+failure on macOS suggests the USB-2.0 cable.
+
+**TUI** — a [ratatui](https://ratatui.rs) interface with a searchable chip-DB
+browser, a live 40-pin ZIF contact map, an operation progress gauge, a hex view,
+and a log pane.
 
 ## Repo layout
 
