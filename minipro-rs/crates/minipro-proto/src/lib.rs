@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 pub mod t76;
+pub mod wire;
 
 /// Detect the attached programmer and return the matching driver. Mirrors the C
 /// `minipro_open` dispatch (a `match` on the reported model).

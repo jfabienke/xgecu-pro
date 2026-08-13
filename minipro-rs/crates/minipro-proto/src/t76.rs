@@ -21,6 +21,11 @@ use minipro_core::error::{Error, FwVersion, Result};
 use minipro_core::programmer::{Caps, Programmer, ProgrammerInfo, Session};
 use minipro_core::transport::{command, Ep, LinkSpeed, Transport};
 
+use crate::wire::{
+    ascii_field, le16, le32, pack_begin64, ChipParams, CMD_END_TRANS, CMD_ERASE, CMD_READID,
+    CMD_READ_CODE, CMD_REQUEST_STATUS, CMD_WRITE_CODE,
+};
+
 // ---------------------------------------------------------------------------
 // Endpoints (usb_nix.c: msg_send EP01 OUT / msg_recv EP81 IN /
 // read_payload EP82 IN / write_payload EP05 OUT).
@@ -35,24 +40,20 @@ const EP_DAT_OUT: Ep = Ep(0x05);
 // defined; fuse/JEDEC/logic opcodes (0x06-0x09, 0x14-0x16, 0x1d/0x1e, 0x28,
 // 0x37/0x38) come with those capability traits.
 // ---------------------------------------------------------------------------
+// Shared II+-family opcodes (BEGIN/END/READID/WRITE_CODE/READ_CODE/ERASE/
+// REQUEST_STATUS) are imported from `crate::wire`. The constants below are the
+// T76-specific opcodes.
 const CMD_BEGIN_TRANS_LOGIC: u8 = 0x02; // t76.c:34 — 64-byte NAND FPGA-setup prelude
-const CMD_BEGIN_TRANS: u8 = 0x03; // t76.c:35
-const CMD_END_TRANS: u8 = 0x04; // t76.c:36
-const CMD_READID: u8 = 0x05; // t76.c:37
 const MP_T76: u8 = 0x08; // device-type byte in the system-info report (minipro.h MP_T76)
 const CMD_READ_CFG: u8 = 0x08; // t76.c:40 — doubles as the eMMC EXT_CSD read
 const CMD_WRITE_USER_DATA: u8 = 0x0a; // t76.c:42
 const CMD_READ_USER_DATA: u8 = 0x0b; // t76.c:43
-const CMD_WRITE_CODE: u8 = 0x0c; // t76.c:44
-const CMD_READ_CODE: u8 = 0x0d; // t76.c:45
-const CMD_ERASE: u8 = 0x0e; // t76.c:46
 const CMD_READ_DATA: u8 = 0x10; // t76.c:48
 const CMD_WRITE_DATA: u8 = 0x11; // t76.c:49
 const CMD_NAND_PROGRAM: u8 = 0x1f; // t76.c:57
 const CMD_FPGA_REG_IO: u8 = 0x24; // t76.c:72
 const CMD_WRITE_BITSTREAM: u8 = 0x26; // t76.c:58
 const CMD_EMMC_SEND_CMD: u8 = 0x27; // t76.c:73
-const CMD_REQUEST_STATUS: u8 = 0x39; // t76.c:62
 const CMD_NAND_BAD_BLOCK_CHECK: u8 = 0x3a; // t76.c:63
 const CMD_BOOTLOADER_WRITE: u8 = 0x3b; // t76.c:64
 const CMD_BOOTLOADER_ERASE: u8 = 0x3c; // t76.c:65
@@ -98,124 +99,16 @@ const LAST_BLOCK_CRC: u32 = 0xcdef_8668;
 const ID_TYPE3: u8 = 0x03;
 const ID_TYPE4: u8 = 0x04;
 
-/// Little-endian store, the Rust `format_int(.., MP_LITTLE_ENDIAN)`.
-/// Decode a fixed-width ASCII report field (NUL/space padded) into a String.
-fn ascii_field(bytes: &[u8]) -> String {
-    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..end]).trim().to_string()
-}
-
-fn le16(buf: &mut [u8], off: usize, v: u16) {
-    buf[off..off + 2].copy_from_slice(&v.to_le_bytes());
-}
-fn le32(buf: &mut [u8], off: usize, v: u32) {
-    buf[off..off + 4].copy_from_slice(&v.to_le_bytes());
-}
-
-/// The C `device_t` fields consumed by the T76 packet packers (t76.c:503-848).
-///
-/// `from_device` copies them 1:1 from the core `Device`, which now carries the
-/// full field set the packers need (sizes clamped to the wire widths).
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ChipParams {
-    pub protocol_id: u8,
-    pub variant: u16,
-    pub icsp: u8,
-    pub raw_voltages: u32,
-    pub chip_info: u8,
-    pub pin_map: u8,
-    pub data_memory_size: u16,
-    pub page_size: u16,
-    pub pulse_delay: u16,
-    pub data_memory2_size: u16,
-    pub code_memory_size: u32,
-    pub i2c_address: u8,
-    pub spi_clock: u8,
-    pub packed_package: u32,
-    pub read_buffer_size: u16,
-    pub raw_flags: u32,
-    /// NAND page + spare bytes (C `write_buffer_size`).
-    pub write_buffer_size: u16,
-    pub pages_per_block: u16,
-}
-
-impl ChipParams {
-    pub fn from_device(dev: &Device) -> ChipParams {
-        ChipParams {
-            protocol_id: dev.protocol_id,
-            variant: dev.variant,
-            icsp: dev.icsp,
-            raw_voltages: dev.raw_voltages,
-            chip_info: dev.chip_info,
-            pin_map: dev.pin_map,
-            data_memory_size: dev.data_size.min(u64::from(u16::MAX)) as u16,
-            page_size: dev.page_size.min(u32::from(u16::MAX)) as u16,
-            pulse_delay: dev.pulse_delay,
-            data_memory2_size: dev.data_memory2_size,
-            code_memory_size: dev.code_size.min(u64::from(u32::MAX)) as u32,
-            i2c_address: dev.i2c_address,
-            spi_clock: dev.spi_clock,
-            packed_package: dev.packed_package,
-            read_buffer_size: dev.read_buffer_size,
-            raw_flags: dev.raw_flags,
-            write_buffer_size: dev.write_buffer_size,
-            pages_per_block: dev.pages_per_block,
-        }
-    }
-
-    /// NAND geometry is required for the 0x02 prelude and the 0x1f program
-    /// path; a database entry without it cannot be driven.
-    fn nand_geometry(&self) -> Result<(u16, u16)> {
-        if self.write_buffer_size == 0 || self.pages_per_block == 0 {
-            return Err(Error::Unsupported(
-                "NAND geometry (write_buffer_size/pages_per_block) missing from the chip DB entry",
-            ));
-        }
-        Ok((self.write_buffer_size, self.pages_per_block))
-    }
-}
-
 /// Pack the BEGIN_TRANS packet (t76.c:516-822). Returns the 128-byte buffer
 /// and the number of bytes actually sent (64, or 128 when a chip-class
 /// extension block applies).
+///
+/// Bytes `0x00..0x40` are the shared II+-family header ([`pack_begin64`]); the
+/// `0x40..0x7f` chip-class extensions below are T76-specific.
 pub(crate) fn pack_begin_trans(p: &ChipParams) -> ([u8; 128], usize) {
     let mut msg = [0u8; 128];
+    msg[..64].copy_from_slice(&pack_begin64(p)); // shared header, t76.c:517-565
     let mut msglen = 64usize;
-
-    msg[0] = CMD_BEGIN_TRANS; // t76.c:517
-    msg[1] = p.protocol_id; // t76.c:518
-    msg[2] = p.variant as u8; // t76.c:519
-    msg[3] = p.icsp; // t76.c:520
-    le16(&mut msg, 4, p.raw_voltages as u16); // t76.c:522
-    msg[6] = p.chip_info; // t76.c:524
-    msg[7] = p.pin_map; // t76.c:525
-    le16(&mut msg, 8, p.data_memory_size); // t76.c:526
-    le16(&mut msg, 10, p.page_size); // t76.c:528
-    le16(&mut msg, 12, p.pulse_delay); // t76.c:529
-    le16(&mut msg, 14, p.data_memory2_size); // t76.c:531
-    le32(&mut msg, 16, p.code_memory_size); // t76.c:533
-
-    msg[20] = (p.raw_voltages >> 16) as u8; // t76.c:536
-    if (p.raw_voltages & 0xf0) == 0xf0 {
-        msg[22] = p.raw_voltages as u8; // t76.c:539
-    } else {
-        msg[21] = p.raw_voltages as u8 & 0x0f; // t76.c:541
-        msg[22] = p.raw_voltages as u8 & 0xf0; // t76.c:542
-    }
-    if p.raw_voltages & 0x8000_0000 != 0 {
-        msg[22] = ((p.raw_voltages >> 16) & 0x0f) as u8; // t76.c:545
-    }
-
-    // I2C address / SPI clock (t76.c:548-555). The C guards these behind
-    // `can_adjust_address` / `can_adjust_clock` flags; a device without the
-    // capability carries 0 in the field, so copying is equivalent.
-    msg[24] = p.i2c_address;
-    msg[28] = p.spi_clock;
-
-    le32(&mut msg, 40, p.packed_package); // t76.c:557
-    le16(&mut msg, 44, p.read_buffer_size); // t76.c:559
-    le32(&mut msg, 56, p.raw_flags); // t76.c:561
-    msg[63] = (p.variant >> 8) as u8; // t76.c:565 — algorithm number
 
     // SPI 25-series NOR read-setup extension (t76.c:584-600). All four values
     // are individually load-bearing; dropping any one reads all zeros.
@@ -2246,5 +2139,128 @@ mod tests {
         t76.reset_fpga().unwrap();
         // 0x26 af + magic 0xaa55ddee LE (t76.c:864-867).
         assert_eq!(tx.sent(), vec![(0x01, vec![0x26, 0xaf, 0, 0, 0xee, 0xdd, 0x55, 0xaa])]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Golden packet fixtures — a representative ChipParams per pack_begin_trans
+    // branch, exercising all three voltage-packing paths. These freeze the
+    // hardware-verified wire output so the shared-wire extraction can be
+    // proven byte-identical.
+    // -----------------------------------------------------------------------
+
+    /// The representative fixtures, one per BEGIN_TRANS code path.
+    fn golden_fixtures() -> Vec<(&'static str, ChipParams)> {
+        vec![
+            // plain I2C EEPROM — no 0x40.. extension; else-branch voltages.
+            ("i2c", ChipParams {
+                protocol_id: 0x01,
+                variant: 0x0000,
+                raw_voltages: 0x0000_0025,
+                code_memory_size: 0x2000,
+                data_memory_size: 0x100,
+                page_size: 0x40,
+                pin_map: 0x02,
+                ..Default::default()
+            }),
+            // SPI25 non-16P — SPI extension; low-byte 0xf0 voltage branch.
+            ("spi25_8p", ChipParams {
+                protocol_id: ALG_SPI25F_1,
+                variant: 0x0100,
+                raw_voltages: 0x0003_00f0,
+                code_memory_size: 0x10_0000,
+                spi_clock: 0x04,
+                pin_map: 0x00,
+                ..Default::default()
+            }),
+            // SPI25 16P — SPI extension 16P path; 0x8000_0000 voltage branch.
+            ("spi25_16p", ChipParams {
+                protocol_id: ALG_SPI25F_2,
+                variant: 0x2100,
+                raw_voltages: 0x8005_0034,
+                code_memory_size: 0x40_0000,
+                spi_clock: 0x02,
+                ..Default::default()
+            }),
+            // Parallel NOR x16 (T48 family) — the 0x40.. NOR extension.
+            ("nor_t48", ChipParams {
+                protocol_id: ALG_T48,
+                variant: 0x0128, // adapter 0x20, geom 0x08
+                raw_voltages: 0x0002_0021,
+                code_memory_size: 0x80_0000,
+                packed_package: 0x0000_000b, // family byte 0x0b
+                ..Default::default()
+            }),
+            // NAND — the 0x40.. NAND adjustments + msg[16] per-block size.
+            ("nand", ChipParams {
+                protocol_id: ALG_NAND,
+                variant: 0x0100,
+                raw_voltages: 0x0001_0033,
+                code_memory_size: 0x800_0000,
+                page_size: 0x800,
+                write_buffer_size: 0x840,
+                pages_per_block: 64,
+                raw_flags: 0x0000_0002,
+                ..Default::default()
+            }),
+            // eMMC — 128-byte BEGIN, msg[0x0c] bus/CSD byte, no 0x40.. packer.
+            ("emmc", ChipParams {
+                protocol_id: ALG_EMMC,
+                variant: 0x5300,
+                raw_voltages: 0x0000_0053,
+                code_memory_size: 0x1000_0000u32.wrapping_sub(0), // 256 MiB cap sentinel
+                ..Default::default()
+            }),
+        ]
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// Frozen BEGIN_TRANS output, one golden per code path. If the shared-wire
+    /// extraction (or any future edit) changes a single byte the device sees,
+    /// this fails — the hardware-free equivalent of the byte-identical read.
+    #[test]
+    fn pack_begin_trans_goldens() {
+        let goldens: &[(&str, &str)] = &[
+            ("i2c", "03010000250000020001400000000000002000000005200000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+            ("spi25_8p", "03030000f00000000000000000000000000010000300f0000000000004000000000000000000000000000000000000000000000000000000000000000000000100000008000000000000000000000000000080000000000000000000000000002f17050f00030000000000000000000000000000000000000000000000000000"),
+            ("spi25_16p", "030f000034000000000000000000000000004000050405000000000002000000000000000000000000000000000000000000000000000000000000000000002100000200000000000000000000000000000000020000000000000000000000002f17050f00030000000000000000000000000000000000000000000000000000"),
+            ("nor_t48", "031228002100000000000000000000000000800002012000000000000000000000000000000000000b000000000000000000000000000000000000000000000100000001400000000012000000000000000000100080000000000000000000002f17050f00030000000000000000000000000000000000000000000000000000"),
+            ("nand", "032d0000330000000000000800002000001002000003300003000000030000000000000000000000000000e2000000004000000000000000020800000000000100000000000000000000000000000000000000000000000000000000000000002f27090b00030000000000000000000000000000000000000000000000000000"),
+            ("emmc", "0331000053000000000000005300000000000010000350000000000000000000000000000000000000000000000000000000000000000000000000000000005300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"),
+        ];
+        let fixtures = golden_fixtures();
+        for (name, want) in goldens {
+            let (_, p) = fixtures.iter().find(|(n, _)| n == name).unwrap();
+            let (msg, len) = pack_begin_trans(p);
+            assert_eq!(hex(&msg[..len]), *want, "BEGIN_TRANS drift for {name}");
+        }
+    }
+
+    /// Frozen NAND prelude, eMMC timing, and eMMC region-init packets.
+    #[test]
+    fn pack_aux_goldens() {
+        let nand = golden_fixtures().into_iter().find(|(n, _)| *n == "nand").unwrap().1;
+        assert_eq!(
+            hex(&pack_nand_prelude(&nand).unwrap()),
+            "0200000000000000400000080008400001000100030000000800000000000000000001003b4f1527000000000000000000000000000000000000000000000000",
+            "NAND prelude drift",
+        );
+        assert_eq!(
+            hex(&pack_emmc_timing(false, 0x5300)),
+            "2700ff003b0e05020002b7030012b903",
+            "eMMC PRE-timing drift",
+        );
+        assert_eq!(
+            hex(&pack_emmc_timing(true, 0x5400)),
+            "2700ff003b2c100b0001b7030001b903",
+            "eMMC POST-timing drift",
+        );
+        assert_eq!(
+            hex(&pack_emmc_io_init(0x0d, 0x1000, 4)),
+            "0d010000001000000002000020000000040000008000000020000000040000000100000000000000",
+            "eMMC io-init drift",
+        );
     }
 }
