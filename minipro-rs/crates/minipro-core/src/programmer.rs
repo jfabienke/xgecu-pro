@@ -3,7 +3,9 @@
 //! [`crate::caps`]. This is the Rust form of the C `minipro_handle_t` vtable,
 //! but a driver implements only the capabilities its hardware supports.
 
-use crate::caps::{EmmcOps, FirmwareUpdate, FuseOps, JedecOps, LogicTest, MemoryOps, PinTest};
+use crate::caps::{
+    Calibration, EmmcOps, FirmwareUpdate, FuseOps, JedecOps, LogicTest, MemoryOps, PinTest,
+};
 use crate::device::{ChipId, Device};
 use crate::error::{FwVersion, Result};
 use crate::transport::LinkSpeed;
@@ -21,6 +23,7 @@ impl Caps {
     pub const LOGIC: Caps = Caps(1 << 4);
     pub const PINTEST: Caps = Caps(1 << 5);
     pub const FWUPDATE: Caps = Caps(1 << 6);
+    pub const CALIBRATION: Caps = Caps(1 << 7);
 
     pub fn contains(self, c: Caps) -> bool { self.0 & c.0 == c.0 }
     pub fn with(self, c: Caps) -> Caps { Caps(self.0 | c.0) }
@@ -75,6 +78,7 @@ pub trait Programmer: Send {
     fn logic(&mut self) -> Option<&mut dyn LogicTest> { None }
     fn pins(&mut self) -> Option<&mut dyn PinTest> { None }
     fn firmware(&mut self) -> Option<&mut dyn FirmwareUpdate> { None }
+    fn calibration(&mut self) -> Option<&mut dyn Calibration> { None }
 }
 
 /// RAII transaction guard: ends the transaction on drop (best-effort), so a

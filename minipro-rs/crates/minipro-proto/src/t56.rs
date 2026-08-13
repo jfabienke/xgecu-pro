@@ -23,7 +23,7 @@
 //! update are deferred (they need cap-trait plumbing the core doesn't carry
 //! yet); each is a short, self-contained follow-up.
 
-use minipro_core::caps::MemoryOps;
+use minipro_core::caps::{Calibration, MemoryOps};
 use minipro_core::device::{BlockReq, ChipId, Device, EraseKind, MemoryKind, Region};
 use minipro_core::error::{Error, FwVersion, Result};
 use minipro_core::programmer::{Caps, Programmer, ProgrammerInfo, Session};
@@ -47,6 +47,7 @@ const CMD_WRITE_USER_DATA: u8 = 0x0a; // t56.c:41
 const CMD_READ_USER_DATA: u8 = 0x0b; // t56.c:42
 const CMD_READ_DATA: u8 = 0x10; // t56.c:47
 const CMD_WRITE_DATA: u8 = 0x11; // t56.c:48
+const CMD_READ_CALIBRATION: u8 = 0x16; // t56.c:51
 const CMD_WRITE_BITSTREAM: u8 = 0x26; // t56.c:56 — single-shot bitstream upload
 
 /// The T56 command channel + cached identity.
@@ -154,9 +155,8 @@ impl Programmer for T56 {
     }
 
     fn caps(&self) -> Caps {
-        // This increment: memory ops only. Fuses/JEDEC/logic/calibration are
-        // deferred (see the module docs).
-        Caps::MEMORY
+        // Fuses/JEDEC/logic are deferred (see the module docs).
+        Caps::MEMORY.with(Caps::CALIBRATION)
     }
 
     /// `t56_begin_transaction` (t56.c:166-240): upload the bitstream, send the
@@ -214,6 +214,25 @@ impl Programmer for T56 {
 
     fn memory(&mut self) -> Option<&mut dyn MemoryOps> {
         Some(self)
+    }
+
+    fn calibration(&mut self) -> Option<&mut dyn Calibration> {
+        Some(self)
+    }
+}
+
+impl Calibration for T56 {
+    /// `t56_read_calibration` (t56.c:378-391): a 64-byte `0x16` header with the
+    /// length at `[2]`, then `len` bytes on EP81.
+    fn read_calibration(&mut self, len: usize) -> Result<Vec<u8>> {
+        let mut msg = [0u8; 64];
+        msg[0] = CMD_READ_CALIBRATION;
+        le16(&mut msg, 2, len.min(usize::from(u16::MAX)) as u16);
+        let data = self.cmd(&msg, len)?;
+        if data.len() < len {
+            return Err(Error::Protocol);
+        }
+        Ok(data)
     }
 }
 
@@ -379,12 +398,26 @@ mod tests {
     #[test]
     fn caps_agree_with_accessors() {
         let (mut t56, _tx) = t56_with(vec![]);
+        assert_eq!(t56.caps().contains(Caps::MEMORY), t56.memory().is_some());
+        assert_eq!(t56.caps().contains(Caps::CALIBRATION), t56.calibration().is_some());
         assert!(t56.caps().contains(Caps::MEMORY));
-        assert!(t56.memory().is_some());
-        // Deferred capabilities are absent.
+        assert!(t56.caps().contains(Caps::CALIBRATION));
+        // Deferred / absent capabilities.
         assert!(t56.fuses().is_none());
         assert!(t56.emmc().is_none());
         assert!(t56.pins().is_none());
+    }
+
+    #[test]
+    fn read_calibration_packet_and_data() {
+        let (mut t56, tx) = t56_with(vec![vec![0xa1, 0xa2, 0xa3, 0xa4]]);
+        let cal = t56.read_calibration(4).unwrap();
+        assert_eq!(cal, vec![0xa1, 0xa2, 0xa3, 0xa4]);
+        // 64-byte header: 0x16, length 4 LE at [2].
+        let (ep, hdr) = &tx.sent()[0];
+        assert_eq!(*ep, 0x01);
+        assert_eq!(hdr.len(), 64);
+        assert_eq!(&hdr[..4], &[0x16, 0x00, 0x04, 0x00]);
     }
 
     /// The full begin() wire sequence: single-shot bitstream (8-byte 0x26

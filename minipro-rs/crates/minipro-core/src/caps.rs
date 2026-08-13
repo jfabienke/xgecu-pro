@@ -50,3 +50,9 @@ pub trait LogicTest {
 pub trait FirmwareUpdate {
     fn update(&mut self, image: &[u8]) -> Result<()>;
 }
+
+/// Read the programmer's factory calibration bytes (TL866A/II+, T56 — not the
+/// T48 or T76). `len` is how many bytes the caller expects back.
+pub trait Calibration {
+    fn read_calibration(&mut self, len: usize) -> Result<Vec<u8>>;
+}
