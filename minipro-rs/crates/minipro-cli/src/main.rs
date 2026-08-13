@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use minipro_core::format::{Format, PAD};
+use minipro_core::format::Format;
 use minipro_core::device::{EraseKind, Image, Region};
 use minipro_core::error::{Error, Result};
 use minipro_core::ops;
@@ -431,10 +431,11 @@ fn run_read(
 }
 
 /// Parse `file` in the selected format and fit it to the chip: pad short images
-/// to `code_size` with the erased byte, and reject one larger than the chip.
-fn load_image(file: &Path, format: Fmt, code_size: u64) -> Result<Image> {
+/// to `code_size` with the chip's erased byte (`blank`, so read-back verify of
+/// the tail matches the real erased state), and reject one larger than the chip.
+fn load_image(file: &Path, format: Fmt, code_size: u64, blank: u8) -> Result<Image> {
     let raw = std::fs::read(file)?;
-    let mut image = format.for_input(file, &raw).parse(&raw)?;
+    let mut image = format.for_input(file, &raw).parse(&raw, blank)?;
     let need = code_size as usize;
     match image.bytes.len().cmp(&need) {
         std::cmp::Ordering::Greater => Err(Error::Format(format!(
@@ -443,7 +444,7 @@ fn load_image(file: &Path, format: Fmt, code_size: u64) -> Result<Image> {
             need
         ))),
         std::cmp::Ordering::Less => {
-            image.bytes.resize(need, PAD); // pad the tail with the erased byte
+            image.bytes.resize(need, blank); // pad the tail with the erased byte
             Ok(image)
         }
         std::cmp::Ordering::Equal => Ok(image),
@@ -462,7 +463,7 @@ fn run_write(
 ) -> Result<()> {
     let db = load_db(db_dir)?;
     let dev = lookup_device(&*db, chip)?;
-    let image = load_image(file, format, dev.code_size)?;
+    let image = load_image(file, format, dev.code_size, dev.blank_value)?;
     let mut prog = open_programmer()?;
     warn_firmware(&*prog, &*db, rep);
 
@@ -611,6 +612,7 @@ fn run_search(db_dir: Option<&Path>, query: &str, limit: usize, mode: Mode) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+    use minipro_core::format::PAD;
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(args).expect("args parse")
@@ -638,15 +640,16 @@ mod tests {
         let path = dir.join(format!("minipro-fmt-{}.bin", std::process::id()));
         std::fs::write(&path, [0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
 
-        // Short image is padded to code_size with the erased byte.
-        let img = load_image(&path, Fmt::Raw, 8).unwrap();
-        assert_eq!(img.bytes, vec![0xaa, 0xbb, 0xcc, 0xdd, PAD, PAD, PAD, PAD]);
+        // Short image is padded to code_size with the given blank byte (0x00
+        // here, proving the pad is the chip's erased value, not a hardcoded 0xFF).
+        let img = load_image(&path, Fmt::Raw, 8, 0x00).unwrap();
+        assert_eq!(img.bytes, vec![0xaa, 0xbb, 0xcc, 0xdd, 0, 0, 0, 0]);
 
         // Exact fit is untouched.
-        assert_eq!(load_image(&path, Fmt::Raw, 4).unwrap().bytes, vec![0xaa, 0xbb, 0xcc, 0xdd]);
+        assert_eq!(load_image(&path, Fmt::Raw, 4, PAD).unwrap().bytes, vec![0xaa, 0xbb, 0xcc, 0xdd]);
 
         // Larger than the chip is rejected.
-        assert_eq!(load_image(&path, Fmt::Raw, 2).unwrap_err().code(), "format");
+        assert_eq!(load_image(&path, Fmt::Raw, 2, PAD).unwrap_err().code(), "format");
 
         std::fs::remove_file(&path).ok();
     }

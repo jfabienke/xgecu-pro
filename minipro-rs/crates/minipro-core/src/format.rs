@@ -50,12 +50,13 @@ impl Format {
         }
     }
 
-    /// Parse file bytes into a flat image.
-    pub fn parse(self, bytes: &[u8]) -> Result<Image> {
+    /// Parse file bytes into a flat image. `pad` fills gaps between addressed
+    /// records (use the chip's blank value; [`PAD`] is the usual `0xFF`).
+    pub fn parse(self, bytes: &[u8], pad: u8) -> Result<Image> {
         match self {
             Format::Raw => Ok(Image { bytes: bytes.to_vec() }),
-            Format::IHex => parse_ihex(bytes),
-            Format::SRec => parse_srec(bytes),
+            Format::IHex => parse_ihex(bytes, pad),
+            Format::SRec => parse_srec(bytes, pad),
         }
     }
 
@@ -89,10 +90,10 @@ fn decode_hex(s: &str) -> Option<Vec<u8>> {
 }
 
 /// Build a flat image from `(address, data)` records: sized to the highest end
-/// address, [`PAD`]-filled, with each record written at its address.
-fn assemble(records: &[(u32, Vec<u8>)]) -> Image {
+/// address, `pad`-filled, with each record written at its address.
+fn assemble(records: &[(u32, Vec<u8>)], pad: u8) -> Image {
     let end = records.iter().map(|(a, d)| *a as usize + d.len()).max().unwrap_or(0);
-    let mut out = vec![PAD; end];
+    let mut out = vec![pad; end];
     for (a, d) in records {
         out[*a as usize..*a as usize + d.len()].copy_from_slice(d);
     }
@@ -107,7 +108,7 @@ fn hex_byte(out: &mut String, b: u8) {
 
 // ---- Intel HEX -------------------------------------------------------------
 
-fn parse_ihex(bytes: &[u8]) -> Result<Image> {
+fn parse_ihex(bytes: &[u8], pad: u8) -> Result<Image> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| Error::Format("Intel HEX is not valid ASCII".into()))?;
     let mut base: u32 = 0;
@@ -143,7 +144,7 @@ fn parse_ihex(bytes: &[u8]) -> Result<Image> {
             t => return Err(Error::Format(format!("Intel HEX line {n}: unknown record type {t:#x}"))),
         }
     }
-    Ok(assemble(&records))
+    Ok(assemble(&records, pad))
 }
 
 /// Write one Intel HEX record body `[len, addr_hi, addr_lo, type, data…]` with
@@ -179,7 +180,7 @@ fn emit_ihex(data: &[u8]) -> Vec<u8> {
 
 // ---- Motorola S-record -----------------------------------------------------
 
-fn parse_srec(bytes: &[u8]) -> Result<Image> {
+fn parse_srec(bytes: &[u8], pad: u8) -> Result<Image> {
     let text = std::str::from_utf8(bytes)
         .map_err(|_| Error::Format("S-record is not valid ASCII".into()))?;
     let mut records: Vec<(u32, Vec<u8>)> = Vec::new();
@@ -215,7 +216,7 @@ fn parse_srec(bytes: &[u8]) -> Result<Image> {
         let addr = rec[1..1 + addr_len].iter().fold(0u32, |a, &b| (a << 8) | b as u32);
         records.push((addr, rec[1 + addr_len..rec.len() - 1].to_vec()));
     }
-    Ok(assemble(&records))
+    Ok(assemble(&records, pad))
 }
 
 /// Write one S-record of `kind` (`b'1'`, `b'9'`, …): `S<kind><count><addr><data><cksum>`.
@@ -279,14 +280,14 @@ mod tests {
         // Classic ":00000001FF" is the EOF record; a data record before it.
         // len 03, addr 0000, type 00, data 01 02 03, sum 0x09 -> cksum 0xF7.
         let hex = ":03000000010203F7\n:00000001FF\n";
-        let image = Format::IHex.parse(hex.as_bytes()).unwrap();
+        let image = Format::IHex.parse(hex.as_bytes(), PAD).unwrap();
         assert_eq!(image.bytes, vec![0x01, 0x02, 0x03]);
     }
 
     #[test]
     fn ihex_rejects_bad_checksum() {
         let hex = ":03000000010203AA\n:00000001FF\n";
-        assert_eq!(Format::IHex.parse(hex.as_bytes()).unwrap_err().code(), "format");
+        assert_eq!(Format::IHex.parse(hex.as_bytes(), PAD).unwrap_err().code(), "format");
     }
 
     #[test]
@@ -294,7 +295,7 @@ mod tests {
         // S1 record, addr 0000, data 01 02 03, checksum.
         // count=06, sum(06 00 00 01 02 03)=0x0c, cksum=0xF3.
         let srec = "S106000001020" .to_string() + "3F3\nS9030000FC\n";
-        let image = Format::SRec.parse(srec.as_bytes()).unwrap();
+        let image = Format::SRec.parse(srec.as_bytes(), PAD).unwrap();
         assert_eq!(image.bytes, vec![0x01, 0x02, 0x03]);
     }
 
@@ -304,7 +305,7 @@ mod tests {
         let bytes = Format::IHex.emit(&img(&data));
         // Emitted text is ASCII and starts with a record marker.
         assert!(bytes.starts_with(b":"));
-        let back = Format::IHex.parse(&bytes).unwrap();
+        let back = Format::IHex.parse(&bytes, PAD).unwrap();
         assert_eq!(back.bytes, data);
     }
 
@@ -313,7 +314,7 @@ mod tests {
         let data: Vec<u8> = (0..500u32).map(|i| (i * 7) as u8).collect();
         let bytes = Format::SRec.emit(&img(&data));
         assert!(bytes.starts_with(b"S"));
-        let back = Format::SRec.parse(&bytes).unwrap();
+        let back = Format::SRec.parse(&bytes, PAD).unwrap();
         assert_eq!(back.bytes, data);
     }
 
@@ -323,14 +324,14 @@ mod tests {
         let data = vec![0xABu8; 0x1_0020];
         let bytes = Format::IHex.emit(&img(&data));
         assert!(String::from_utf8_lossy(&bytes).contains(":02000004")); // type-04 record
-        assert_eq!(Format::IHex.parse(&bytes).unwrap().bytes, data);
+        assert_eq!(Format::IHex.parse(&bytes, PAD).unwrap().bytes, data);
     }
 
     #[test]
     fn raw_is_identity() {
         let data = vec![0xde, 0xad, 0xbe, 0xef];
         assert_eq!(Format::Raw.emit(&img(&data)), data);
-        assert_eq!(Format::Raw.parse(&data).unwrap().bytes, data);
+        assert_eq!(Format::Raw.parse(&data, PAD).unwrap().bytes, data);
     }
 
     #[test]
@@ -339,7 +340,7 @@ mod tests {
         // rec1 @0000: 0xAA (len 01, cksum: 01+00+00+00+AA=AB -> neg 55)
         // rec2 @0004: 0xBB (len 01, addr 0004, cksum: 01+00+04+00+BB=C0 -> neg 40)
         let hex = ":01000000AA55\n:0100040" .to_string() + "0BB40\n:00000001FF\n";
-        let image = Format::IHex.parse(hex.as_bytes()).unwrap();
+        let image = Format::IHex.parse(hex.as_bytes(), PAD).unwrap();
         assert_eq!(image.bytes, vec![0xAA, PAD, PAD, PAD, 0xBB]);
     }
 }

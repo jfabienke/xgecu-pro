@@ -41,6 +41,16 @@ pub enum EraseKind { Chip, Sector { address: u64 }, Fuses }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FuseKind { User, Config, Lock }
 
+/// Device-class codes (C `chip_type`, the XML `type` attribute / DLL
+/// `desc[0x08]`), carried on [`Device::chip_type`].
+pub mod chip_type {
+    pub const MEMORY: u8 = 0x01;
+    pub const MCU: u8 = 0x02;
+    pub const PLD: u8 = 0x03;
+    pub const SRAM: u8 = 0x04;
+    pub const LOGIC: u8 = 0x05;
+}
+
 /// eMMC hardware partition (T76 `--partition`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Partition { User, Boot1, Boot2, Rpmb }
@@ -93,6 +103,13 @@ pub struct Package {
 pub struct Device {
     pub name: String,
     pub protocol_id: u8,
+    /// Device class (C `chip_type`): [`chip_type::MEMORY`]/`MCU`/`PLD`/`SRAM`/
+    /// `LOGIC`. Drives class-specific routing (e.g. logic vs memory).
+    pub chip_type: u8,
+    /// Erased-cell value (C `blank_value`, default `0xFF`). `0x00` for parts
+    /// that erase low; used by blank-check and the write-pad so verify matches
+    /// the real erased state, not an assumed `0xFF`.
+    pub blank_value: u8,
     /// C `variant`: low byte adapter/geometry code, high byte algorithm number.
     pub variant: u16,
     pub code_size: u64,

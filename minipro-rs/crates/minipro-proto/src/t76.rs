@@ -1177,7 +1177,7 @@ impl MemoryOps for T76 {
             let len = step.min(region.len - done) as u32;
             let req = BlockReq { kind: region.kind, address: region.offset + done, len };
             let block = self.read_block(s, &req)?;
-            if block.iter().any(|&b| b != 0xff) {
+            if block.iter().any(|&b| b != s.device.blank_value) {
                 return Ok(false);
             }
             done += u64::from(len);
@@ -1387,6 +1387,7 @@ mod tests {
         Device {
             name: "TEST".into(),
             protocol_id,
+            blank_value: 0xFF, // realistic erased byte for blank-check tests
             code_size: 0x8000,
             data_size: 0x100,
             page_size: 0x40,

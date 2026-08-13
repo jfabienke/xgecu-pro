@@ -457,6 +457,11 @@ fn decode_ic(pe: &Pe, ic: usize) -> Option<Device> {
         chip_id_bytes: id_bytes_count(chip_id),
         name,
         protocol_id: d[0x00],
+        // chip_type is RE'd at desc[0x08] (tools/infoict76-refresh/fields.py, 100%).
+        chip_type: d[0x08],
+        // blank_value's DLL offset is not RE'd; default to the erased byte, as
+        // the C does when the XML attribute is absent (database.c:630).
+        blank_value: 0xFF,
         variant,
         code_size: u64::from(u32le(d, 0x38)),
         data_size: u64::from(u32le(d, 0x3c)),

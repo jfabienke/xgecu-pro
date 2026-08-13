@@ -29,6 +29,13 @@ use crate::{algorithm_name, decode_alg, ChipDb, DllDb, Search};
 const CATALOG_FILE: &str = "catalog.postcard";
 const META_FILE: &str = "source.meta"; // "<version-tag>\n<utc-day>\n"
 
+// The persisted catalog is `MAGIC || schema:u16le || postcard(Vec<Device>)`.
+// postcard is not self-describing, so a `Device` struct change silently
+// mis-decodes an old blob; the schema tag turns that into a clean rebuild.
+// **Bump `CATALOG_SCHEMA` whenever `Device`'s serialized shape changes.**
+const CATALOG_MAGIC: &[u8; 4] = b"MPDB";
+const CATALOG_SCHEMA: u16 = 1;
+
 /// A [`DllDb`] catalog persisted from a mirror; the DLL is never stored, and a
 /// once-a-day version check keeps only the latest version on disk.
 pub struct HttpDb {
@@ -66,6 +73,12 @@ impl HttpDb {
             }
         };
 
+        // Even when the version check says "no change", a catalog written by an
+        // older binary (different Device schema, or no header at all) can't be
+        // decoded — a bad magic/schema forces a rebuild instead of a mis-decode.
+        let cached = if rebuild { None } else { read_catalog(&catalog) };
+        let rebuild = rebuild || cached.is_none();
+
         let inner = if rebuild {
             let dll = http_get(&dll_url)?; // into RAM only
             if let Some(want) = dll_sha256 {
@@ -78,9 +91,7 @@ impl HttpDb {
             write_meta(cache_dir, &tag, today);
             inner
         } else {
-            let devices: Vec<Device> = postcard::from_bytes(&std::fs::read(&catalog)?)
-                .map_err(|e| Error::Format(format!("cached catalog decode: {e}")))?;
-            DllDb::from_devices(devices)
+            DllDb::from_devices(cached.expect("cache present when not rebuilding"))
         };
 
         Ok(HttpDb { inner, base_url, cache_dir: cache_dir.to_path_buf() })
@@ -144,10 +155,29 @@ fn write_meta(dir: &Path, tag: &str, day: u64) {
 fn persist_catalog(path: &Path, devices: &[Device]) -> Result<()> {
     let blob = postcard::to_allocvec(devices)
         .map_err(|e| Error::Format(format!("catalog encode: {e}")))?;
+    let mut framed = Vec::with_capacity(6 + blob.len());
+    framed.extend_from_slice(CATALOG_MAGIC);
+    framed.extend_from_slice(&CATALOG_SCHEMA.to_le_bytes());
+    framed.extend_from_slice(&blob);
     let tmp = path.with_extension("postcard.part");
-    std::fs::write(&tmp, &blob)?;
+    std::fs::write(&tmp, &framed)?;
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+/// Read a persisted catalog, verifying the magic + schema version. Returns
+/// `None` (→ rebuild) if the file is missing, unframed, a different schema, or
+/// otherwise undecodable — never a hard error, since the fix is always to
+/// rebuild from the mirror.
+fn read_catalog(path: &Path) -> Option<Vec<Device>> {
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() < 6 || &bytes[..4] != CATALOG_MAGIC {
+        return None;
+    }
+    if u16::from_le_bytes([bytes[4], bytes[5]]) != CATALOG_SCHEMA {
+        return None;
+    }
+    postcard::from_bytes(&bytes[6..]).ok()
 }
 
 /// Delete the cached `.alg` bitstreams (called on a version change).
@@ -217,6 +247,38 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         write_meta(&dir, "\"abc123\"", 20_314);
         assert_eq!(read_meta(&dir), Some(("\"abc123\"".to_string(), 20_314)));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn catalog_header_roundtrips_and_rejects_mismatch() {
+        let dir = std::env::temp_dir().join(format!("minipro-cat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("catalog.postcard");
+        let devs =
+            vec![Device { name: "CHIP@DIP8".into(), blank_value: 0xFF, ..Device::default() }];
+
+        // Framed write is readable back.
+        persist_catalog(&path, &devs).unwrap();
+        let back = read_catalog(&path).expect("valid catalog");
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].name, "CHIP@DIP8");
+
+        // The header is MAGIC || schema:u16le.
+        let raw = std::fs::read(&path).unwrap();
+        assert_eq!(&raw[..4], CATALOG_MAGIC);
+        assert_eq!(u16::from_le_bytes([raw[4], raw[5]]), CATALOG_SCHEMA);
+
+        // A wrong schema version -> None (triggers a rebuild), not a mis-decode.
+        let mut bumped = raw.clone();
+        bumped[4] = bumped[4].wrapping_add(1);
+        std::fs::write(&path, &bumped).unwrap();
+        assert!(read_catalog(&path).is_none());
+
+        // A raw postcard blob with no header (an old-format file) -> None.
+        std::fs::write(&path, postcard::to_allocvec(&devs).unwrap()).unwrap();
+        assert!(read_catalog(&path).is_none());
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }

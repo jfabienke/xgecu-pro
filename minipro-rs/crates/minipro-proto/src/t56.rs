@@ -375,7 +375,7 @@ impl MemoryOps for T56 {
         while done < region.len {
             let len = step.min(region.len - done) as u32;
             let req = BlockReq { kind: region.kind, address: region.offset + done, len };
-            if self.read_block(s, &req)?.iter().any(|&b| b != 0xff) {
+            if self.read_block(s, &req)?.iter().any(|&b| b != s.device.blank_value) {
                 return Ok(false);
             }
             done += u64::from(len);

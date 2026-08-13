@@ -322,6 +322,8 @@ fn parse_infoic<R: BufRead>(reader: R, db_type: &str) -> Result<Vec<Device>> {
 fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
     let mut name = None;
     let mut protocol_id: u8 = 0;
+    let mut chip_type: u8 = 0;
+    let mut blank_value: u8 = 0xFF; // C default when the attribute is absent
     let mut variant: u16 = 0;
     let mut code_size: u64 = 0;
     let mut data_size: u64 = 0;
@@ -343,6 +345,8 @@ fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
         match a.key.as_ref() {
             b"name" => name = Some(attr_str(&a)?),
             b"protocol_id" => protocol_id = parse_num(&attr_str(&a)?)? as u8,
+            b"type" => chip_type = parse_num(&attr_str(&a)?)? as u8,
+            b"blank_value" => blank_value = parse_num(&attr_str(&a)?)? as u8,
             b"variant" => variant = parse_num(&attr_str(&a)?)? as u16,
             b"code_memory_size" => code_size = parse_num(&attr_str(&a)?)?,
             b"data_memory_size" => data_size = parse_num(&attr_str(&a)?)?,
@@ -358,7 +362,7 @@ fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
             b"pages_per_block" => pages_per_block = parse_num(&attr_str(&a)?)? as u32,
             b"flags" => raw_flags = parse_num(&attr_str(&a)?)? as u32,
             b"package_details" => package_details = parse_num(&attr_str(&a)?)? as u32,
-            _ => {} // type, config, blank_value, … — not in the core Device
+            _ => {} // config, vectors (logicic.xml), … — not yet in core Device
         }
     }
 
@@ -385,6 +389,8 @@ fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
             chip_id_bytes: id_bytes_count(chip_id),
             name: alias.to_string(),
             protocol_id,
+            chip_type,
+            blank_value,
             variant,
             code_size,
             data_size,
@@ -627,6 +633,7 @@ mod tests {
           flags="0x00000082"
           chip_info="0x0000"
           package_details="0x08000000"
+          blank_value="0x00"
           config="NULL"
       />
       <ic name="W25X20" type="1" protocol_id="0x2c" code_memory_size="0x800000"
@@ -680,6 +687,10 @@ mod tests {
         assert_eq!(d.chip_id, 0xef4017);
         assert_eq!(d.chip_id_bytes, 3, "0xef4017 has 3 significant bytes");
         assert_eq!(d.package.pin_count, 8);
+        assert_eq!(d.chip_type, 1, "type=\"1\" -> MEMORY");
+        assert_eq!(d.blank_value, 0x00, "explicit blank_value attribute honored");
+        // An IC with no blank_value attribute defaults to the erased byte.
+        assert_eq!(db.get("W25X20").unwrap().blank_value, 0xFF);
         assert_eq!(d.package.name, "SOIC8");
         assert!(d.algorithm.is_none());
         assert_eq!(d.fw_target, T76_FW_TARGET);
