@@ -6,13 +6,18 @@ A Rust redesign of the [minipro](../minipro-t76) CLI, built from the design in
 output design.
 
 **Status:** working. The T76 driver is fully implemented and **hardware-verified**
-(byte-identical reads from a real T76). The T56 and T48 drivers are reference-only
-ports, verified against golden packets derived from the C source rather than
-hardware. The native chip database reads XGecu's `InfoICT76.dll` directly (no XML
-needed) and can provision itself from a mirror. 141 tests pass, clippy clean.
+(byte-identical reads from a real T76). The native chip database reads XGecu's
+`InfoICT76.dll` directly (no XML needed) and can provision itself from a mirror.
+164 tests pass, clippy clean.
+
+> ⚠️ **The T48 and T56 drivers are untested on hardware.** They are faithful
+> reference-only ports — verified against the C source and byte-exact golden
+> packets, but **never run against a real T48 or T56** (we don't have the
+> hardware). Treat them as unproven until someone confirms them on-device. See
+> [Contributing](#contributing).
 
 ```
-cargo test           # 141 hardware-free protocol/golden/db tests
+cargo test           # 164 hardware-free protocol/golden/db tests
 cargo clippy --all-targets
 ./target/debug/minipro --json info
 ```
@@ -115,3 +120,31 @@ the same `algoT76/` source as chip bitstreams, and the CLI exposes them as
 - **A compiled/baked-in chip database.** Direct-to-source (`DllDb` parses the
   vendor DLL; `HttpDb` provisions + caches it from a mirror) keeps the catalog
   live and is strictly better than a frozen, rebuild-to-update blob.
+
+## Contributing
+
+Help wanted — especially from anyone with the **hardware we don't have**.
+
+- **🔌 Validate the T48 / T56 on real devices.** These drivers are complete but
+  **untested on hardware** — ported faithfully from the C source and covered by
+  byte-exact golden packets, yet never run against an actual T48 or T56. If you
+  own one, running `minipro info`, `detect`, and a `read` against a known chip
+  (and reporting what you see) is the single most valuable thing you can do. It
+  turns "reference-only" into "proven." The write-buffer-size `TODO(hw)` in
+  `t48.rs`/`t56.rs` can only be settled this way too.
+- **🔌 T76 op coverage on hardware.** T76 *reads* are byte-verified; **write,
+  erase, NAND, eMMC, and firmware-update** are ported but not yet exercised on a
+  device. Confirmations (or bug reports) welcome.
+- **Port the TL866II+ and TL866A/CS drivers.** The TL866II+ is II+-class and
+  close to the existing T48 (EP02 bulk, fixed-silicon), so it reuses most of the
+  shared `wire` layer. The TL866A/CS is the outlier (24-bit addressing, an
+  alternate opcode space, a latch-based ZIF model). Both are well-specified in
+  the C fork.
+- **The roadmap** ([`docs/rust-port-roadmap.md`](../docs/rust-port-roadmap.md))
+  lists the rest — CLI verbs for fuses/JEDEC/firmware, GAL/PLD `config`, extra
+  memory regions — each scoped with effort and dependencies.
+
+Every driver is checked against the C reference and a golden-packet harness, so
+new work has a clear correctness bar. If you validate on hardware, please include
+the programmer model, firmware version (`minipro info`), and the exact command +
+output. Bug reports with a `--json` line and the chip name are ideal.
