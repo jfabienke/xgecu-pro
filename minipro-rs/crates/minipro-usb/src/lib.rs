@@ -27,6 +27,18 @@ pub const T76_VID: u16 = 0xA466;
 /// XGecu T76 product id.
 pub const T76_PID: u16 = 0x1A86;
 
+/// The TL866II+, T48, and T56 all enumerate as one USB id (`0xA466:0x0A53`);
+/// the concrete model is read from the system-info device-type byte, not the
+/// PID (usb_nix.c:28-29). Opening this id covers all three.
+pub const TL866II_VID: u16 = 0xA466;
+/// Shared TL866II+/T48/T56 product id.
+pub const TL866II_PID: u16 = 0x0A53;
+
+/// USB ids this port can open, in probe order: the T76, then the shared
+/// TL866II+/T48/T56 id. [`UsbTransport::open_any`] tries each; `detect()`
+/// resolves the concrete driver afterward from the system-info byte.
+pub const KNOWN_IDS: &[(u16, u16)] = &[(T76_VID, T76_PID), (TL866II_VID, TL866II_PID)];
+
 /// The T76 bulk command endpoints (vendor protocol: commands OUT, responses IN).
 const EP_CMD_OUT: u8 = 0x01;
 const EP_CMD_IN: u8 = 0x81;
@@ -80,6 +92,21 @@ impl UsbTransport {
         tx.out_ep(EP_CMD_OUT)?;
         tx.in_ep(EP_CMD_IN)?;
         Ok(tx)
+    }
+
+    /// Open the first present known programmer, probing [`KNOWN_IDS`] in order.
+    /// The concrete model (T56/T48/T76, or an unsupported TL866II+) is resolved
+    /// later by `detect()` from the system-info byte — all of T48/T56/TL866II+
+    /// share one USB id, so there is nothing to choose between here.
+    pub fn open_any() -> Result<Self> {
+        let mut last: Option<Error> = None;
+        for &(vid, pid) in KNOWN_IDS {
+            match Self::open(vid, pid) {
+                Ok(tx) => return Ok(tx),
+                Err(e) => last = Some(e),
+            }
+        }
+        Err(no_device_error(last))
     }
 
     /// On macOS + SuperSpeed the T76 bulk path fails; surface a clear diagnostic.
@@ -201,6 +228,21 @@ impl Transport for UsbTransport {
             }
         }
         Err(last_err)
+    }
+}
+
+/// Choose the error [`UsbTransport::open_any`] returns after every id failed.
+/// A genuine open/claim failure (device present but unusable) is surfaced
+/// verbatim so permission/driver issues stay debuggable; a plain "not found"
+/// collapses to a clean "nothing connected" that lists what was tried.
+fn no_device_error(last: Option<Error>) -> Error {
+    match last {
+        Some(e) if !e.to_string().contains("no programmer found") => e,
+        _ => {
+            let ids: Vec<String> =
+                KNOWN_IDS.iter().map(|(v, p)| format!("{v:04x}:{p:04x}")).collect();
+            Error::Usb(format!("no known programmer connected (tried {})", ids.join(", ")))
+        }
     }
 }
 
@@ -328,6 +370,25 @@ mod tests {
         let resp = pending.read().unwrap(); // dropping without read would warn
         assert_eq!(resp.len(), 32);
         assert_eq!(resp[0], 0xaa);
+    }
+
+    #[test]
+    fn known_ids_cover_t76_and_shared_family() {
+        assert!(KNOWN_IDS.contains(&(T76_VID, T76_PID)));
+        assert!(KNOWN_IDS.contains(&(TL866II_VID, TL866II_PID)));
+    }
+
+    #[test]
+    fn open_any_error_selection() {
+        // A genuine claim failure is surfaced verbatim (stays debuggable).
+        let real = no_device_error(Some(Error::Usb("claim interface 0: access denied".into())));
+        assert!(real.to_string().contains("access denied"));
+
+        // A plain "not found" collapses to a clean listing of every tried id.
+        let none = no_device_error(Some(Error::Usb("no programmer found (a466:0a53)".into())));
+        let msg = none.to_string();
+        assert!(msg.contains("no known programmer connected"));
+        assert!(msg.contains("a466:1a86") && msg.contains("a466:0a53"));
     }
 
     #[test]

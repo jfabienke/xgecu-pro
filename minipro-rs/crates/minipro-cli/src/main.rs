@@ -22,10 +22,6 @@ use minipro_core::Programmer;
 use minipro_db::{ChipDb, DllDb, HttpDb, XmlDb};
 use reporters::{HumanReporter, JsonReporter};
 
-/// The XGecu T76's USB identity (see `UsbTransport::open`).
-const T76_VID: u16 = 0xA466;
-const T76_PID: u16 = 0x1A86;
-
 #[derive(Parser, Debug)]
 #[command(
     name = "minipro",
@@ -260,10 +256,12 @@ fn main() -> ExitCode {
 // Wiring: transport -> programmer -> db -> ops
 // ---------------------------------------------------------------------------
 
-/// Open the USB transport and detect the attached programmer.
+/// Open the USB transport and detect the attached programmer. Probes all known
+/// USB ids (the T76 and the shared TL866II+/T48/T56 id), then `detect()` reads
+/// the system-info byte to bind the right driver.
 /// With nothing plugged in this returns the transport's "no device" error.
 pub(crate) fn open_programmer() -> Result<Box<dyn Programmer>> {
-    let tx = minipro_usb::UsbTransport::open(T76_VID, T76_PID)?;
+    let tx = minipro_usb::UsbTransport::open_any()?;
     tx.check_link()?; // macOS + SuperSpeed diagnosis, not a bare I/O error
     minipro_proto::detect(Box::new(tx))
 }
