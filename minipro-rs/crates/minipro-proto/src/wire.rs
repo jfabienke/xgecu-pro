@@ -10,8 +10,9 @@
 //! than re-deriving the packing. The single source of the "magic length per
 //! opcode" and field-offset knowledge lives here.
 
-use minipro_core::device::Device;
+use minipro_core::device::{Device, FuseKind};
 use minipro_core::error::{Error, Result};
+use minipro_core::transport::{command, Ep, Transport};
 
 // ---------------------------------------------------------------------------
 // II+-family opcodes shared across T48/T56/T76 (t76.c:34-93 and siblings).
@@ -161,4 +162,158 @@ pub(crate) fn pack_begin64(p: &ChipParams) -> [u8; 64] {
     //                               uploaded bitstream, so msg[63] stays 0.
     // Each driver layers those on top of this shared subset.
     msg
+}
+
+// ---------------------------------------------------------------------------
+// Shared firmware-mediated ops (fuses, JEDEC rows, protect, calibration).
+//
+// These are byte-identical across T48/T56/T76 and all run on the command
+// endpoints EP01 OUT / EP81 IN (usb_nix.c:442-459) — no bulk plane, no FPGA
+// bitstream. Implemented once here; each driver delegates. (Logic test and SPI
+// autodetect are *not* here: on the FPGA drivers they require a utility-algorithm
+// bitstream upload, so they stay per-driver.)
+// ---------------------------------------------------------------------------
+const EP_CMD_OUT: Ep = Ep(0x01);
+const EP_CMD_IN: Ep = Ep(0x81);
+
+// Fuse-space opcodes (t48.c/t56.c/t76.c :38-51).
+const CMD_READ_USER: u8 = 0x06;
+const CMD_WRITE_USER: u8 = 0x07;
+const CMD_READ_CFG: u8 = 0x08;
+const CMD_WRITE_CFG: u8 = 0x09;
+const CMD_WRITE_LOCK: u8 = 0x14;
+const CMD_READ_LOCK: u8 = 0x15;
+const CMD_READ_CALIBRATION: u8 = 0x16;
+const CMD_PROTECT_OFF: u8 = 0x18;
+const CMD_PROTECT_ON: u8 = 0x19;
+const CMD_READ_JEDEC: u8 = 0x1d;
+const CMD_WRITE_JEDEC: u8 = 0x1e;
+
+fn cmd(tx: &mut dyn Transport, pkt: &[u8], resp_len: usize) -> Result<Vec<u8>> {
+    command(tx, EP_CMD_OUT, EP_CMD_IN, pkt, resp_len)?.read()
+}
+
+/// `*_read_fuses`: `[0]`=space opcode, `[1]`=protocol_id, `[2]`=items_count,
+/// `[4..8]`=code_memory_size; send 8, recv 64, return `length` bytes from `[8]`.
+pub(crate) fn fuse_read(
+    tx: &mut dyn Transport,
+    protocol_id: u8,
+    code_size: u32,
+    kind: FuseKind,
+    length: usize,
+    items_count: u8,
+) -> Result<Vec<u8>> {
+    let op = match kind {
+        FuseKind::User => CMD_READ_USER,
+        FuseKind::Config => CMD_READ_CFG,
+        FuseKind::Lock => CMD_READ_LOCK,
+    };
+    let mut msg = [0u8; 8];
+    msg[0] = op;
+    msg[1] = protocol_id;
+    msg[2] = items_count;
+    le32(&mut msg, 4, code_size);
+    let resp = cmd(tx, &msg, 64)?;
+    if resp.len() < 8 + length {
+        return Err(Error::Protocol);
+    }
+    Ok(resp[8..8 + length].to_vec())
+}
+
+/// `*_write_fuses`: as above but the address is `code_memory_size - 0x38` (a
+/// preserved firmware-bug workaround) and the payload follows at `[8]`; a single
+/// 64-byte send, no reply.
+pub(crate) fn fuse_write(
+    tx: &mut dyn Transport,
+    protocol_id: u8,
+    code_size: u32,
+    kind: FuseKind,
+    items_count: u8,
+    data: &[u8],
+) -> Result<()> {
+    let op = match kind {
+        FuseKind::User => CMD_WRITE_USER,
+        FuseKind::Config => CMD_WRITE_CFG,
+        FuseKind::Lock => CMD_WRITE_LOCK,
+    };
+    if data.len() > 56 {
+        return Err(Error::Format("fuse payload exceeds 56 bytes".into()));
+    }
+    let mut msg = [0u8; 64];
+    msg[0] = op;
+    msg[1] = protocol_id;
+    msg[2] = items_count;
+    le32(&mut msg, 4, code_size.wrapping_sub(0x38)); // 0x38 firmware-bug offset
+    msg[8..8 + data.len()].copy_from_slice(data);
+    tx.send(EP_CMD_OUT, &msg)
+}
+
+/// `*_read_jedec_row`: `[0]`=0x1d, `[1]`=type byte, `[2]`=size, `[4]`=row,
+/// `[5]`=flags; send 8, recv 32, return the first `(size + 7) / 8` bytes (from
+/// `[0]`, not `[8]`).
+pub(crate) fn jedec_read(
+    tx: &mut dyn Transport,
+    type_byte: u8,
+    row: u8,
+    flags: u8,
+    size: u16,
+) -> Result<Vec<u8>> {
+    let mut msg = [0u8; 8];
+    msg[0] = CMD_READ_JEDEC;
+    msg[1] = type_byte;
+    msg[2] = size as u8;
+    msg[4] = row;
+    msg[5] = flags;
+    let resp = cmd(tx, &msg, 32)?;
+    let nbytes = usize::from(size.div_ceil(8));
+    if resp.len() < nbytes {
+        return Err(Error::Protocol);
+    }
+    Ok(resp[..nbytes].to_vec())
+}
+
+/// `*_write_jedec_row`: the row payload at `[8]`, a single 64-byte send.
+pub(crate) fn jedec_write(
+    tx: &mut dyn Transport,
+    type_byte: u8,
+    row: u8,
+    flags: u8,
+    size: u16,
+    data: &[u8],
+) -> Result<()> {
+    let nbytes = usize::from(size.div_ceil(8));
+    if data.len() < nbytes || nbytes > 56 {
+        return Err(Error::Format(format!(
+            "JEDEC row needs {nbytes} bytes (size {size} bits), got {}",
+            data.len()
+        )));
+    }
+    let mut msg = [0u8; 64];
+    msg[0] = CMD_WRITE_JEDEC;
+    msg[1] = type_byte;
+    msg[2] = size as u8;
+    msg[4] = row;
+    msg[5] = flags;
+    msg[8..8 + nbytes].copy_from_slice(&data[..nbytes]);
+    tx.send(EP_CMD_OUT, &msg)
+}
+
+/// `*_protect_on` / `*_protect_off`: a bare 0x19 / 0x18, no reply.
+pub(crate) fn protect(tx: &mut dyn Transport, on: bool) -> Result<()> {
+    let mut msg = [0u8; 8];
+    msg[0] = if on { CMD_PROTECT_ON } else { CMD_PROTECT_OFF };
+    tx.send(EP_CMD_OUT, &msg)
+}
+
+/// `*_read_calibration`: a 64-byte `0x16` header with the length at `[2]`, then
+/// `len` bytes on EP81.
+pub(crate) fn calibration_read(tx: &mut dyn Transport, len: usize) -> Result<Vec<u8>> {
+    let mut msg = [0u8; 64];
+    msg[0] = CMD_READ_CALIBRATION;
+    le16(&mut msg, 2, len.min(usize::from(u16::MAX)) as u16);
+    let data = cmd(tx, &msg, len)?;
+    if data.len() < len {
+        return Err(Error::Protocol);
+    }
+    Ok(data)
 }

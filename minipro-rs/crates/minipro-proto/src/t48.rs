@@ -30,7 +30,7 @@ use minipro_core::programmer::{Caps, Programmer, ProgrammerInfo, Session};
 use minipro_core::transport::{command, Ep, LinkSpeed, Transport};
 
 use crate::wire::{
-    ascii_field, le16, le32, pack_begin64, ChipParams, CMD_END_TRANS, CMD_ERASE, CMD_READID,
+    self, ascii_field, le16, le32, pack_begin64, ChipParams, CMD_END_TRANS, CMD_ERASE, CMD_READID,
     CMD_READ_CODE, CMD_REQUEST_STATUS, CMD_WRITE_CODE,
 };
 
@@ -44,22 +44,13 @@ const EP_DAT_OUT: Ep = Ep(0x02);
 // T48-specific opcodes (t48.c:34-65); shared II+-family opcodes come from
 // `crate::wire`.
 const MP_T48: u8 = 0x07; // device-type byte in the system-info report (minipro.h:28)
-const CMD_READ_USER: u8 = 0x06; // t48.c:38 — fuse spaces
-const CMD_WRITE_USER: u8 = 0x07; // t48.c:39
-const CMD_READ_CFG: u8 = 0x08; // t48.c:40
-const CMD_WRITE_CFG: u8 = 0x09; // t48.c:41
 const CMD_WRITE_USER_DATA: u8 = 0x0a; // t48.c:42
 const CMD_READ_USER_DATA: u8 = 0x0b; // t48.c:43
 const CMD_READ_DATA: u8 = 0x10; // t48.c:48
 const CMD_WRITE_DATA: u8 = 0x11; // t48.c:49
-const CMD_WRITE_LOCK: u8 = 0x14; // t48.c:50
-const CMD_READ_LOCK: u8 = 0x15; // t48.c:51
-const CMD_PROTECT_OFF: u8 = 0x18; // t48.c:53
-const CMD_PROTECT_ON: u8 = 0x19; // t48.c:54
-const CMD_READ_JEDEC: u8 = 0x1d; // t48.c:55
-const CMD_WRITE_JEDEC: u8 = 0x1e; // t48.c:56
 const CMD_LOGIC_IC_TEST_VECTOR: u8 = 0x28; // t48.c:57
 const CMD_AUTODETECT: u8 = 0x37; // t48.c:58
+// Fuse/JEDEC/protect/calibration opcodes live in `crate::wire` (shared).
 
 // Logic-vector state codes (database.h; pst string "01LHCZXGV"). Only L/H/Z are
 // checked against the two test passes.
@@ -227,9 +218,7 @@ impl Programmer for T48 {
 }
 
 impl FuseOps for T48 {
-    /// `t48_read_fuses` (t48.c:384-415): `[0]`=space opcode, `[1]`=protocol_id,
-    /// `[2]`=items_count, `[4..8]`=code_memory_size; send 8, recv 64, return
-    /// `length` bytes from `[8]`.
+    /// `t48_read_fuses` (t48.c:384-415) — the shared implementation.
     fn read_fuses(
         &mut self,
         s: &Session,
@@ -237,26 +226,10 @@ impl FuseOps for T48 {
         length: usize,
         items_count: u8,
     ) -> Result<Vec<u8>> {
-        let op = match kind {
-            FuseKind::User => CMD_READ_USER,
-            FuseKind::Config => CMD_READ_CFG,
-            FuseKind::Lock => CMD_READ_LOCK,
-        };
-        let mut msg = [0u8; 8];
-        msg[0] = op;
-        msg[1] = s.device.protocol_id;
-        msg[2] = items_count;
-        le32(&mut msg, 4, s.device.code_size.min(u64::from(u32::MAX)) as u32);
-        let resp = self.cmd(&msg, 64)?;
-        if resp.len() < 8 + length {
-            return Err(Error::Protocol);
-        }
-        Ok(resp[8..8 + length].to_vec())
+        let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
+        wire::fuse_read(self.tx.as_mut(), s.device.protocol_id, code, kind, length, items_count)
     }
-
-    /// `t48_write_fuses` (t48.c:417-446): as above but the address field is
-    /// `code_memory_size - 0x38` (a preserved firmware-bug workaround) and the
-    /// payload follows at `[8]`; a single 64-byte send, no reply.
+    /// `t48_write_fuses` (t48.c:417-446) — the shared implementation.
     fn write_fuses(
         &mut self,
         s: &Session,
@@ -264,47 +237,17 @@ impl FuseOps for T48 {
         items_count: u8,
         data: &[u8],
     ) -> Result<()> {
-        let op = match kind {
-            FuseKind::User => CMD_WRITE_USER,
-            FuseKind::Config => CMD_WRITE_CFG,
-            FuseKind::Lock => CMD_WRITE_LOCK,
-        };
-        if data.len() > 56 {
-            return Err(Error::Format("fuse payload exceeds 56 bytes".into()));
-        }
-        let mut msg = [0u8; 64];
-        msg[0] = op;
-        msg[1] = s.device.protocol_id;
-        msg[2] = items_count;
-        // 0x38 firmware-bug offset (t48.c:441); wraps like the C uint math.
-        let addr = (s.device.code_size.min(u64::from(u32::MAX)) as u32).wrapping_sub(0x38);
-        le32(&mut msg, 4, addr);
-        msg[8..8 + data.len()].copy_from_slice(data);
-        self.send(&msg)
+        let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
+        wire::fuse_write(self.tx.as_mut(), s.device.protocol_id, code, kind, items_count, data)
     }
 }
 
 impl JedecOps for T48 {
-    /// `t48_read_jedec_row` (t48.c:565-584): `[0]`=0x1d, `[1]`=protocol_id,
-    /// `[2]`=size, `[4]`=row, `[5]`=flags; send 8, recv 32, return the first
-    /// `(size + 7) / 8` bytes (from `[0]`, not `[8]`).
+    /// `t48_read_jedec_row` (t48.c:565-584) — the shared implementation.
     fn read_row(&mut self, s: &Session, row: u8, flags: u8, size: u16) -> Result<Vec<u8>> {
-        let mut msg = [0u8; 8];
-        msg[0] = CMD_READ_JEDEC;
-        msg[1] = s.device.protocol_id;
-        msg[2] = size as u8;
-        msg[4] = row;
-        msg[5] = flags;
-        let resp = self.cmd(&msg, 32)?;
-        let nbytes = usize::from(size.div_ceil(8));
-        if resp.len() < nbytes {
-            return Err(Error::Protocol);
-        }
-        Ok(resp[..nbytes].to_vec())
+        wire::jedec_read(self.tx.as_mut(), s.device.protocol_id, row, flags, size)
     }
-
-    /// `t48_write_jedec_row` (t48.c:548-563): the row payload at `[8]`, a
-    /// single 64-byte send.
+    /// `t48_write_jedec_row` (t48.c:548-563) — the shared implementation.
     fn write_row(
         &mut self,
         s: &Session,
@@ -313,36 +256,16 @@ impl JedecOps for T48 {
         size: u16,
         data: &[u8],
     ) -> Result<()> {
-        let nbytes = usize::from(size.div_ceil(8));
-        if data.len() < nbytes || nbytes > 56 {
-            return Err(Error::Format(format!(
-                "JEDEC row needs {nbytes} bytes (size {size} bits), got {}",
-                data.len()
-            )));
-        }
-        let mut msg = [0u8; 64];
-        msg[0] = CMD_WRITE_JEDEC;
-        msg[1] = s.device.protocol_id;
-        msg[2] = size as u8;
-        msg[4] = row;
-        msg[5] = flags;
-        msg[8..8 + nbytes].copy_from_slice(&data[..nbytes]);
-        self.send(&msg)
+        wire::jedec_write(self.tx.as_mut(), s.device.protocol_id, row, flags, size, data)
     }
 }
 
 impl Protect for T48 {
-    /// `t48_protect_on` (t48.c:519-525): a bare 0x19, no reply.
     fn protect_on(&mut self, _s: &Session) -> Result<()> {
-        let mut msg = [0u8; 8];
-        msg[0] = CMD_PROTECT_ON;
-        self.send(&msg)
+        wire::protect(self.tx.as_mut(), true)
     }
-    /// `t48_protect_off` (t48.c:511-517): a bare 0x18, no reply.
     fn protect_off(&mut self, _s: &Session) -> Result<()> {
-        let mut msg = [0u8; 8];
-        msg[0] = CMD_PROTECT_OFF;
-        self.send(&msg)
+        wire::protect(self.tx.as_mut(), false)
     }
 }
 

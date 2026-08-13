@@ -15,14 +15,18 @@
 //! - bulk read payloads IN on EP 0x82 (`read_payload`)
 //! - bulk write payloads OUT on EP 0x05 (`write_payload`)
 
-use minipro_core::caps::{EmmcOps, FirmwareUpdate, MemoryOps, PinTest};
-use minipro_core::device::{BlockReq, ChipId, Device, EraseKind, MemoryKind, Partition, Region};
+use minipro_core::caps::{
+    Calibration, EmmcOps, FirmwareUpdate, FuseOps, JedecOps, MemoryOps, PinTest, Protect,
+};
+use minipro_core::device::{
+    BlockReq, ChipId, Device, EraseKind, FuseKind, MemoryKind, Partition, Region,
+};
 use minipro_core::error::{Error, FwVersion, Result};
 use minipro_core::programmer::{Caps, Programmer, ProgrammerInfo, Session};
 use minipro_core::transport::{command, Ep, LinkSpeed, Transport};
 
 use crate::wire::{
-    ascii_field, le16, le32, pack_begin64, ChipParams, CMD_END_TRANS, CMD_ERASE, CMD_READID,
+    self, ascii_field, le16, le32, pack_begin64, ChipParams, CMD_END_TRANS, CMD_ERASE, CMD_READID,
     CMD_READ_CODE, CMD_REQUEST_STATUS, CMD_WRITE_CODE,
 };
 
@@ -789,7 +793,17 @@ impl Programmer for T76 {
     }
 
     fn caps(&self) -> Caps {
-        Caps::MEMORY.with(Caps::EMMC).with(Caps::PINTEST).with(Caps::FWUPDATE)
+        // Logic test and SPI autodetect are deferred: on the FPGA T76 they need
+        // a utility-algorithm bitstream upload (TestLgcPull/Down, SPI25F*) not
+        // yet plumbed (t76.c:1609-1624).
+        Caps::MEMORY
+            .with(Caps::EMMC)
+            .with(Caps::PINTEST)
+            .with(Caps::FWUPDATE)
+            .with(Caps::FUSES)
+            .with(Caps::JEDEC)
+            .with(Caps::PROTECT)
+            .with(Caps::CALIBRATION)
     }
 
     /// `t76_begin_transaction` (t76.c:503-848): adapter init (NAND/eMMC),
@@ -881,6 +895,78 @@ impl Programmer for T76 {
     }
     fn firmware(&mut self) -> Option<&mut dyn FirmwareUpdate> {
         Some(self)
+    }
+    fn fuses(&mut self) -> Option<&mut dyn FuseOps> {
+        Some(self)
+    }
+    fn jedec(&mut self) -> Option<&mut dyn JedecOps> {
+        Some(self)
+    }
+    fn protect(&mut self) -> Option<&mut dyn Protect> {
+        Some(self)
+    }
+    fn calibration(&mut self) -> Option<&mut dyn Calibration> {
+        Some(self)
+    }
+}
+
+impl FuseOps for T76 {
+    /// `t76_read_fuses` (t76.c:1188-1218) — the shared implementation.
+    fn read_fuses(
+        &mut self,
+        s: &Session,
+        kind: FuseKind,
+        length: usize,
+        items_count: u8,
+    ) -> Result<Vec<u8>> {
+        let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
+        wire::fuse_read(self.tx.as_mut(), s.device.protocol_id, code, kind, length, items_count)
+    }
+    /// `t76_write_fuses` (t76.c:1220-1248) — the shared implementation.
+    fn write_fuses(
+        &mut self,
+        s: &Session,
+        kind: FuseKind,
+        items_count: u8,
+        data: &[u8],
+    ) -> Result<()> {
+        let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
+        wire::fuse_write(self.tx.as_mut(), s.device.protocol_id, code, kind, items_count, data)
+    }
+}
+
+impl JedecOps for T76 {
+    /// `t76_read_jedec_row` (t76.c:1543-1561) — the shared implementation. (The
+    /// C uses `js->type` for `msg[1]`; `protocol_id` is the value it carries.)
+    fn read_row(&mut self, s: &Session, row: u8, flags: u8, size: u16) -> Result<Vec<u8>> {
+        wire::jedec_read(self.tx.as_mut(), s.device.protocol_id, row, flags, size)
+    }
+    /// `t76_write_jedec_row` (t76.c:1527-1541) — the shared implementation.
+    fn write_row(
+        &mut self,
+        s: &Session,
+        row: u8,
+        flags: u8,
+        size: u16,
+        data: &[u8],
+    ) -> Result<()> {
+        wire::jedec_write(self.tx.as_mut(), s.device.protocol_id, row, flags, size, data)
+    }
+}
+
+impl Protect for T76 {
+    fn protect_on(&mut self, _s: &Session) -> Result<()> {
+        wire::protect(self.tx.as_mut(), true)
+    }
+    fn protect_off(&mut self, _s: &Session) -> Result<()> {
+        wire::protect(self.tx.as_mut(), false)
+    }
+}
+
+impl Calibration for T76 {
+    /// `t76_read_calibration` (t76.c:1250-1261) — the shared implementation.
+    fn read_calibration(&mut self, len: usize) -> Result<Vec<u8>> {
+        wire::calibration_read(self.tx.as_mut(), len)
     }
 }
 
@@ -1334,7 +1420,37 @@ mod tests {
         assert_eq!(caps.contains(Caps::FWUPDATE), t76.firmware().is_some());
         assert_eq!(caps.contains(Caps::FUSES), t76.fuses().is_some());
         assert_eq!(caps.contains(Caps::JEDEC), t76.jedec().is_some());
+        assert_eq!(caps.contains(Caps::PROTECT), t76.protect().is_some());
+        assert_eq!(caps.contains(Caps::CALIBRATION), t76.calibration().is_some());
         assert_eq!(caps.contains(Caps::LOGIC), t76.logic().is_some());
+        assert_eq!(caps.contains(Caps::AUTODETECT), t76.autodetect().is_some());
+        // Now present via the shared wire ops.
+        assert!(caps.contains(Caps::FUSES) && caps.contains(Caps::PROTECT));
+        assert!(caps.contains(Caps::CALIBRATION));
+        // Still deferred (FPGA utility-algorithm bitstream needed).
+        assert!(!caps.contains(Caps::LOGIC) && !caps.contains(Caps::AUTODETECT));
+    }
+
+    #[test]
+    fn fuses_and_calibration_via_shared_wire() {
+        // read_fuses: recv 64, data at [8..11].
+        let mut reply = vec![0u8; 64];
+        reply[8..11].copy_from_slice(&[0xa5, 0x5a, 0x3c]);
+        let (mut t76, tx) = t76_with(vec![reply]);
+        let mut dev = device(0x01, Vec::new());
+        dev.protocol_id = 0x11;
+        dev.code_size = 0x2000;
+        let s = Session { device: dev, emmc_capacity: 0 };
+        let fuses = t76.fuses().unwrap().read_fuses(&s, FuseKind::Lock, 3, 1).unwrap();
+        assert_eq!(fuses, vec![0xa5, 0x5a, 0x3c]);
+        // READ_LOCK (0x15), protocol 0x11, items 1, code_size LE at [4].
+        assert_eq!(tx.sent()[0].1, vec![0x15, 0x11, 0x01, 0, 0x00, 0x20, 0, 0]);
+
+        // read_calibration: 64-byte 0x16 header, len at [2], recv len bytes.
+        let (mut t76, tx) = t76_with(vec![vec![0xc0, 0xc1, 0xc2, 0xc3]]);
+        let cal = t76.calibration().unwrap().read_calibration(4).unwrap();
+        assert_eq!(cal, vec![0xc0, 0xc1, 0xc2, 0xc3]);
+        assert_eq!(&tx.sent()[0].1[..4], &[0x16, 0x00, 0x04, 0x00]);
     }
 
     // -----------------------------------------------------------------------

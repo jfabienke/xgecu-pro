@@ -23,14 +23,14 @@
 //! update are deferred (they need cap-trait plumbing the core doesn't carry
 //! yet); each is a short, self-contained follow-up.
 
-use minipro_core::caps::{Calibration, MemoryOps};
-use minipro_core::device::{BlockReq, ChipId, Device, EraseKind, MemoryKind, Region};
+use minipro_core::caps::{Calibration, FuseOps, JedecOps, MemoryOps, Protect};
+use minipro_core::device::{BlockReq, ChipId, Device, EraseKind, FuseKind, MemoryKind, Region};
 use minipro_core::error::{Error, FwVersion, Result};
 use minipro_core::programmer::{Caps, Programmer, ProgrammerInfo, Session};
 use minipro_core::transport::{command, Ep, LinkSpeed, Transport};
 
 use crate::wire::{
-    ascii_field, le16, le32, pack_begin64, ChipParams, CMD_END_TRANS, CMD_ERASE, CMD_READID,
+    self, ascii_field, le16, le32, pack_begin64, ChipParams, CMD_END_TRANS, CMD_ERASE, CMD_READID,
     CMD_READ_CODE, CMD_REQUEST_STATUS, CMD_WRITE_CODE,
 };
 
@@ -47,8 +47,8 @@ const CMD_WRITE_USER_DATA: u8 = 0x0a; // t56.c:41
 const CMD_READ_USER_DATA: u8 = 0x0b; // t56.c:42
 const CMD_READ_DATA: u8 = 0x10; // t56.c:47
 const CMD_WRITE_DATA: u8 = 0x11; // t56.c:48
-const CMD_READ_CALIBRATION: u8 = 0x16; // t56.c:51
 const CMD_WRITE_BITSTREAM: u8 = 0x26; // t56.c:56 — single-shot bitstream upload
+// Fuse/JEDEC/protect/calibration opcodes live in `crate::wire` (shared).
 
 /// The T56 command channel + cached identity.
 pub struct T56 {
@@ -155,8 +155,14 @@ impl Programmer for T56 {
     }
 
     fn caps(&self) -> Caps {
-        // Fuses/JEDEC/logic are deferred (see the module docs).
-        Caps::MEMORY.with(Caps::CALIBRATION)
+        // Logic test and SPI autodetect are deferred: on the FPGA T56 they need
+        // a utility-algorithm bitstream upload (TTL1/TTL2, SPI25F*) not yet
+        // plumbed (see the module docs).
+        Caps::MEMORY
+            .with(Caps::CALIBRATION)
+            .with(Caps::FUSES)
+            .with(Caps::JEDEC)
+            .with(Caps::PROTECT)
     }
 
     /// `t56_begin_transaction` (t56.c:166-240): upload the bitstream, send the
@@ -219,20 +225,73 @@ impl Programmer for T56 {
     fn calibration(&mut self) -> Option<&mut dyn Calibration> {
         Some(self)
     }
+    fn fuses(&mut self) -> Option<&mut dyn FuseOps> {
+        Some(self)
+    }
+    fn jedec(&mut self) -> Option<&mut dyn JedecOps> {
+        Some(self)
+    }
+    fn protect(&mut self) -> Option<&mut dyn Protect> {
+        Some(self)
+    }
 }
 
 impl Calibration for T56 {
-    /// `t56_read_calibration` (t56.c:378-391): a 64-byte `0x16` header with the
-    /// length at `[2]`, then `len` bytes on EP81.
+    /// `t56_read_calibration` (t56.c:378-391) — the shared implementation.
     fn read_calibration(&mut self, len: usize) -> Result<Vec<u8>> {
-        let mut msg = [0u8; 64];
-        msg[0] = CMD_READ_CALIBRATION;
-        le16(&mut msg, 2, len.min(usize::from(u16::MAX)) as u16);
-        let data = self.cmd(&msg, len)?;
-        if data.len() < len {
-            return Err(Error::Protocol);
-        }
-        Ok(data)
+        wire::calibration_read(self.tx.as_mut(), len)
+    }
+}
+
+impl FuseOps for T56 {
+    /// `t56_read_fuses` (t56.c:314-345) — the shared implementation.
+    fn read_fuses(
+        &mut self,
+        s: &Session,
+        kind: FuseKind,
+        length: usize,
+        items_count: u8,
+    ) -> Result<Vec<u8>> {
+        let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
+        wire::fuse_read(self.tx.as_mut(), s.device.protocol_id, code, kind, length, items_count)
+    }
+    /// `t56_write_fuses` (t56.c:347-376) — the shared implementation.
+    fn write_fuses(
+        &mut self,
+        s: &Session,
+        kind: FuseKind,
+        items_count: u8,
+        data: &[u8],
+    ) -> Result<()> {
+        let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
+        wire::fuse_write(self.tx.as_mut(), s.device.protocol_id, code, kind, items_count, data)
+    }
+}
+
+impl JedecOps for T56 {
+    /// `t56_read_jedec_row` (t56.c:539-558) — the shared implementation.
+    fn read_row(&mut self, s: &Session, row: u8, flags: u8, size: u16) -> Result<Vec<u8>> {
+        wire::jedec_read(self.tx.as_mut(), s.device.protocol_id, row, flags, size)
+    }
+    /// `t56_write_jedec_row` (t56.c:522-537) — the shared implementation.
+    fn write_row(
+        &mut self,
+        s: &Session,
+        row: u8,
+        flags: u8,
+        size: u16,
+        data: &[u8],
+    ) -> Result<()> {
+        wire::jedec_write(self.tx.as_mut(), s.device.protocol_id, row, flags, size, data)
+    }
+}
+
+impl Protect for T56 {
+    fn protect_on(&mut self, _s: &Session) -> Result<()> {
+        wire::protect(self.tx.as_mut(), true)
+    }
+    fn protect_off(&mut self, _s: &Session) -> Result<()> {
+        wire::protect(self.tx.as_mut(), false)
     }
 }
 
@@ -398,14 +457,35 @@ mod tests {
     #[test]
     fn caps_agree_with_accessors() {
         let (mut t56, _tx) = t56_with(vec![]);
-        assert_eq!(t56.caps().contains(Caps::MEMORY), t56.memory().is_some());
-        assert_eq!(t56.caps().contains(Caps::CALIBRATION), t56.calibration().is_some());
-        assert!(t56.caps().contains(Caps::MEMORY));
-        assert!(t56.caps().contains(Caps::CALIBRATION));
-        // Deferred / absent capabilities.
-        assert!(t56.fuses().is_none());
+        let c = t56.caps();
+        assert_eq!(c.contains(Caps::MEMORY), t56.memory().is_some());
+        assert_eq!(c.contains(Caps::CALIBRATION), t56.calibration().is_some());
+        assert_eq!(c.contains(Caps::FUSES), t56.fuses().is_some());
+        assert_eq!(c.contains(Caps::JEDEC), t56.jedec().is_some());
+        assert_eq!(c.contains(Caps::PROTECT), t56.protect().is_some());
+        assert!(c.contains(Caps::FUSES) && c.contains(Caps::JEDEC) && c.contains(Caps::PROTECT));
+        // Deferred (FPGA bitstream) / absent (wrong hardware) capabilities.
+        assert!(t56.logic().is_none());
+        assert!(t56.autodetect().is_none());
         assert!(t56.emmc().is_none());
         assert!(t56.pins().is_none());
+    }
+
+    #[test]
+    fn fuse_and_protect_share_wire_ops() {
+        // read_fuses: recv 64, data at [8..12].
+        let mut reply = vec![0u8; 64];
+        reply[8..12].copy_from_slice(&[0x11, 0x22, 0x33, 0x44]);
+        let (mut t56, tx) = t56_with(vec![reply]);
+        let mut dev = device(0x11, 0x0100, vec![0x01]);
+        dev.code_size = 0x4000;
+        let s = Session { device: dev, emmc_capacity: 0 };
+        let out = t56.fuses().unwrap().read_fuses(&s, FuseKind::User, 4, 2).unwrap();
+        assert_eq!(out, vec![0x11, 0x22, 0x33, 0x44]);
+        assert_eq!(&tx.sent()[0].1[..3], &[0x06, 0x11, 0x02]); // READ_USER, proto, items
+        // protect on/off over the same command endpoint.
+        t56.protect().unwrap().protect_on(&s).unwrap();
+        assert_eq!(tx.sent()[1].1[0], 0x19);
     }
 
     #[test]
