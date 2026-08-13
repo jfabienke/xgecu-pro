@@ -1,6 +1,7 @@
 //! The XGecu T56 driver — the T76's closest sibling.
 //!
-//! A faithful port of `minipro-t76/src/t56.c` (line numbers cited throughout).
+//! A faithful port of `minipro-t76/src/t56.c` — **Matt Brown's (nmatt0)**
+//! reverse-engineered T56 driver (line numbers cited throughout).
 //! Like the T76 the T56 is FPGA-based: [`Programmer::begin`] uploads a
 //! per-chip Anlogic bitstream before the transaction. It differs from the T76
 //! in three ways that matter to the wire format:

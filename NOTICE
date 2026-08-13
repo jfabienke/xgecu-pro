@@ -1,0 +1,37 @@
+NOTICE — attribution and upstream credits
+==========================================
+
+This repository builds heavily on prior open-source reverse-engineering of the
+XGecu T76 (and the T48/T56/TL866 family). The Rust port in `minipro-rs/` and the
+analysis in `docs/` would not exist without the following work.
+
+Matt Brown (nmatt0) — minipro `t76-improvements` fork
+-----------------------------------------------------
+    https://gitlab.com/nmatt0/minipro/-/tree/t76-improvements  (GPL-3.0)
+
+The reverse-engineered C drivers for the T48/T56/T76 USB protocols, the T76's
+FPGA/bitstream lifecycle, the firmware-update transport, and the `InfoICT76.dll`
+field/variant transforms are Matt Brown's work. The C tree vendored here at
+`minipro-t76/` is that fork, and the Rust drivers in
+`minipro-rs/crates/minipro-proto/` (`t48.rs`, `t56.rs`, `t76.rs`) and the DLL
+parser in `minipro-rs/crates/minipro-db/src/dll.rs` are direct ports of it — the
+`t*.c` line citations throughout the Rust source point at his code.
+
+radiomanV — Xgecu_T76 — FPGA-side tooling
+-----------------------------------------
+    https://github.com/radiomanV/Xgecu_T76  (The Unlicense)
+
+FPGA bitstream / uploader tooling and hardware documentation for the T76's
+Anlogic FPGA + WCH CH569 MCU.
+
+XGecu / Xgpro
+-------------
+`InfoICT76.dll` and the `algoT76/*.alg` FPGA bitstreams are XGecu's proprietary
+data, redistributed by the community mirror at
+https://github.com/Kreeblah/XGecu_Software . They are not part of this project's
+source; the tooling here parses/consumes them but does not claim ownership.
+
+License
+-------
+The `minipro-rs/` port is licensed **GPL-3.0-or-later** (see its `Cargo.toml`),
+the same license family as the upstream minipro fork vendored at `minipro-t76/`.

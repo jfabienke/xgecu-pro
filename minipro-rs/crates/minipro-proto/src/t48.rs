@@ -1,6 +1,7 @@
 //! The XGecu T48 driver — a fixed-silicon (non-FPGA) programmer.
 //!
-//! A faithful port of `minipro-t76/src/t48.c` (line numbers cited throughout).
+//! A faithful port of `minipro-t76/src/t48.c` — **Matt Brown's (nmatt0)**
+//! reverse-engineered T48 driver (line numbers cited throughout).
 //! The T48 is essentially a re-housed / extended TL866II+: there is **no FPGA
 //! and no bitstream** (`get_algorithm` is never called), so [`Programmer::begin`]
 //! just sends the shared BEGIN_TRANS header and checks overcurrent — the chip

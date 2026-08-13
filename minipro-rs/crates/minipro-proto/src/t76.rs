@@ -1,7 +1,8 @@
 //! The XGecu T76 driver — reference implementation of the core traits.
 //!
-//! A faithful port of `minipro-t76/src/t76.c` (line numbers cited throughout)
-//! over `dyn Transport`. The T76 is FPGA-based: [`Programmer::begin`] uploads a
+//! A faithful port of `minipro-t76/src/t76.c` — **Matt Brown's (nmatt0)**
+//! reverse-engineered T76 driver (line numbers cited throughout) — over
+//! `dyn Transport`. The T76 is FPGA-based: [`Programmer::begin`] uploads a
 //! per-operation Anlogic bitstream, inits the socket adapter, and configures
 //! pin-drivers before any chip op.
 //!

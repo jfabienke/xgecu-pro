@@ -1,5 +1,14 @@
 //! Per-programmer protocol drivers. Each implements the core traits over a
 //! `Box<dyn Transport>`; the T76 is the reference driver (see [`t76`]).
+//!
+//! # Attribution
+//!
+//! These drivers are Rust ports of the reverse-engineered C drivers in **Matt
+//! Brown's (nmatt0)** `minipro` `t76-improvements` fork
+//! (<https://gitlab.com/nmatt0/minipro/-/tree/t76-improvements>). His RE of the
+//! T48/T56/T76 USB protocols and the T76 FPGA/bitstream lifecycle is the basis
+//! for all of this — the `t48.c`/`t56.c`/`t76.c` line citations throughout point
+//! at his work. See the repo-root `NOTICE`.
 #![forbid(unsafe_code)]
 
 pub mod t48;
