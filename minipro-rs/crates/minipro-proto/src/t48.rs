@@ -74,6 +74,8 @@ impl T48 {
             model: "T48".into(),
             firmware: FwVersion(0),
             serial: String::new(),
+            mfg_date: String::new(),
+            device_code: String::new(),
             link: LinkSpeed::High,
             voltage: 0.0,
         };
@@ -98,6 +100,8 @@ impl T48 {
             model: "T48".into(),
             firmware: FwVersion((u32::from(major) << 8) | u32::from(minor)),
             serial: ascii_field(&msg[32..56]),
+            mfg_date: ascii_field(&msg[8..24]),      // mfg date @8, 16 B (minipro.c:225)
+            device_code: ascii_field(&msg[24..32]),  // device code @24, 8 B (minipro.c:226)
             link: self.tx.link_speed(),
             voltage,
         };

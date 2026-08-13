@@ -178,6 +178,8 @@ mod tests {
                     model: "FAKE".into(),
                     firmware: FwVersion(0x00_01_11),
                     serial: "0".into(),
+                    mfg_date: String::new(),
+                    device_code: String::new(),
                     link: LinkSpeed::High,
                     voltage: 5.0,
                 },
@@ -411,6 +413,8 @@ mod tests {
             model: "NONE".into(),
             firmware: FwVersion(0),
             serial: String::new(),
+            mfg_date: String::new(),
+            device_code: String::new(),
             link: LinkSpeed::Full,
             voltage: 0.0,
         });

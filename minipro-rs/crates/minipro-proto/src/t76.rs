@@ -341,6 +341,8 @@ impl T76 {
             model: "T76".into(),
             firmware: FwVersion(0),
             serial: String::new(),
+            mfg_date: String::new(),
+            device_code: String::new(),
             link: LinkSpeed::High,
             voltage: 0.0,
         };
@@ -373,6 +375,8 @@ impl T76 {
             // low two bytes carry major/minor (0x0107 -> "00.1.07").
             firmware: FwVersion(((major as u32) << 8) | minor as u32),
             serial: ascii_field(&msg[32..56]),
+            mfg_date: ascii_field(&msg[8..24]),      // minipro.c: mfg date @8, 16 B
+            device_code: ascii_field(&msg[24..32]),  // device code @24, 8 B
             link: self.tx.link_speed(),
             voltage: voltage_mv as f32 / 1000.0,
         };

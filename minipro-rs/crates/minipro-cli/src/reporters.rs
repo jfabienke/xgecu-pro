@@ -123,7 +123,16 @@ impl Reporter for HumanReporter {
                 anstream::println!("  reads   {reads} ({stability})");
                 anstream::println!("  link    {}", link_label(*link));
             }
-            Outcome::Info { model, firmware, firmware_expected, link, vcc } => {
+            Outcome::Info {
+                model,
+                firmware,
+                firmware_expected,
+                serial,
+                mfg_date,
+                device_code,
+                link,
+                vcc,
+            } => {
                 let mut table = comfy_table::Table::new();
                 table.load_style(comfy_table::presets::UTF8_FULL_CONDENSED);
                 table.set_header(vec!["programmer", "value"]);
@@ -134,6 +143,14 @@ impl Reporter for HumanReporter {
                 };
                 table.add_row(vec!["model", model]);
                 table.add_row(vec!["firmware", &fw]);
+                // Identity fields are only shown when the programmer reports them.
+                for (label, value) in
+                    [("serial", serial), ("mfg date", mfg_date), ("device code", device_code)]
+                {
+                    if !value.is_empty() {
+                        table.add_row(vec![label, value]);
+                    }
+                }
                 table.add_row(vec!["link", link_label(*link)]);
                 table.add_row(vec!["vcc", &format!("{vcc:.1} V")]);
                 anstream::println!("{table}");

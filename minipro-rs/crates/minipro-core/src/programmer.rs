@@ -38,6 +38,10 @@ pub struct ProgrammerInfo {
     pub model: String,
     pub firmware: FwVersion,
     pub serial: String,
+    /// Manufacture date string from the system-info report (C `mfg_date`).
+    pub mfg_date: String,
+    /// Device code from the system-info report (C `device_code`).
+    pub device_code: String,
     pub link: LinkSpeed,
     pub voltage: f32,
 }
@@ -109,7 +113,12 @@ impl<'p> Txn<'p> {
 impl Drop for Txn<'_> {
     fn drop(&mut self) {
         if let Some(s) = self.session.take() {
-            let _ = self.prog.end(s); // best-effort; errors surfaced elsewhere
+            // By design: `end()` here is a best-effort de-energize on scope exit,
+            // not the operation's result. Any real failure surfaces on the op
+            // path (read/write/erase return their own `Result`); a `Drop` can't
+            // propagate, and the transaction is ending regardless, so there is
+            // nothing actionable to recover from an `end()` error here.
+            let _ = self.prog.end(s);
         }
     }
 }

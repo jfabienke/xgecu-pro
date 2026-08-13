@@ -49,6 +49,9 @@ pub enum Outcome {
         model: String,
         firmware: String,
         firmware_expected: String,
+        serial: String,
+        mfg_date: String,
+        device_code: String,
         link: LinkSpeed,
         vcc: f32,
     },
@@ -77,13 +80,16 @@ impl serde::Serialize for Outcome {
                 m.serialize_entry("link", link)?;
                 m.end()
             }
-            Outcome::Info { model, firmware, firmware_expected, link, vcc } => {
-                let mut m = ser.serialize_map(Some(7))?;
+            Outcome::Info { model, firmware, firmware_expected, serial, mfg_date, device_code, link, vcc } => {
+                let mut m = ser.serialize_map(Some(10))?;
                 m.serialize_entry("op", "info")?;
                 m.serialize_entry("ok", &true)?;
                 m.serialize_entry("model", model)?;
                 m.serialize_entry("fw", firmware)?;
                 m.serialize_entry("fw_expected", firmware_expected)?;
+                m.serialize_entry("serial", serial)?;
+                m.serialize_entry("mfg_date", mfg_date)?;
+                m.serialize_entry("device_code", device_code)?;
                 m.serialize_entry("link", link)?;
                 m.serialize_entry("vcc", vcc)?;
                 m.end()
@@ -148,6 +154,9 @@ mod tests {
             model: "T76".into(),
             firmware: "00.1.17".into(),
             firmware_expected: "00.1.17".into(),
+            serial: "SN123".into(),
+            mfg_date: "20240101".into(),
+            device_code: "T76".into(),
             link: LinkSpeed::Super,
             vcc: 5.0,
         };
@@ -155,6 +164,9 @@ mod tests {
         assert_eq!(v["op"], "info");
         assert_eq!(v["link"], "ss");
         assert_eq!(v["vcc"], 5.0);
+        assert_eq!(v["serial"], "SN123");
+        assert_eq!(v["mfg_date"], "20240101");
+        assert_eq!(v["device_code"], "T76");
     }
 
     #[test]

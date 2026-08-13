@@ -525,6 +525,9 @@ fn run_info(db_dir: Option<&Path>, rep: &mut dyn Reporter) -> Result<()> {
         model: info.model.clone(),
         firmware,
         firmware_expected,
+        serial: info.serial.clone(),
+        mfg_date: info.mfg_date.clone(),
+        device_code: info.device_code.clone(),
         link: info.link,
         vcc: info.voltage,
     });
@@ -950,6 +953,8 @@ mod tests {
                 model: "FAKE".into(),
                 firmware: FwVersion(0x00_01_11),
                 serial: "0".into(),
+                mfg_date: String::new(),
+                device_code: String::new(),
                 link: LinkSpeed::High,
                 voltage: 5.0,
             },
