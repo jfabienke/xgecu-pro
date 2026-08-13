@@ -95,5 +95,9 @@ against the hardware-verified T76 goldens.
 3. **TL866A/CS driver** — the outlier: 24-bit addressing, alternate opcode space,
    latch-based ZIF model, no digital voltage control.
 4. **T48 pin-driver / bit-bang subsystem** + firmware update (per-device).
-5. A magic + schema-version header on the persisted `catalog.postcard` so cache
-   invalidation is robust across `Device` struct changes.
+5. **Remaining DB fidelity**: GAL/PLD `config` (fuse-map geometry), the
+   `CompiledDb` bake step, and the host-side `pin_map` package tables. (The
+   `chip_type`/`blank_value` fields, the `logicic.xml` vector parser, and the
+   `catalog.postcard` schema-version header are done.)
+6. A **CLI `logic` command** to exercise the logic test now that the DB supplies
+   vectors.
