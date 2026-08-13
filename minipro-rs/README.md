@@ -94,7 +94,7 @@ against the hardware-verified T76 goldens.
    fixed-silicon).
 3. **TL866A/CS driver** — the outlier: 24-bit addressing, alternate opcode space,
    latch-based ZIF model, no digital voltage control.
-4. **T48 pin-driver / bit-bang subsystem** + firmware update (per-device).
+4. **Firmware update** (per-device, obfuscation-table transcription).
 5. **Remaining DB fidelity**: GAL/PLD `config` (fuse-map geometry) and the
    host-side `pin_map` package tables. (The `chip_type`/`blank_value` fields,
    the `logicic.xml` vector parser, and the `catalog.postcard` schema-version
@@ -102,3 +102,19 @@ against the hardware-verified T76 goldens.
    direct-to-source via `DllDb`/`HttpDb` is better.)
 6. A **CLI `logic` command** to exercise the logic test now that the DB supplies
    vectors.
+
+## Non-goals
+
+- **The host-side bit-bang / pin-driver subsystem** (`prom.c` + `bitbang.c` +
+  the fixed-silicon drivers' `set_zif_*`/`set_pin_drivers`/`set_voltages`
+  primitives). Its only real payoff is reading vintage parallel PROMs (the
+  `CP_PROM` path, read-only), and the FPGA programmers (T56/T76) already cover
+  those natively by uploading a ROM-class algorithm (`ROM24P`/`ROM28P`/…) and
+  clocking the parallel bus through the FPGA. On fixed-silicon (TL866/T48) the
+  bit-bang path just re-does that in software, pin-by-pin over USB — ~1200
+  lines of hardware-unverifiable pin-level code for a fixed-silicon-only niche.
+  A parallel PROM on a T56/T76 is simply another ROM-class algorithm upload +
+  `read_block` through the existing path.
+- **A compiled/baked-in chip database.** Direct-to-source (`DllDb` parses the
+  vendor DLL; `HttpDb` provisions + caches it from a mirror) keeps the catalog
+  live and is strictly better than a frozen, rebuild-to-update blob.

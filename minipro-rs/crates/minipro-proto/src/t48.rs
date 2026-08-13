@@ -18,10 +18,18 @@
 //!    byte is required for `msg[28]` to take effect (`t48.c:285-290`). Like the
 //!    T56 it does not send `msg[63]` (there is no FPGA algorithm number).
 //!
-//! Scope of this increment: identity, begin/end, and the MemoryOps core. The
-//! T48's large host-side bit-bang / pin-driver subsystem (`PinDriver`), the
-//! logic test, fuses, JEDEC rows, TSOP48 unlock, and firmware update are
-//! deferred.
+//! Implemented: identity, begin/end, the MemoryOps core, fuses, JEDEC rows,
+//! protect, SPI autodetect, and the logic test. Firmware update is deferred.
+//!
+//! The large host-side bit-bang / pin-driver subsystem (`set_zif_*`,
+//! `set_pin_drivers`, `set_voltages`, `hardware_check` — for `custom_protocol`
+//! chips and the manufacturing self-test) is **intentionally not ported**. Its
+//! only real payoff is reading vintage parallel PROMs (the fork's `CP_PROM`
+//! path, read-only), which the FPGA programmers (T56/T76) already cover
+//! natively by uploading a ROM-class algorithm (`ROM24P`/`ROM28P`/…) — so on
+//! fixed-silicon it just re-does in software, over USB pin-by-pin, what the
+//! FPGA does with a bitstream. Not worth ~1200 lines of hardware-unverifiable
+//! pin-level code for a fixed-silicon-only niche.
 
 use minipro_core::caps::{FuseOps, JedecOps, LogicTest, MemoryOps, Protect, SpiAutodetect};
 use minipro_core::device::{BlockReq, ChipId, Device, EraseKind, FuseKind, MemoryKind, Region};
