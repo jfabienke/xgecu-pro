@@ -18,18 +18,23 @@ Re-check with: `ioreg -p IOUSB -l -w 0 | grep -A4 'XGecu'` — see [hardware/usb
 ## Repo layout
 
 ```
-software/      Official Xgpro T76 application (Windows installer, RAR-packed)
-docs/          User guide / manuals; open-source status; protocol + firmware notes
-docs/hardware/ FPGA + MCU datasheets, pinouts, schematic (Anlogic EG4X20 + WCH CH569W)
-chip-support/  Official device support list (searchable text)
+minipro-rs/    The Rust redesign and reimplementation (MIT) — see its README
+docs/          Open-source status; protocol + firmware notes; design docs
+docs/hardware/ FPGA + MCU pinouts and schematic (Anlogic EG4X20 + WCH CH569W)
 hardware/      Notes about this unit and its USB identity
 ```
 
-## Software
+Proprietary vendor material (the Xgpro installer, XGecu's device-support list,
+Anlogic/WCH datasheets) is **not redistributed here** — see the download
+sources below and `docs/hardware/README.md`.
 
-- `software/xgpro_T76_V1321.rar` → contains `Xgpro_T76_V1321.exe` (**V13.21**, matching the support list dated 2026-07-11, 42,621 devices).
+## Vendor software (not included)
+
+- `xgpro_T76_V*.rar` → contains `Xgpro_T76_V*.exe` (V13.21 pairs with the
+  support list dated 2026-07-11, 42,621 devices). Download from the
+  [community mirror](https://github.com/Kreeblah/XGecu_Software).
 - The T76 uses its **own installer** (`Xgpro_T76_*`) — it is *not* covered by the regular Xgpro installer for TL866II+/T48/T56.
-- Extract with `unar software/xgpro_T76_V1321.rar`.
+- Extract with `unar xgpro_T76_V*.rar`.
 
 ### macOS note
 
@@ -56,12 +61,11 @@ curl -s "https://api.github.com/repos/Kreeblah/XGecu_Software/git/trees/master?r
 The **original work in this repository is licensed [MIT](LICENSE)** — the
 `minipro-rs/` Rust redesign and reimplementation, and the analysis/notes under `docs/`.
 
-MIT does **not** cover the third-party material redistributed here for reference
-and interoperability, which remains the property of its respective owners:
-
-- `software/` — XGecu's proprietary Xgpro application and `InfoICT76.dll`.
-- `docs/hardware/` vendor datasheets / PDFs, and `chip-support/` device lists.
-- Any firmware images or vendor `.alg` bitstreams.
+Proprietary third-party material — XGecu's Xgpro application and
+`InfoICT76.dll`, vendor datasheets, device-support lists, firmware images, and
+vendor `.alg` bitstreams — is **not redistributed in this repository** and is
+not covered by the MIT grant; the tooling here consumes some of it at runtime
+from vendor/mirror sources.
 
 The protocol facts the Rust reimplementation depends on were reverse-engineered by the
 minipro community (nmatt0 / Matt Brown); see [`NOTICE`](NOTICE) for full

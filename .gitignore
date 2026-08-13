@@ -2,3 +2,15 @@
 
 # Local minipro build (fork clone + generated algorithm.xml + downloaded RARs/firmware)
 minipro-t76/
+
+# Non-redistributable reference material — local only, never committed
+# (XGecu installer + support list, vendor datasheets, third-party ROM dumps).
+software/
+chip-support/T76_List.txt
+docs/Xgpro_T48_T76_User_Guide.pdf
+docs/hardware/TD_User_Guide_V4.2_english.pdf
+docs/hardware/DS300_Eagle_Datasheet_en.pdf
+docs/hardware/CH569DS1.PDF
+submission/theretroweb/*.bin
+submission/theretroweb/*.zip
+submission/theretroweb/CHECKSUMS.txt
