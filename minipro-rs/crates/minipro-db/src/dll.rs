@@ -195,9 +195,12 @@ impl ChipDb for DllDb {
     }
     fn load_algorithm(&self, dev: &Device) -> Result<Option<Algorithm>> {
         match algorithm_name(dev) {
-            Some(name) => resolve_bitstream(self.algo_dir.as_deref(), self.algo_path.as_deref(), &name),
+            Some(name) => self.load_algorithm_named(&name),
             None => Ok(None),
         }
+    }
+    fn load_algorithm_named(&self, name: &str) -> Result<Option<Algorithm>> {
+        resolve_bitstream(self.algo_dir.as_deref(), self.algo_path.as_deref(), name)
     }
 }
 

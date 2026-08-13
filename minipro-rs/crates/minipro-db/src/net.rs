@@ -112,14 +112,21 @@ impl ChipDb for HttpDb {
         self.inner.all()
     }
     fn load_algorithm(&self, dev: &Device) -> Result<Option<Algorithm>> {
-        let Some(name) = algorithm_name(dev) else {
-            return Ok(None);
-        };
+        match algorithm_name(dev) {
+            Some(name) => self.load_algorithm_named(&name),
+            None => Ok(None),
+        }
+    }
+
+    fn load_algorithm_named(&self, name: &str) -> Result<Option<Algorithm>> {
+        let name = name.to_string();
         let local = self.cache_dir.join("algoT76").join(format!("{name}.alg"));
         if local.is_file() {
             let bytes = std::fs::read(&local)?;
             return Ok(Some(Algorithm { name, bitstream: decode_alg(&bytes)? }));
         }
+        // Utility bitstreams (TestLgcPull, TTL1, …) live in the same algoT76/
+        // as chip bitstreams — fetched by name, cached the same way.
         for remote in [format!("{name}.alg"), format!("T7_{name}.alg")] {
             if let Ok(bytes) = http_get(&format!("{}/algoT76/{remote}", self.base_url)) {
                 let tmp = local.with_extension("alg.part");

@@ -23,7 +23,9 @@
 //! update are deferred (they need cap-trait plumbing the core doesn't carry
 //! yet); each is a short, self-contained follow-up.
 
-use minipro_core::caps::{Calibration, FuseOps, JedecOps, MemoryOps, Protect};
+use minipro_core::caps::{
+    Calibration, FuseOps, JedecOps, LoadBitstream, LogicTest, MemoryOps, Protect, SpiAutodetect,
+};
 use minipro_core::device::{BlockReq, ChipId, Device, EraseKind, FuseKind, MemoryKind, Region};
 use minipro_core::error::{Error, FwVersion, Result};
 use minipro_core::programmer::{Caps, Programmer, ProgrammerInfo, Session};
@@ -48,7 +50,10 @@ const CMD_READ_USER_DATA: u8 = 0x0b; // t56.c:42
 const CMD_READ_DATA: u8 = 0x10; // t56.c:47
 const CMD_WRITE_DATA: u8 = 0x11; // t56.c:48
 const CMD_WRITE_BITSTREAM: u8 = 0x26; // t56.c:56 — single-shot bitstream upload
-// Fuse/JEDEC/protect/calibration opcodes live in `crate::wire` (shared).
+const CMD_WRITE_BITSTREAM2: u8 = 0x2a; // t56.c:58 — multipart (logic TTL1/TTL2)
+const CMD_AUTODETECT: u8 = 0x37; // t56.c:59
+// Fuse/JEDEC/protect/calibration opcodes + the logic-vector loop live in
+// `crate::wire` (shared).
 
 /// The T56 command channel + cached identity.
 pub struct T56 {
@@ -120,18 +125,38 @@ impl T56 {
             .as_ref()
             .filter(|a| !a.bitstream.is_empty())
             .ok_or(Error::Unsupported("device has no FPGA bitstream loaded"))?;
-        if self.uploaded_algo.as_deref() == Some(algorithm.name.as_str()) {
-            return Ok(()); // same session, same algorithm (t56.c:92-93)
-        }
-        let bits = &algorithm.bitstream;
+        self.upload_named(&algorithm.name.clone(), &algorithm.bitstream.clone())
+    }
 
+    /// Single-shot `0x26` upload of a named bitstream (chip or utility), skipping
+    /// the re-upload if the same algorithm is already loaded this session.
+    fn upload_named(&mut self, name: &str, bits: &[u8]) -> Result<()> {
+        if self.uploaded_algo.as_deref() == Some(name) {
+            return Ok(());
+        }
         let mut hdr = [0u8; 8];
         hdr[0] = CMD_WRITE_BITSTREAM;
         le32(&mut hdr, 4, bits.len().min(u32::MAX as usize) as u32); // t56.c:149
         self.send(&hdr)?; // t56.c:151
         self.tx.send(EP_MSG_OUT, bits)?; // t56.c:155 — raw bitstream, one shot
+        self.uploaded_algo = Some(name.to_string());
+        Ok(())
+    }
 
-        self.uploaded_algo = Some(algorithm.name.clone());
+    /// Upload the two logic-test bitstreams via the multipart `0x2A` protocol
+    /// (`t56_send_bitstream` MP_LOGIC path, t56.c:113-134): each is prefixed by
+    /// an 8-byte header (`[0]=0x2A`, `[1]`=1 for the first / 0 for the second,
+    /// length at `[4]`) and sent in one transfer.
+    fn upload_logic_ttl(&mut self, ttl1: &[u8], ttl2: &[u8]) -> Result<()> {
+        for (i, bits) in [ttl1, ttl2].into_iter().enumerate() {
+            let mut buf = vec![0u8; 8 + bits.len()];
+            buf[0] = CMD_WRITE_BITSTREAM2;
+            buf[1] = if i == 0 { 1 } else { 0 }; // t56.c:124: `i ? 0 : 1`
+            le32(&mut buf, 4, bits.len().min(u32::MAX as usize) as u32);
+            buf[8..].copy_from_slice(bits);
+            self.send(&buf)?;
+        }
+        self.uploaded_algo = None; // FPGA now holds TTL; force re-upload next begin
         Ok(())
     }
 
@@ -155,14 +180,13 @@ impl Programmer for T56 {
     }
 
     fn caps(&self) -> Caps {
-        // Logic test and SPI autodetect are deferred: on the FPGA T56 they need
-        // a utility-algorithm bitstream upload (TTL1/TTL2, SPI25F*) not yet
-        // plumbed (see the module docs).
         Caps::MEMORY
             .with(Caps::CALIBRATION)
             .with(Caps::FUSES)
             .with(Caps::JEDEC)
             .with(Caps::PROTECT)
+            .with(Caps::LOGIC)
+            .with(Caps::AUTODETECT)
     }
 
     /// `t56_begin_transaction` (t56.c:166-240): upload the bitstream, send the
@@ -233,6 +257,46 @@ impl Programmer for T56 {
     }
     fn protect(&mut self) -> Option<&mut dyn Protect> {
         Some(self)
+    }
+    fn logic(&mut self) -> Option<&mut dyn LogicTest> {
+        Some(self)
+    }
+    fn autodetect(&mut self) -> Option<&mut dyn SpiAutodetect> {
+        Some(self)
+    }
+}
+
+impl LogicTest for T56 {
+    /// `t56_logic_ic_test` (t56.c:636-…): upload the two TTL bitstreams, then the
+    /// shared two-pass vector loop + L/H/Z comparison. The caller's `load`
+    /// fetches `TTL1`/`TTL2` from the same `algoT76/` source as chip bitstreams.
+    fn run(&mut self, s: &Session, load: LoadBitstream<'_>) -> Result<bool> {
+        let ttl1 = load("TTL1")?;
+        let ttl2 = load("TTL2")?;
+        self.upload_logic_ttl(&ttl1, &ttl2)?;
+        let (pc, vc, vcc) = (s.device.package.pin_count, s.device.vector_count, s.device.logic_vcc);
+        let first = wire::logic_pass(self.tx.as_mut(), pc, vc, vcc, &s.device.vectors, 0)?;
+        let second = wire::logic_pass(self.tx.as_mut(), pc, vc, vcc, &s.device.vectors, 1)?;
+        Ok(wire::logic_compare(&s.device.vectors, &first, &second))
+    }
+}
+
+impl SpiAutodetect for T56 {
+    /// `t56_spi_autodetect` (t56.c:423-460): upload the SPI25F autodetect
+    /// bitstream, then `0x37` (`[8]`=package flag), send 10, recv 16, id = 3
+    /// bytes big-endian from `[2]`.
+    fn spi_autodetect(&mut self, wide: bool, load: LoadBitstream<'_>) -> Result<u32> {
+        let name = if wide { "SPI25F21" } else { "SPI25F11" };
+        let bits = load(name)?;
+        self.upload_named(name, &bits)?;
+        let mut msg = [0u8; 10];
+        msg[0] = CMD_AUTODETECT;
+        msg[8] = u8::from(wide);
+        let resp = self.cmd(&msg, 16)?;
+        if resp.len() < 5 {
+            return Err(Error::Protocol);
+        }
+        Ok((u32::from(resp[2]) << 16) | (u32::from(resp[3]) << 8) | u32::from(resp[4]))
     }
 }
 
@@ -463,12 +527,58 @@ mod tests {
         assert_eq!(c.contains(Caps::FUSES), t56.fuses().is_some());
         assert_eq!(c.contains(Caps::JEDEC), t56.jedec().is_some());
         assert_eq!(c.contains(Caps::PROTECT), t56.protect().is_some());
-        assert!(c.contains(Caps::FUSES) && c.contains(Caps::JEDEC) && c.contains(Caps::PROTECT));
-        // Deferred (FPGA bitstream) / absent (wrong hardware) capabilities.
-        assert!(t56.logic().is_none());
-        assert!(t56.autodetect().is_none());
+        assert_eq!(c.contains(Caps::LOGIC), t56.logic().is_some());
+        assert_eq!(c.contains(Caps::AUTODETECT), t56.autodetect().is_some());
+        assert!(c.contains(Caps::LOGIC) && c.contains(Caps::AUTODETECT));
+        // Absent (wrong hardware) capabilities.
         assert!(t56.emmc().is_none());
         assert!(t56.pins().is_none());
+    }
+
+    #[test]
+    fn logic_test_uploads_ttl_then_runs_vectors() {
+        // 2 pins, 1 vector: pin0 = H (state 3), pin1 = L (state 2).
+        let mut dev = device(0x00, 0x0000, vec![]);
+        dev.package.pin_count = 2;
+        dev.vector_count = 1;
+        dev.logic_vcc = 5;
+        dev.vectors = vec![3, 2];
+        // Both passes report pin0=1, pin1=0 -> packed resp[8] = 0x01 -> pass.
+        let good = || {
+            let mut r = vec![0u8; 32];
+            r[8] = 0x01;
+            r
+        };
+        let (mut t56, tx) = t56_with(vec![good(), good()]);
+        let s = Session { device: dev, emmc_capacity: 0 };
+        // Loader returns distinct TTL payloads.
+        let mut load = |name: &str| Ok(name.as_bytes().to_vec());
+        assert!(t56.logic().unwrap().run(&s, &mut load).unwrap());
+        let sent = tx.sent();
+        // First two sends are the 0x2A TTL uploads ([1]=1 then [1]=0).
+        assert_eq!(&sent[0].1[..2], &[0x2a, 0x01]);
+        assert_eq!(&sent[0].1[8..], b"TTL1");
+        assert_eq!(&sent[1].1[..2], &[0x2a, 0x00]);
+        assert_eq!(&sent[1].1[8..], b"TTL2");
+        // Then two 0x28 vector commands.
+        assert_eq!(sent[2].1[0], 0x28);
+    }
+
+    #[test]
+    fn spi_autodetect_uploads_bitstream_then_probes() {
+        let mut reply = vec![0u8; 16];
+        reply[2..5].copy_from_slice(&[0xef, 0x40, 0x18]);
+        let (mut t56, tx) = t56_with(vec![reply]);
+        let mut load = |name: &str| Ok(name.as_bytes().to_vec());
+        let id = t56.autodetect().unwrap().spi_autodetect(true, &mut load).unwrap();
+        assert_eq!(id, 0x00ef_4018);
+        let sent = tx.sent();
+        // 0x26 header + SPI25F21 bitstream, then the 10-byte 0x37 probe.
+        assert_eq!(sent[0].1[0], 0x26);
+        assert_eq!(&sent[1].1, b"SPI25F21");
+        assert_eq!(sent[2].1.len(), 10);
+        assert_eq!(sent[2].1[0], 0x37);
+        assert_eq!(sent[2].1[8], 1); // wide
     }
 
     #[test]

@@ -31,7 +31,9 @@
 //! FPGA does with a bitstream. Not worth ~1200 lines of hardware-unverifiable
 //! pin-level code for a fixed-silicon-only niche.
 
-use minipro_core::caps::{FuseOps, JedecOps, LogicTest, MemoryOps, Protect, SpiAutodetect};
+use minipro_core::caps::{
+    FuseOps, JedecOps, LoadBitstream, LogicTest, MemoryOps, Protect, SpiAutodetect,
+};
 use minipro_core::device::{BlockReq, ChipId, Device, EraseKind, FuseKind, MemoryKind, Region};
 use minipro_core::error::{Error, FwVersion, Result};
 use minipro_core::programmer::{Caps, Programmer, ProgrammerInfo, Session};
@@ -56,15 +58,9 @@ const CMD_WRITE_USER_DATA: u8 = 0x0a; // t48.c:42
 const CMD_READ_USER_DATA: u8 = 0x0b; // t48.c:43
 const CMD_READ_DATA: u8 = 0x10; // t48.c:48
 const CMD_WRITE_DATA: u8 = 0x11; // t48.c:49
-const CMD_LOGIC_IC_TEST_VECTOR: u8 = 0x28; // t48.c:57
 const CMD_AUTODETECT: u8 = 0x37; // t48.c:58
-// Fuse/JEDEC/protect/calibration opcodes live in `crate::wire` (shared).
-
-// Logic-vector state codes (database.h; pst string "01LHCZXGV"). Only L/H/Z are
-// checked against the two test passes.
-const LOGIC_L: u8 = 2;
-const LOGIC_H: u8 = 3;
-const LOGIC_Z: u8 = 5;
+// Fuse/JEDEC/protect/calibration opcodes + the logic-test vector loop live in
+// `crate::wire` (shared).
 
 /// The T48 command channel + cached identity.
 pub struct T48 {
@@ -279,8 +275,9 @@ impl Protect for T48 {
 
 impl SpiAutodetect for T48 {
     /// `t48_spi_autodetect` (t48.c:476-492): `[0]`=0x37, `[8]`=package flag;
-    /// send 10, recv 32, id = 3 bytes big-endian from `[2]`.
-    fn spi_autodetect(&mut self, wide: bool) -> Result<u32> {
+    /// send 10, recv 32, id = 3 bytes big-endian from `[2]`. Fixed-silicon: no
+    /// bitstream, so the loader is unused.
+    fn spi_autodetect(&mut self, wide: bool, _load: LoadBitstream<'_>) -> Result<u32> {
         let mut msg = [0u8; 10];
         msg[0] = CMD_AUTODETECT;
         msg[8] = u8::from(wide);
@@ -292,70 +289,15 @@ impl SpiAutodetect for T48 {
     }
 }
 
-impl T48 {
-    /// One logic-test pass (`do_ic_test`, t48.c:587-642). `pull` = 0 pull-up,
-    /// 1 pull-down. Returns `pin_count * vector_count` unpacked pin states.
-    fn do_ic_test(&mut self, s: &Session, pull: u8) -> Result<Vec<u8>> {
-        let pin_count = usize::from(s.device.package.pin_count);
-        let vector_count = usize::from(s.device.vector_count);
-        if pin_count == 0 || vector_count == 0 || s.device.vectors.len() < pin_count * vector_count
-        {
-            return Err(Error::Unsupported("device has no logic-test vectors"));
-        }
-        let mut result = Vec::with_capacity(pin_count * vector_count);
-        for n in 0..vector_count {
-            let mut msg = [0xffu8; 32];
-            msg[0] = CMD_LOGIC_IC_TEST_VECTOR;
-            msg[1] = s.device.logic_vcc | (pull << 7);
-            le16(&mut msg, 2, pin_count.min(usize::from(u16::MAX)) as u16);
-            le32(&mut msg, 4, n.min(u32::MAX as usize) as u32);
-            // Pack the vector row two pins per byte (t48.c:610-618).
-            let row = &s.device.vectors[n * pin_count..(n + 1) * pin_count];
-            for (i, &v) in row.iter().enumerate() {
-                if i & 1 == 1 {
-                    msg[8 + i / 2] |= v << 4;
-                } else {
-                    msg[8 + i / 2] = v;
-                }
-            }
-            let resp = self.cmd(&msg, 32)?;
-            if resp.len() < 8 + pin_count.div_ceil(2) {
-                return Err(Error::Protocol);
-            }
-            if resp[1] != 0 {
-                return Err(Error::Overcurrent);
-            }
-            // Unpack two-pins-per-byte back to one pin per byte (t48.c:636-638).
-            for i in 0..pin_count {
-                result.push((resp[8 + i / 2] >> (4 * (i as u8 & 1))) & 0x0f);
-            }
-        }
-        Ok(result)
-    }
-}
-
 impl LogicTest for T48 {
-    /// `t48_logic_ic_test` (t48.c:662-736): two passes (pull-up then
-    /// pull-down), then compare each L/H/Z vector element against both. Returns
-    /// `true` when every element matches. (The SRAM path and the on-screen
-    /// dump are the CLI's concern, not the driver's.)
-    fn run(&mut self, s: &Session) -> Result<bool> {
-        let first = self.do_ic_test(s, 0)?;
-        let second = self.do_ic_test(s, 1)?;
-        let vectors = &s.device.vectors;
-        for (n, &state) in vectors.iter().enumerate() {
-            let (a, b) = (first[n] != 0, second[n] != 0);
-            let ok = match state {
-                LOGIC_L => !a && !b,      // 0 in both passes
-                LOGIC_H => a && b,        // 1 in both passes
-                LOGIC_Z => a && !b,       // 1 up, 0 down
-                _ => true,                // inputs / don't-care / power pins
-            };
-            if !ok {
-                return Ok(false);
-            }
-        }
-        Ok(true)
+    /// `t48_logic_ic_test` (t48.c:662-736): two passes (pull-up then pull-down)
+    /// via the shared vector loop, then the L/H/Z comparison. Fixed-silicon: no
+    /// FPGA bitstream, so the loader is unused.
+    fn run(&mut self, s: &Session, _load: LoadBitstream<'_>) -> Result<bool> {
+        let (pc, vc, vcc) = (s.device.package.pin_count, s.device.vector_count, s.device.logic_vcc);
+        let first = wire::logic_pass(self.tx.as_mut(), pc, vc, vcc, &s.device.vectors, 0)?;
+        let second = wire::logic_pass(self.tx.as_mut(), pc, vc, vcc, &s.device.vectors, 1)?;
+        Ok(wire::logic_compare(&s.device.vectors, &first, &second))
     }
 }
 
@@ -597,7 +539,7 @@ mod tests {
         let mut reply = vec![0u8; 32];
         reply[2..5].copy_from_slice(&[0xef, 0x40, 0x18]); // big-endian id
         let (mut t48, tx) = t48_with(vec![reply]);
-        let id = t48.autodetect().unwrap().spi_autodetect(true).unwrap();
+        let id = t48.autodetect().unwrap().spi_autodetect(true, &mut |_| Ok(vec![])).unwrap();
         assert_eq!(id, 0x00ef_4018);
         let msg = &tx.sent()[0].1;
         assert_eq!(msg.len(), 10);
@@ -612,7 +554,7 @@ mod tests {
         dev.package.pin_count = 2;
         dev.vector_count = 1;
         dev.logic_vcc = 5;
-        dev.vectors = vec![LOGIC_H, LOGIC_L];
+        dev.vectors = vec![3, 2]; // pin0 = H (state 3), pin1 = L (state 2)
 
         // Passing: pass1 and pass2 both report pin0=1, pin1=0. Packed 2/byte:
         // pins {1,0} -> low nibble 1, high nibble 0 -> resp[8] = 0x01.
@@ -623,13 +565,13 @@ mod tests {
         };
         let (mut t48, _tx) = t48_with(vec![good(), good()]);
         let s = Session { device: dev.clone(), emmc_capacity: 0 };
-        assert!(t48.logic().unwrap().run(&s).unwrap());
+        assert!(t48.logic().unwrap().run(&s, &mut |_| Ok(vec![])).unwrap());
 
         // Failing: pin0 reads 0 (should be H). resp[8] = 0x00.
         let bad = || vec![0u8; 32];
         let (mut t48, _tx) = t48_with(vec![bad(), bad()]);
         let s = Session { device: dev, emmc_capacity: 0 };
-        assert!(!t48.logic().unwrap().run(&s).unwrap());
+        assert!(!t48.logic().unwrap().run(&s, &mut |_| Ok(vec![])).unwrap());
     }
 
     /// begin() sends only the 64-byte header (no bitstream) then the 0x39

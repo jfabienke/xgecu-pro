@@ -317,3 +317,77 @@ pub(crate) fn calibration_read(tx: &mut dyn Transport, len: usize) -> Result<Vec
     }
     Ok(data)
 }
+
+// ---------------------------------------------------------------------------
+// Logic-IC test — the vector protocol is byte-identical across T48/T56/T76
+// (t48.c:587-642 / t56.c:561-616 / t76.c:1626-…). Only the FPGA bitstream
+// upload around it differs per driver, so that stays in each driver; the
+// per-pass vector loop and the comparison live here.
+// ---------------------------------------------------------------------------
+const CMD_LOGIC_IC_TEST_VECTOR: u8 = 0x28;
+
+// Vector state codes (database.h; pst string "01LHCZXGV"). Only L/H/Z are
+// checked against the two passes.
+const LOGIC_L: u8 = 2;
+const LOGIC_H: u8 = 3;
+const LOGIC_Z: u8 = 5;
+
+/// One logic-test pass (`do_ic_test`): `pull` = 0 pull-up, 1 pull-down. Sends a
+/// 32-byte `0x28` command per vector (VCC + pull in `[1]`, pin count at `[2]`,
+/// vector index at `[4]`, the row packed two pins per byte from `[8]`), reads
+/// the pin status back, and returns `pin_count * vector_count` unpacked states.
+pub(crate) fn logic_pass(
+    tx: &mut dyn Transport,
+    pin_count: u8,
+    vector_count: u16,
+    vcc: u8,
+    vectors: &[u8],
+    pull: u8,
+) -> Result<Vec<u8>> {
+    let pins = usize::from(pin_count);
+    let vecs = usize::from(vector_count);
+    if pins == 0 || vecs == 0 || vectors.len() < pins * vecs {
+        return Err(Error::Unsupported("device has no logic-test vectors"));
+    }
+    let mut result = Vec::with_capacity(pins * vecs);
+    for n in 0..vecs {
+        let mut msg = [0xffu8; 32];
+        msg[0] = CMD_LOGIC_IC_TEST_VECTOR;
+        msg[1] = vcc | (pull << 7);
+        le16(&mut msg, 2, pin_count as u16);
+        le32(&mut msg, 4, n.min(u32::MAX as usize) as u32);
+        for (i, &v) in vectors[n * pins..(n + 1) * pins].iter().enumerate() {
+            if i & 1 == 1 {
+                msg[8 + i / 2] |= v << 4;
+            } else {
+                msg[8 + i / 2] = v;
+            }
+        }
+        let resp = cmd(tx, &msg, 32)?;
+        if resp.len() < 8 + pins.div_ceil(2) {
+            return Err(Error::Protocol);
+        }
+        if resp[1] != 0 {
+            return Err(Error::Overcurrent);
+        }
+        for i in 0..pins {
+            result.push((resp[8 + i / 2] >> (4 * (i as u8 & 1))) & 0x0f);
+        }
+    }
+    Ok(result)
+}
+
+/// Compare the two passes against the vector table: an `L` pin must read 0 in
+/// both, `H` must read 1 in both, `Z` must read 1 up / 0 down. Inputs / don't-
+/// care / power pins are ignored. `true` iff every element matches.
+pub(crate) fn logic_compare(vectors: &[u8], first: &[u8], second: &[u8]) -> bool {
+    vectors.iter().enumerate().all(|(n, &state)| {
+        let (a, b) = (first[n] != 0, second[n] != 0);
+        match state {
+            LOGIC_L => !a && !b,
+            LOGIC_H => a && b,
+            LOGIC_Z => a && !b,
+            _ => true,
+        }
+    })
+}

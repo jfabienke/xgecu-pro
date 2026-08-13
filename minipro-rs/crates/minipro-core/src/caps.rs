@@ -68,9 +68,10 @@ pub trait Protect {
 }
 
 /// SPI 25-series autodetect: probe the socket and return the raw JEDEC id.
-/// `wide` selects the 16-pin (vs 8-pin) package profile.
+/// `wide` selects the 16-pin (vs 8-pin) package profile. FPGA drivers upload the
+/// `SPI25F*` bitstream first, so `spi_autodetect` is handed a [`LoadBitstream`].
 pub trait SpiAutodetect {
-    fn spi_autodetect(&mut self, wide: bool) -> Result<u32>;
+    fn spi_autodetect(&mut self, wide: bool, load: LoadBitstream<'_>) -> Result<u32>;
 }
 
 /// eMMC-specific operations (T76).
@@ -86,9 +87,18 @@ pub trait PinTest {
     fn contact_check(&mut self, s: &Session) -> Result<Vec<u8>>; // returns open pins
 }
 
-/// Logic-IC (74xx/40xx) functional test.
+/// Fetches a named FPGA bitstream (decoded bytes) on demand. The CLI backs this
+/// with the chip DB ([`crate`]-external `ChipDb::load_algorithm_named`). The FPGA
+/// logic-test and autodetect ops call it for their *utility* algorithms
+/// (`TestLgcPull`, `TTL1`, `SPI25F11`, …), which are chosen at op time rather
+/// than tied to a chip — the way the C's `do_ic_test` calls `get_algorithm` per
+/// pass. Fixed-silicon drivers (T48) ignore it.
+pub type LoadBitstream<'a> = &'a mut dyn FnMut(&str) -> Result<Vec<u8>>;
+
+/// Logic-IC (74xx/40xx) functional test. On the FPGA programmers each pass needs
+/// a utility bitstream uploaded first, so `run` is handed a [`LoadBitstream`].
 pub trait LogicTest {
-    fn run(&mut self, s: &Session) -> Result<bool>;
+    fn run(&mut self, s: &Session, load: LoadBitstream<'_>) -> Result<bool>;
 }
 
 /// Flashing a vendor firmware update (transport only; payload stays opaque).

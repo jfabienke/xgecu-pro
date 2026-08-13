@@ -126,6 +126,15 @@ pub trait ChipDb {
     fn load_algorithm(&self, _dev: &Device) -> Result<Option<Algorithm>> {
         Ok(None)
     }
+
+    /// Load an FPGA bitstream by algorithm *name* (e.g. `"TestLgcPull"`,
+    /// `"SPI25F11"`) rather than by device. Utility algorithms — the logic-test
+    /// and SPI-autodetect bitstreams — are chosen at op time and aren't tied to
+    /// any chip's `protocol_id`, so the FPGA drivers fetch them by name from the
+    /// same `algoT76/` source as chip bitstreams. Default `None`.
+    fn load_algorithm_named(&self, _name: &str) -> Result<Option<Algorithm>> {
+        Ok(None)
+    }
 }
 
 /// XML-backed database (the editable source of truth).
@@ -268,6 +277,9 @@ impl ChipDb for XmlDb {
             Some(name) => self.algorithm(&name),
             None => Ok(None),
         }
+    }
+    fn load_algorithm_named(&self, name: &str) -> Result<Option<Algorithm>> {
+        self.algorithm(name)
     }
 }
 

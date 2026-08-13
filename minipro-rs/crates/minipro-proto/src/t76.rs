@@ -16,8 +16,8 @@
 //! - bulk write payloads OUT on EP 0x05 (`write_payload`)
 
 use minipro_core::caps::{
-    Calibration, EmmcOps, FirmwareUpdate, FuseOps, JedecOps, MemoryOps, PinTest, Protect,
-    DEFAULT_BLOCK,
+    Calibration, EmmcOps, FirmwareUpdate, FuseOps, JedecOps, LoadBitstream, LogicTest, MemoryOps,
+    PinTest, Protect, SpiAutodetect, DEFAULT_BLOCK,
 };
 use minipro_core::device::{
     BlockReq, ChipId, Device, EraseKind, FuseKind, MemoryKind, Partition, Region,
@@ -59,6 +59,7 @@ const CMD_NAND_PROGRAM: u8 = 0x1f; // t76.c:57
 const CMD_FPGA_REG_IO: u8 = 0x24; // t76.c:72
 const CMD_WRITE_BITSTREAM: u8 = 0x26; // t76.c:58
 const CMD_EMMC_SEND_CMD: u8 = 0x27; // t76.c:73
+const CMD_AUTODETECT: u8 = 0x37; // t76.c — SPI 25-series autodetect
 const CMD_NAND_BAD_BLOCK_CHECK: u8 = 0x3a; // t76.c:63
 const CMD_BOOTLOADER_WRITE: u8 = 0x3b; // t76.c:64
 const CMD_BOOTLOADER_ERASE: u8 = 0x3c; // t76.c:65
@@ -451,19 +452,28 @@ impl T76 {
         Ok(())
     }
 
-    /// Upload the FPGA bitstream: BEGIN_BS, 512-byte chunks (8-byte header +
-    /// 504-byte payload), END_BS — including the NAND last-block-size fix
-    /// (t76_write_bitstream, t76.c:116-189).
+    /// Upload the FPGA bitstream for a device (chip algorithm), reading it from
+    /// `dev.algorithm` (t76_write_bitstream, t76.c:116-189).
     fn write_bitstream(&mut self, dev: &Device) -> Result<()> {
         let algorithm = dev
             .algorithm
             .as_ref()
             .filter(|a| !a.bitstream.is_empty())
             .ok_or(Error::Unsupported("device has no FPGA bitstream loaded"))?;
-        if self.uploaded_algo.as_deref() == Some(algorithm.name.as_str()) {
+        self.write_bitstream_named(
+            &algorithm.name.clone(),
+            &algorithm.bitstream.clone(),
+            dev.protocol_id == ALG_NAND,
+        )
+    }
+
+    /// Upload a named FPGA bitstream (chip or utility): BEGIN_BS, 512-byte chunks
+    /// (8-byte header + 504-byte payload), END_BS — including the NAND
+    /// last-block-size fix (t76.c:116-189). `nand` selects that fix.
+    fn write_bitstream_named(&mut self, name: &str, bits: &[u8], nand: bool) -> Result<()> {
+        if self.uploaded_algo.as_deref() == Some(name) {
             return Ok(()); // same session, same algorithm (t76.c:283-285)
         }
-        let bits = &algorithm.bitstream;
         let len = bits.len();
 
         // BEGIN_BS: packet size + total bitstream size (t76.c:122-136).
@@ -498,7 +508,7 @@ impl T76 {
         let mut end = [0u8; 8];
         end[0] = CMD_WRITE_BITSTREAM;
         end[1] = BS_END;
-        if dev.protocol_id == ALG_NAND {
+        if nand {
             let mut last_block = len % BS_PAYLOAD;
             if last_block == 0 {
                 last_block = BS_PAYLOAD;
@@ -510,7 +520,7 @@ impl T76 {
             return Err(Error::Protocol);
         }
 
-        self.uploaded_algo = Some(algorithm.name.clone());
+        self.uploaded_algo = Some(name.to_string());
         Ok(())
     }
 
@@ -794,9 +804,8 @@ impl Programmer for T76 {
     }
 
     fn caps(&self) -> Caps {
-        // Logic test and SPI autodetect are deferred: on the FPGA T76 they need
-        // a utility-algorithm bitstream upload (TestLgcPull/Down, SPI25F*) not
-        // yet plumbed (t76.c:1609-1624).
+        // Logic test / autodetect upload utility bitstreams (TestLgcPull/Down,
+        // SPI25F*) fetched from algoT76/ by name, per pass (t76.c:1609-1624).
         Caps::MEMORY
             .with(Caps::EMMC)
             .with(Caps::PINTEST)
@@ -805,6 +814,8 @@ impl Programmer for T76 {
             .with(Caps::JEDEC)
             .with(Caps::PROTECT)
             .with(Caps::CALIBRATION)
+            .with(Caps::LOGIC)
+            .with(Caps::AUTODETECT)
     }
 
     /// `t76_begin_transaction` (t76.c:503-848): adapter init (NAND/eMMC),
@@ -908,6 +919,48 @@ impl Programmer for T76 {
     }
     fn calibration(&mut self) -> Option<&mut dyn Calibration> {
         Some(self)
+    }
+    fn logic(&mut self) -> Option<&mut dyn LogicTest> {
+        Some(self)
+    }
+    fn autodetect(&mut self) -> Option<&mut dyn SpiAutodetect> {
+        Some(self)
+    }
+}
+
+impl LogicTest for T76 {
+    /// `t76_logic_ic_test` / `do_ic_test` (t76.c:1594-…): the T76 uploads a
+    /// *different* FPGA bitstream per pass — `TestLgcPull` for pull-up,
+    /// `TestLgcDown` for pull-down — then runs the shared vector loop. The
+    /// caller's `load` fetches them from `algoT76/` by name.
+    fn run(&mut self, s: &Session, load: LoadBitstream<'_>) -> Result<bool> {
+        let (pc, vc, vcc) = (s.device.package.pin_count, s.device.vector_count, s.device.logic_vcc);
+        let pull = load("TestLgcPull")?;
+        self.write_bitstream_named("TestLgcPull", &pull, false)?;
+        let first = wire::logic_pass(self.tx.as_mut(), pc, vc, vcc, &s.device.vectors, 0)?;
+        let down = load("TestLgcDown")?;
+        self.write_bitstream_named("TestLgcDown", &down, false)?;
+        let second = wire::logic_pass(self.tx.as_mut(), pc, vc, vcc, &s.device.vectors, 1)?;
+        Ok(wire::logic_compare(&s.device.vectors, &first, &second))
+    }
+}
+
+impl SpiAutodetect for T76 {
+    /// `t76_spi_autodetect` (t76.c:1296-1333): upload the `SPI25F*` bitstream,
+    /// then `0x37` (`[8]`=package flag), send 10, recv 16, id = 3 bytes
+    /// big-endian from `[2]`.
+    fn spi_autodetect(&mut self, wide: bool, load: LoadBitstream<'_>) -> Result<u32> {
+        let name = if wide { "SPI25F21" } else { "SPI25F11" };
+        let bits = load(name)?;
+        self.write_bitstream_named(name, &bits, false)?;
+        let mut msg = [0u8; 10];
+        msg[0] = CMD_AUTODETECT;
+        msg[8] = u8::from(wide);
+        let resp = self.cmd(&msg, 16)?;
+        if resp.len() < 5 {
+            return Err(Error::Protocol);
+        }
+        Ok((u32::from(resp[2]) << 16) | (u32::from(resp[3]) << 8) | u32::from(resp[4]))
     }
 }
 
@@ -1460,11 +1513,39 @@ mod tests {
         assert_eq!(caps.contains(Caps::CALIBRATION), t76.calibration().is_some());
         assert_eq!(caps.contains(Caps::LOGIC), t76.logic().is_some());
         assert_eq!(caps.contains(Caps::AUTODETECT), t76.autodetect().is_some());
-        // Now present via the shared wire ops.
         assert!(caps.contains(Caps::FUSES) && caps.contains(Caps::PROTECT));
         assert!(caps.contains(Caps::CALIBRATION));
-        // Still deferred (FPGA utility-algorithm bitstream needed).
-        assert!(!caps.contains(Caps::LOGIC) && !caps.contains(Caps::AUTODETECT));
+        assert!(caps.contains(Caps::LOGIC) && caps.contains(Caps::AUTODETECT));
+    }
+
+    #[test]
+    fn logic_test_uploads_pull_then_down_per_pass() {
+        // 2 pins, 1 vector: pin0 = H (3), pin1 = L (2). Each pass: BEGIN_BS(recv
+        // 8) + END_BS(recv 8) reply, then the vector command reply (pin0=1,
+        // pin1=0 -> resp[8]=0x01).
+        let good_vec = || {
+            let mut r = vec![0u8; 32];
+            r[8] = 0x01;
+            r
+        };
+        let ok8 = || vec![0x26u8, 0, 0, 0, 0, 0, 0, 0];
+        let (mut t76, tx) = t76_with(vec![
+            ok8(), ok8(), good_vec(), // pass 0: BEGIN_BS, END_BS, vector
+            ok8(), ok8(), good_vec(), // pass 1
+        ]);
+        let mut dev = device(0x00, Vec::new());
+        dev.package.pin_count = 2;
+        dev.vector_count = 1;
+        dev.logic_vcc = 5;
+        dev.vectors = vec![3, 2];
+        let s = Session { device: dev, emmc_capacity: 0 };
+        let mut load = |name: &str| Ok(name.as_bytes().to_vec());
+        assert!(t76.logic().unwrap().run(&s, &mut load).unwrap());
+        // The two bitstream uploads carry the pull then down payloads (in the
+        // BS_BLOCK packet, offset 8).
+        let bodies: Vec<Vec<u8>> = tx.sent().into_iter().map(|(_, p)| p).collect();
+        assert!(bodies.iter().any(|p| p.len() > 12 && &p[8..8 + 11] == b"TestLgcPull"));
+        assert!(bodies.iter().any(|p| p.len() > 12 && &p[8..8 + 11] == b"TestLgcDown"));
     }
 
     #[test]
