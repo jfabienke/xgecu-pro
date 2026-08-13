@@ -1,72 +1,156 @@
-# XGecu Pro T76
+# xgecu-pro
 
-Support repo for the **XGecu T76** universal programmer (NAND / eMMC / NOR / EPROM / MCU / ISP, USB 3.0).
+**A Rust redesign and reimplementation of [minipro](https://gitlab.com/nmatt0/minipro/-/tree/t76-improvements) for XGecu USB chip programmers — plus the reverse-engineering notes behind it.**
 
-## This unit
+The centerpiece is [`minipro-rs/`](minipro-rs/): a pure-Rust CLI that drives the
+**T76**, **T56**, and **T48** through one trait-based driver layer. No libusb, no
+zlib, no XML step — it reads XGecu's `InfoICT76.dll` chip database directly and
+ships human / JSON / TUI output modes.
 
-Detected on USB on this Mac (2026-08-12):
+```
+minipro info                          # identify the programmer
+minipro detect                        # read the seated chip's electronic id
+minipro read M27C256B@DIP28 rom.bin   # dump it, verified
+```
 
-| Property | Value |
+---
+
+## Status — read this before you write to a chip
+
+This is a **young project handling real hardware**. Honest state of play:
+
+| Path | Status |
 |---|---|
-| Product name | `XGecu T76` |
-| USB Vendor ID | `0xA466` (42086) |
-| USB Product ID | `0x1A86` (6790) |
-| Serial number | `2023000105` |
+| **T76 reads** | ✅ **Hardware-verified** — byte-identical to known-good dumps, stable over repeated reads |
+| **T76 write / erase / NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device** |
+| **T56 / T48 (all operations)** | ⚠️ Complete drivers, **never run against real silicon** — no T48/T56 hardware here |
+| **TL866II+ / TL866A/CS** | ❌ Not implemented |
 
-Re-check with: `ioreg -p IOUSB -l -w 0 | grep -A4 'XGecu'` — see [hardware/usb-detection.md](hardware/usb-detection.md).
+Every driver is pinned by **byte-exact golden-packet tests** (180 tests, hardware-free),
+so the wire output is known-correct against captures — but a passing test suite is
+not the same as a validated write. **Reading is non-destructive; writing and erasing
+are not.** Treat the untested paths accordingly, and see
+[Contributing](#contributing) if you can help close the gap.
+
+## Quick start
+
+```sh
+cd minipro-rs
+cargo build --release          # pure Rust; no libusb/pkg-config
+./target/release/minipro info
+```
+
+Requires Rust 1.85+. On macOS with a T76, **use a USB-2.0 cable** — the
+SuperSpeed bulk path fails on Apple Silicon and the tool will tell you so
+([details](docs/ch569-usb3-notes.md)).
+
+### The chip database
+
+Chip parameters and the T76's per-chip FPGA bitstreams come from XGecu's own
+files, which are **not redistributed here**. Point the tool at an extracted
+Xgpro install:
+
+```sh
+minipro --db /path/to/Xgpro_T76 search 27C256
+```
+
+To get one: download `xgpro_T76_V*.rar` from the
+[community mirror](https://github.com/Kreeblah/XGecu_Software) and extract it
+**twice** — the RAR contains a WinRAR SFX executable:
+
+```sh
+unar xgpro_T76_V1321.rar        # → Xgpro_T76_V1321.exe
+unar Xgpro_T76_V1321.exe        # → InfoICT76.dll + algoT76/*.alg
+```
+
+> ⚠️ Use `unar`, not `7z`. p7zip *lists* the RAR5 payload fine but cannot decode
+> it — it exits with `Unsupported Method` and leaves **0-byte files** that look
+> like a successful extraction.
+
+Alternatively `--db-url <URL>` provisions from a mirror serving the extracted
+files; the proprietary DLL is fetched to RAM and never persisted, only the
+derived catalog and bitstreams are cached.
+
+## What it does
+
+`read` · `write` · `erase` · `info` · `search` · `detect` · `logic` ·
+`autodetect` · `tui`
+
+Across the three drivers: memory read/write/erase/blank-check/identify, MCU
+fuses, JEDEC/PLD rows, write-protect, calibration, logic-IC testing, SPI
+autodetect — plus eMMC/NAND, pin-contact test and firmware update on the T76.
+Full capability matrix in the [`minipro-rs` README](minipro-rs/README.md).
+
+Design notes worth knowing: reads are **verified by default** (re-read stability
+plus crc32/sha256 in the outcome), errors carry **stable machine codes** for
+`--json` consumers, and the type system encodes the T76's nastiest hardware
+quirk — an undrained USB response wedges the device until replug, so the
+must-drain guard makes forgetting it a compile error.
 
 ## Repo layout
 
 ```
-minipro-rs/    The Rust redesign and reimplementation (MIT) — see its README
-docs/          Open-source status; protocol + firmware notes; design docs
-docs/hardware/ FPGA + MCU pinouts and schematic (Anlogic EG4X20 + WCH CH569W)
-hardware/      Notes about this unit and its USB identity
+minipro-rs/     The Rust workspace — core / proto (drivers) / usb / db / cli
+docs/           Reverse-engineering notes, protocol analysis, design docs
+docs/hardware/  FPGA + MCU pinouts and schematic (Anlogic EG4X20 + WCH CH569W)
+dumps/          Verified ROM dumps read with this tooling (Adaptec AHA-1542CP)
+hardware/       USB identity notes for the T76
 ```
 
-Proprietary vendor material (the Xgpro installer, XGecu's device-support list,
-Anlogic/WCH datasheets) is **not redistributed here** — see the download
-sources below and `docs/hardware/README.md`.
+## Documentation
 
-## Vendor software (not included)
+Reverse-engineering and analysis, useful independently of the Rust code:
 
-- `xgpro_T76_V*.rar` → contains `Xgpro_T76_V*.exe` (V13.21 pairs with the
-  support list dated 2026-07-11, 42,621 devices). Download from the
-  [community mirror](https://github.com/Kreeblah/XGecu_Software).
-- The T76 uses its **own installer** (`Xgpro_T76_*`) — it is *not* covered by the regular Xgpro installer for TL866II+/T48/T56.
-- Extract with `unar xgpro_T76_V*.rar`.
+| Document | What's in it |
+|---|---|
+| [`t76-protocol.md`](docs/t76-protocol.md) | The T76 USB wire protocol — opcodes, packet layouts, operation sequences |
+| [`infoict76-dll-format.md`](docs/infoict76-dll-format.md) | `InfoICT76.dll` on-disk format: chip-descriptor offsets and field transforms |
+| [`firmware-updater.md`](docs/firmware-updater.md) | The `updateT76.dat` container and the bootloader flashing sequence |
+| [`ch569-usb3-notes.md`](docs/ch569-usb3-notes.md) | The CH569 USB 3.0 stack and the macOS SuperSpeed failure |
+| [`open-source-status.md`](docs/open-source-status.md) | Landscape of open-source T76 support |
+| [`minipro-codebase-report.md`](docs/minipro-codebase-report.md) | Review of the upstream C implementation |
+| [`rust-redesign.md`](docs/rust-redesign.md) · [`rust-trait-model.md`](docs/rust-trait-model.md) · [`rust-roadmap.md`](docs/rust-roadmap.md) | The design this project was built from, and what's next |
+| [`minipro-vs-rust.md`](docs/minipro-vs-rust.md) | Honest comparison with the C tool |
 
-### macOS note
+## Contributing
 
-Xgpro is **Windows-only** (XP–Win11) and drives the programmer directly over USB. On this Mac, run it in a Windows VM (Parallels/VMware/UTM) and pass through the USB device with VID `0xA466` / PID `0x1A86`. An open-source path is emerging — Matt Brown's minipro fork now programs SPI/NOR/NAND/eMMC on the T76 (feature branch). See [docs/open-source-status.md](docs/open-source-status.md), the reverse-engineered [USB protocol](docs/t76-protocol.md), and the [firmware-updater notes](docs/firmware-updater.md).
+The most valuable contribution is **hardware nobody here has**:
 
-## Sources
+- **🔌 Run it against a real T48 or T56.** The drivers are complete and
+  golden-tested but have never touched silicon. `minipro info`, `detect`, and a
+  read of a known chip — reporting what you see — turns "reference-only" into
+  "proven."
+- **🔌 Exercise T76 write/erase/NAND/eMMC.** Reads are byte-verified; the rest is
+  not.
+- **Implement the TL866II+ / TL866A/CS drivers.** The TL866II+ is close to the
+  existing T48 and reuses most of the shared wire layer.
 
-- Official site: <http://www.xgecu.com/en/download.html> (frequently unreachable outside China — was down at time of writing)
-- Official forum download thread: <http://forums.xgecu.com/viewthread.php?tid=20>
-- Community mirror (software + support lists, kept current): <https://github.com/Kreeblah/XGecu_Software>
-- User guide source (T48/T76 Xgpro guide): <https://probots.co.in/technical_data/XGecu%20T48%20Universal%20Programmer__Guide.pdf>
+Bug reports are most useful with the programmer model, `minipro info` output,
+the exact command, and a `--json` line. See the
+[roadmap](docs/rust-roadmap.md) for scoped work items.
 
-### Updating
+## Credits
 
-Newer `xgpro_T76_V*.rar` builds appear in the mirror under `Xgpro/<major>/`:
+This project stands on **[Matt Brown (nmatt0)](https://github.com/nmatt0)**'s
+reverse engineering in the
+[`t76-improvements` minipro fork](https://gitlab.com/nmatt0/minipro/-/tree/t76-improvements) —
+the USB protocols, the T76's FPGA/bitstream lifecycle, the firmware-update
+transport, and the DLL field transforms. None of this would exist without that
+work.
 
-```sh
-curl -s "https://api.github.com/repos/Kreeblah/XGecu_Software/git/trees/master?recursive=1" \
-  | grep -o '"path": *"[^"]*T76[^"]*"'
-```
+Also: **[radiomanV](https://github.com/radiomanV/Xgecu_T76)** for FPGA-side
+tooling and hardware documentation, and
+**[Kreeblah](https://github.com/Kreeblah/XGecu_Software)** for keeping the
+vendor-software mirror current.
+
+See [`NOTICE`](NOTICE) for full attribution.
 
 ## License
 
-The **original work in this repository is licensed [MIT](LICENSE)** — the
-`minipro-rs/` Rust redesign and reimplementation, and the analysis/notes under `docs/`.
+Original work in this repository is **[MIT](LICENSE)**.
 
-Proprietary third-party material — XGecu's Xgpro application and
-`InfoICT76.dll`, vendor datasheets, device-support lists, firmware images, and
-vendor `.alg` bitstreams — is **not redistributed in this repository** and is
-not covered by the MIT grant; the tooling here consumes some of it at runtime
-from vendor/mirror sources.
-
-The protocol facts the Rust reimplementation depends on were reverse-engineered by the
-minipro community (nmatt0 / Matt Brown); see [`NOTICE`](NOTICE) for full
-attribution.
+The MIT grant covers this project's own code and documentation only. Proprietary
+third-party material — XGecu's Xgpro application and `InfoICT76.dll`, vendor
+datasheets, device-support lists, firmware images, and `.alg` bitstreams — is
+**not redistributed here** and is not covered by it; the tooling consumes some of
+it at runtime from vendor or mirror sources.
