@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! One event stream, three renderers. The core never prints — it emits
 //! [`Event`]s during an op and a terminal [`Outcome`]. `Reporter` impls live in
 //! `minipro-cli` (human / JSON / TUI). With the default-on `serde` feature,

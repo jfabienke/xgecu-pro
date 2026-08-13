@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! Typed errors with machine-stable codes for the JSON mode.
 //!
 //! The key contract is [`Error::code`] (never localized — an agent branches on

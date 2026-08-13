@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! Per-programmer protocol drivers. Each implements the core traits over a
 //! `Box<dyn Transport>`; the T76 is the reference driver (see [`t76`]).
 //!

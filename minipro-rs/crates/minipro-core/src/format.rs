@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! File formats for memory images: raw binary, Intel HEX, and Motorola
 //! S-record. This is the `Format` data abstraction from the trait-model design
 //! (docs/rust-trait-model.md §4) — the CLI reads/writes chip images in any of

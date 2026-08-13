@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! Native chip-database backend: read the vendor's `InfoICT76.dll` directly.
 //!
 //! The DLL is a native 32-bit PE whose chip database is a two-level table in

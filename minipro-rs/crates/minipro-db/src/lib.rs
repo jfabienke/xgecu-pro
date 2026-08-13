@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! The chip database and FPGA-bitstream store.
 //!
 //! Two backends behind one trait: an editable XML source (`infoic.xml` +

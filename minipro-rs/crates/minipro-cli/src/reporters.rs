@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! The three [`Reporter`] renderers. All consume the identical event stream
 //! from `minipro-core`; they differ only in presentation. See
 //! `docs/rust-redesign.md` ("Output modes") for the design.

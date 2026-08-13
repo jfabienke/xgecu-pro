@@ -10,8 +10,8 @@ output design.
 `InfoICT76.dll` directly (no XML needed) and can provision itself from a mirror.
 164 tests pass, clippy clean.
 
-> ⚠️ **The T48 and T56 drivers are untested on hardware.** They are faithful
-> reference-only ports — verified against the C source and byte-exact golden
+> ⚠️ **The T48 and T56 drivers are untested on hardware.** They are
+> reference-only implementations — verified against byte-exact golden
 > packets, but **never run against a real T48 or T56** (we don't have the
 > hardware). Treat them as unproven until someone confirms them on-device. See
 > [Contributing](#contributing).
@@ -82,8 +82,8 @@ Every non-✅ cell is principled, not an oversight:
 
 The T76 was validated against a real device. The T56/T48 have no hardware here,
 so correctness rests on a **golden-packet** discipline: the shared BEGIN header
-and every driver's packet builders are frozen as byte-exact fixtures derived
-from the C source, so any change to a byte the device would see fails a test.
+and every driver's packet builders are frozen as byte-exact fixtures, so any
+change to a byte the device would see fails a test.
 The `wire.rs` extraction that all three drivers share was proven byte-identical
 against the hardware-verified T76 goldens.
 
@@ -126,7 +126,7 @@ the same `algoT76/` source as chip bitstreams, and the CLI exposes them as
 Help wanted — especially from anyone with the **hardware we don't have**.
 
 - **🔌 Validate the T48 / T56 on real devices.** These drivers are complete but
-  **untested on hardware** — ported faithfully from the C source and covered by
+  **untested on hardware** — implemented from the wire protocol and covered by
   byte-exact golden packets, yet never run against an actual T48 or T56. If you
   own one, running `minipro info`, `detect`, and a `read` against a known chip
   (and reporting what you see) is the single most valuable thing you can do. It
@@ -144,7 +144,15 @@ Help wanted — especially from anyone with the **hardware we don't have**.
   lists the rest — CLI verbs for fuses/JEDEC/firmware, GAL/PLD `config`, extra
   memory regions — each scoped with effort and dependencies.
 
-Every driver is checked against the C reference and a golden-packet harness, so
-new work has a clear correctness bar. If you validate on hardware, please include
-the programmer model, firmware version (`minipro info`), and the exact command +
-output. Bug reports with a `--json` line and the chip name are ideal.
+Every driver is checked against a golden-packet harness, so new work has a clear
+correctness bar. If you validate on hardware, please include the programmer
+model, firmware version (`minipro info`), and the exact command + output. Bug
+reports with a `--json` line and the chip name are ideal.
+
+## License
+
+MIT — see [`LICENSE`](../LICENSE). The MIT grant covers this project's own
+source only. The protocol facts these drivers implement were reverse-engineered
+by the minipro community (nmatt0 / Matt Brown); that credit and the status of
+XGecu's proprietary DLL/algorithm data are recorded in the repo-root
+[`NOTICE`](../NOTICE).

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! Optional capability traits. A driver implements the subset its hardware
 //! supports and exposes each via the accessor upcasts on
 //! [`crate::programmer::Programmer`]. All are object-safe (no generics, no

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! The USB command channel abstraction, and the must-drain response guard.
 //!
 //! Real impls live in `minipro-usb` (over `nusb`) and a `MockTransport` that

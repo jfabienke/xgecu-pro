@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! Transport implementations.
 //!
 //! [`UsbTransport`] talks to the device over `nusb` (pure-Rust USB — the choice

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! The XGecu T76 driver — reference implementation of the core traits.
 //!
 //! An independent Rust implementation of the T76 USB wire protocol — its
@@ -35,8 +38,8 @@ use crate::wire::{
 };
 
 // ---------------------------------------------------------------------------
-// Endpoints (usb_nix.c: msg_send EP01 OUT / msg_recv EP81 IN /
-// read_payload EP82 IN / write_payload EP05 OUT).
+// Endpoints: msg_send EP01 OUT / msg_recv EP81 IN /
+// read_payload EP82 IN / write_payload EP05 OUT.
 // ---------------------------------------------------------------------------
 const EP_MSG_OUT: Ep = Ep(0x01);
 const EP_MSG_IN: Ep = Ep(0x81);
@@ -62,7 +65,7 @@ const CMD_NAND_PROGRAM: u8 = 0x1f;
 const CMD_FPGA_REG_IO: u8 = 0x24;
 const CMD_WRITE_BITSTREAM: u8 = 0x26;
 const CMD_EMMC_SEND_CMD: u8 = 0x27;
-const CMD_AUTODETECT: u8 = 0x37; // t76.c — SPI 25-series autodetect
+const CMD_AUTODETECT: u8 = 0x37; // SPI 25-series autodetect
 const CMD_NAND_BAD_BLOCK_CHECK: u8 = 0x3a;
 const CMD_BOOTLOADER_WRITE: u8 = 0x3b;
 const CMD_BOOTLOADER_ERASE: u8 = 0x3c;
@@ -1418,7 +1421,7 @@ impl MemoryOps for T76 {
     /// one eMMC 64 KiB unit per request — and `nand_read`/`emmc_read` derive the
     /// block/LBA index from `req.len`. Feeding page-sized requests would
     /// mis-index and short-read, so those spaces override the default page-size
-    /// stepping (t76.c NAND/eMMC read paths).
+    /// stepping (NAND/eMMC read paths).
     fn block_size(&self, s: &Session, kind: MemoryKind) -> u32 {
         const EMMC_UNIT: u32 = 0x1_0000; // 64 KiB
         match (s.device.protocol_id, kind) {

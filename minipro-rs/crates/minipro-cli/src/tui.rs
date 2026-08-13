@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! `minipro tui` — the ratatui front-end.
 //!
 //! Panels (per `docs/rust-redesign.md` §"3. TUI"): programmer status, a

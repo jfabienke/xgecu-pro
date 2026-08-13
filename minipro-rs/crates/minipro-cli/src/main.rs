@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! `minipro` — the CLI entry point.
 //!
 //! Selects one of three output modes and dispatches a subcommand. Mode

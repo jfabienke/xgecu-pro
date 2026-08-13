@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! Orchestration: the block loop, progress reporting, and built-in
 //! verification — written once here, generic over any `dyn Programmer` and
 //! `dyn Reporter`, so drivers stay small (they only implement `*_block`).

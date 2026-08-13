@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! The central [`Programmer`] trait — a thin always-present core plus
 //! object-safe accessor upcasts to the optional capability traits in
 //! [`crate::caps`]. It is a capability-based vtable: a driver implements only

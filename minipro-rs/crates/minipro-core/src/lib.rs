@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! # minipro-core
 //!
 //! The load-bearing abstractions for the Rust redesign of minipro, per

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! The XGecu T48 driver — a fixed-silicon (non-FPGA) programmer.
 //!
 //! An independent Rust implementation of the T48 USB wire protocol — the

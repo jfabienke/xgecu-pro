@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! Shared protocol primitives for the "II+-class" XGecu programmers — the
 //! TL866II+, T48, T56, and T76 all speak the same command generation: the same
 //! opcode space (BEGIN_TRANS `0x03`, END `0x04`, READID `0x05`, WRITE/READ CODE
@@ -175,7 +178,7 @@ pub(crate) fn pack_begin64(p: &ChipParams) -> [u8; 64] {
 const EP_CMD_OUT: Ep = Ep(0x01);
 const EP_CMD_IN: Ep = Ep(0x81);
 
-// Fuse-space opcodes (t48.c/t56.c/t76.c :38-51).
+// Fuse-space opcodes.
 const CMD_READ_USER: u8 = 0x06;
 const CMD_WRITE_USER: u8 = 0x07;
 const CMD_READ_CFG: u8 = 0x08;

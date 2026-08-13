@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! The XGecu T56 driver — the T76's closest sibling.
 //!
 //! An independent Rust implementation of the T56 USB wire protocol — the

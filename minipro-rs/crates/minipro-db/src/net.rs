@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! `HttpDb` — the native database served from a mirror. The **derived catalog
 //! and the bitstreams are persisted; the proprietary DLL never is**, and only
 //! the *latest* version is kept.

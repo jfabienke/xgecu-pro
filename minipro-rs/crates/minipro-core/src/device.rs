@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 John Fabienke
+// SPDX-License-Identifier: MIT
+
 //! Chip and image data types, plus the value types the
 //! capability traits pass around. These are plain data, never traits; with the
 //! default-on `serde` feature they derive `Serialize` for the JSON mode.

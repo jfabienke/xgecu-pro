@@ -23,7 +23,7 @@ TL866A/CS drivers are not yet ported).*
 | **Chip detect** | `-a` SPI autodetect + id check | `detect` (id → DB match) + `autodetect` (SPI JEDEC id) |
 | **Identity query** | fw / serial / mfg-date / device-code / voltage | fw / serial / mfg-date / device-code / voltage |
 | **LOC** | ~19,500 (all programmers) | ~8,500 (T48 / T56 / T76) |
-| **License** | GPL-3.0 | GPL-3.0 (same) |
+| **License** | GPL-3.0 | **MIT** (independent reimplementation of the wire facts) |
 
 ## Hardware validation (this repo, live T76 at USB 2.0)
 
