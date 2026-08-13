@@ -551,25 +551,26 @@ impl T76 {
     }
 
     /// Send an 8-byte command and drain `resp_len` bytes from EP81.
+    ///
+    /// Wire tracing is emitted at `trace` level under the `minipro_proto`
+    /// target (`RUST_LOG=minipro_proto=trace`, or the CLI's `MINIPRO_TRACE=1`
+    /// alias).
     fn cmd(&mut self, pkt: &[u8], resp_len: usize) -> Result<Vec<u8>> {
-        if std::env::var_os("MINIPRO_TRACE").is_some() {
-            eprintln!(
-                "[t76] cmd op={:02x}/{:02x} out={} want={resp_len}",
-                pkt[0],
-                pkt.get(1).copied().unwrap_or(0),
-                pkt.len()
-            );
-        }
+        tracing::trace!(
+            op = format_args!("{:02x}", pkt[0]),
+            sub = format_args!("{:02x}", pkt.get(1).copied().unwrap_or(0)),
+            out_len = pkt.len(),
+            want = resp_len,
+            "t76 cmd"
+        );
         let r = command(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, pkt, resp_len)?.read();
-        if std::env::var_os("MINIPRO_TRACE").is_some() {
-            match &r {
-                Ok(v) => eprintln!(
-                    "[t76]   -> {} bytes: {:02x?}",
-                    v.len(),
-                    &v[..v.len().min(8)]
-                ),
-                Err(e) => eprintln!("[t76]   -> ERR {e}"),
-            }
+        match &r {
+            Ok(v) => tracing::trace!(
+                got = v.len(),
+                head = format_args!("{:02x?}", &v[..v.len().min(8)]),
+                "t76 resp"
+            ),
+            Err(e) => tracing::trace!(error = %e, "t76 resp"),
         }
         r
     }
@@ -997,15 +998,15 @@ impl Programmer for T76 {
         // Logic test / autodetect upload utility bitstreams (TestLgcPull/Down,
         // SPI25F*) fetched from algoT76/ by name, per pass.
         Caps::MEMORY
-            .with(Caps::EMMC)
-            .with(Caps::PINTEST)
-            .with(Caps::FWUPDATE)
-            .with(Caps::FUSES)
-            .with(Caps::JEDEC)
-            .with(Caps::PROTECT)
-            .with(Caps::CALIBRATION)
-            .with(Caps::LOGIC)
-            .with(Caps::AUTODETECT)
+            | Caps::EMMC
+            | Caps::PINTEST
+            | Caps::FWUPDATE
+            | Caps::FUSES
+            | Caps::JEDEC
+            | Caps::PROTECT
+            | Caps::CALIBRATION
+            | Caps::LOGIC
+            | Caps::AUTODETECT
     }
 
     /// Begin a transaction: adapter init (NAND/eMMC),
@@ -2931,5 +2932,102 @@ mod tests {
             "0d010000001000000002000020000000040000008000000020000000040000000100000000000000",
             "eMMC io-init drift",
         );
+    }
+}
+
+/// Property tests: the firmware-image parser consumes untrusted file bytes and
+/// the BEGIN_TRANS packer consumes arbitrary DB-derived parameters — neither
+/// may panic, and their structural invariants must hold for all inputs.
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// A structurally valid updateT76.dat image: correct version tag, block
+    /// count, and body CRC.
+    fn valid_update(blocks: usize, fill: u8) -> Vec<u8> {
+        let mut img = vec![0u8; UPDATE_HEADER_LEN + blocks * UPDATE_BLOCK_LEN];
+        img[0..4].copy_from_slice(&(UPDATE_FILE_VERSION | 1).to_le_bytes());
+        img[12..16].copy_from_slice(&(blocks as u32).to_le_bytes());
+        for b in &mut img[UPDATE_HEADER_LEN..] {
+            *b = fill;
+        }
+        let crc = !crc32fast::hash(&img[UPDATE_HEADER_LEN..]);
+        img[4..8].copy_from_slice(&crc.to_le_bytes());
+        img
+    }
+
+    proptest! {
+        /// Arbitrary bytes must never panic the parser.
+        #[test]
+        fn update_parse_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
+            let _ = UpdateFile::parse(&bytes);
+        }
+
+        /// A well-formed image parses and yields exactly its declared blocks.
+        #[test]
+        fn update_parse_accepts_valid(blocks in 0usize..6, fill in any::<u8>()) {
+            let img = valid_update(blocks, fill);
+            let update = UpdateFile::parse(&img).expect("valid image");
+            prop_assert_eq!(update.blocks().count(), blocks);
+            for block in update.blocks() {
+                prop_assert_eq!(block.len(), UPDATE_BLOCK_LEN);
+            }
+        }
+
+        /// Corrupting any single byte of the body breaks the CRC check.
+        #[test]
+        fn update_parse_rejects_bit_rot(blocks in 1usize..4, pos in 0usize..0x114, flip in 1u8..=255) {
+            let mut img = valid_update(blocks, 0xa5);
+            img[UPDATE_HEADER_LEN + pos] ^= flip;
+            prop_assert!(UpdateFile::parse(&img).is_err());
+        }
+
+        /// BEGIN_TRANS always packs a 0x03 packet of exactly 64 or 128 bytes,
+        /// extended precisely for the chip classes that carry an extension.
+        #[test]
+        fn begin_trans_shape(
+            protocol_id in any::<u8>(),
+            variant in any::<u16>(),
+            raw_voltages in any::<u32>(),
+            packed_package in any::<u32>(),
+            write_buffer_size in any::<u16>(),
+            pages_per_block in any::<u16>(),
+            spi_clock in any::<u8>(),
+            i2c_address in any::<u8>(),
+        ) {
+            let p = ChipParams {
+                protocol_id,
+                variant,
+                raw_voltages,
+                packed_package,
+                write_buffer_size,
+                pages_per_block,
+                spi_clock,
+                i2c_address,
+                ..Default::default()
+            };
+            let (msg, len) = pack_begin_trans(&p);
+            prop_assert_eq!(msg[0], 0x03);
+            let expect_ext = match protocol_id {
+                x if x == ALG_SPI25F_1 || x == ALG_SPI25F_2 => true,
+                x if x == ALG_NAND || x == ALG_EMMC => true,
+                x if x == ALG_T48 || x == ALG_T40B => {
+                    packed_package as u8 == 0x0b && (variant & 0x0f) >= 8
+                }
+                _ => false,
+            };
+            prop_assert_eq!(len, if expect_ext { 128 } else { 64 });
+        }
+
+        /// The final bitstream block is never empty and never oversized, and
+        /// full blocks plus the final block always account for the whole
+        /// bitstream.
+        #[test]
+        fn last_block_len_partitions(len in 1usize..4_000_000) {
+            let last = last_block_len(len);
+            prop_assert!((1..=BS_PAYLOAD).contains(&last));
+            prop_assert_eq!((len - last) % BS_PAYLOAD, 0);
+        }
     }
 }

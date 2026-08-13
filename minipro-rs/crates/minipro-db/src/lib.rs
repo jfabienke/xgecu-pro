@@ -79,13 +79,17 @@ const ALGO_TABLE: &[&str] = &[
     "EMMC_", "VGA_", "CPLD_", "GEN_", "ITE_", // 0x31..0x35
 ];
 
-/// Derive the FPGA-algorithm name for a device, matching
-/// `get_algorithm` in : `algo_table[protocol_id-1]` +
+/// The FPGA algorithm name for a device: `algo_table[protocol_id-1]` +
 /// `hex(variant >> 8)`, with the EMMC/ATMGA/AT89C special cases. Returns `None`
 /// for logic/utility devices (`protocol_id == 0`), which use a separate table.
 ///
-/// Example: an `M27C256B@DIP28` (protocol 0x07 `ROM28P`, `variant>>8 == 0x32`)
-/// resolves to `"ROM28P32"`.
+/// An `M27C256B@DIP28` (protocol 0x07 `ROM28P`, `variant>>8 == 0x32`) resolves
+/// to `"ROM28P32"`:
+/// ```
+/// use minipro_core::device::Device;
+/// let dev = Device { protocol_id: 0x07, variant: 0x3200, ..Default::default() };
+/// assert_eq!(minipro_db::algorithm_name(&dev).as_deref(), Some("ROM28P32"));
+/// ```
 pub fn algorithm_name(dev: &Device) -> Option<String> {
     let pid = dev.protocol_id;
     let idx = (pid as usize).checked_sub(1)?;
@@ -166,7 +170,7 @@ impl XmlDb {
         let mut devices = parse_infoic(std::io::BufReader::new(file), INFOIC_DB_TYPE)?;
 
         // Logic ICs (with their test vectors) live in a separate logicic.xml,
-        // appended when present (1797).
+        // appended when present.
         let logicic = dir.join("logicic.xml");
         if logicic.is_file() {
             let f = std::fs::File::open(&logicic)?;
@@ -730,17 +734,31 @@ fn decode_alg(alg: &[u8]) -> Result<Vec<u8>> {
     level2_decompress(&blob)
 }
 
+/// Upper bound accepted for a decompressed bitstream. Real T76 bitstreams are
+/// ~1 MiB; the declared size comes from an untrusted file, so anything larger
+/// is treated as corrupt rather than allocated (a hostile header could
+/// otherwise demand a 4 GiB buffer).
+const MAX_BITSTREAM: usize = 16 * 1024 * 1024;
+
 fn level2_decompress(blob: &[u8]) -> Result<Vec<u8>> {
     const DATA_OFF: usize = 0x08;
     if blob.len() < DATA_OFF {
         return Err(Error::Format("bitstream blob too short".into()));
     }
     let algo_size = u32::from_le_bytes([blob[0], blob[1], blob[2], blob[3]]) as usize;
+    if algo_size > MAX_BITSTREAM {
+        return Err(Error::Format(format!(
+            "bitstream declares {algo_size} bytes (max {MAX_BITSTREAM})"
+        )));
+    }
     let data = &blob[DATA_OFF..];
 
     let mut out = Vec::with_capacity(algo_size);
     let mut i = 0;
-    while i + 1 < data.len() {
+    // Everything past algo_size is discarded by the final resize, so stop
+    // emitting once the buffer is full — this also bounds memory on a hostile
+    // stream of maximal zero-run markers.
+    while i + 1 < data.len() && out.len() < algo_size {
         let val = u16::from_le_bytes([data[i], data[i + 1]]);
         i += 2;
         if val != 0 {
@@ -748,7 +766,8 @@ fn level2_decompress(blob: &[u8]) -> Result<Vec<u8>> {
         } else if i + 1 < data.len() {
             let count = u16::from_le_bytes([data[i], data[i + 1]]) as usize;
             i += 2;
-            out.resize(out.len() + count * 2, 0);
+            let room = algo_size.saturating_sub(out.len());
+            out.resize(out.len() + (count * 2).min(room), 0);
         }
     }
     // The vendor buffer is exactly algo_size (zero-filled): pad or trim to match.
@@ -1280,5 +1299,73 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// Property tests: the bitstream decompressors consume untrusted vendor-file
+/// bytes — they must never panic, never allocate beyond [`MAX_BITSTREAM`], and
+/// must invert a well-formed RLE stream exactly.
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Build a well-formed level-2 blob from RLE tokens, returning it with the
+    /// expected expansion. `(true, n)` is a zero-run of `n` u16 words;
+    /// `(false, w)` a verbatim non-zero word (0 is bumped to 1).
+    fn build_rle(tokens: &[(bool, u16)]) -> (Vec<u8>, Vec<u8>) {
+        let mut data = Vec::new();
+        let mut expected = Vec::new();
+        for &(is_run, v) in tokens {
+            if is_run {
+                data.extend_from_slice(&0u16.to_le_bytes());
+                data.extend_from_slice(&v.to_le_bytes());
+                expected.resize(expected.len() + usize::from(v) * 2, 0);
+            } else {
+                let w = v.max(1);
+                data.extend_from_slice(&w.to_le_bytes());
+                expected.extend_from_slice(&w.to_le_bytes());
+            }
+        }
+        let mut blob = Vec::with_capacity(8 + data.len());
+        blob.extend_from_slice(&(expected.len() as u32).to_le_bytes());
+        blob.extend_from_slice(&0u32.to_le_bytes()); // crc: not re-verified
+        blob.extend_from_slice(&data);
+        (blob, expected)
+    }
+
+    proptest! {
+        /// Arbitrary bytes: no panic, and any accepted output is exactly the
+        /// declared size, which is itself bounded.
+        #[test]
+        fn level2_never_panics_and_is_bounded(blob in proptest::collection::vec(any::<u8>(), 0..2048)) {
+            if let Ok(out) = level2_decompress(&blob) {
+                prop_assert!(out.len() <= MAX_BITSTREAM);
+                let declared = u32::from_le_bytes([blob[0], blob[1], blob[2], blob[3]]) as usize;
+                prop_assert_eq!(out.len(), declared);
+            }
+        }
+
+        /// A well-formed RLE stream decompresses to exactly its expansion.
+        #[test]
+        fn level2_inverts_well_formed_rle(tokens in proptest::collection::vec((any::<bool>(), 0u16..64), 0..32)) {
+            let (blob, expected) = build_rle(&tokens);
+            let out = level2_decompress(&blob).expect("well-formed blob");
+            prop_assert_eq!(out, expected);
+        }
+
+        /// A hostile declared size is rejected, not allocated.
+        #[test]
+        fn level2_rejects_oversize_declaration(size in (MAX_BITSTREAM as u32 + 1)..=u32::MAX) {
+            let mut blob = vec![0u8; 16];
+            blob[0..4].copy_from_slice(&size.to_le_bytes());
+            prop_assert!(level2_decompress(&blob).is_err());
+        }
+
+        /// Arbitrary `.alg` file bytes never panic the decoder.
+        #[test]
+        fn decode_alg_never_panics(alg in proptest::collection::vec(any::<u8>(), 0..0x1200)) {
+            let _ = decode_alg(&alg);
+        }
     }
 }

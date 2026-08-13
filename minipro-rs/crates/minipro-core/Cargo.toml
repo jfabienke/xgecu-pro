@@ -10,12 +10,17 @@ name = "minipro-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
 
 [features]
 default = ["serde"]
 serde = ["dep:serde"]
 
 [dependencies]
+bitflags = { workspace = true }
 crc32fast = { workspace = true }
 serde = { workspace = true, optional = true }
 sha2 = { workspace = true }

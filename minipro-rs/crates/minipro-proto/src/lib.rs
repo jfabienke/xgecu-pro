@@ -23,9 +23,45 @@ pub mod wire;
 use minipro_core::error::Error;
 use minipro_core::transport::{command, Ep};
 
+/// Programmer model, as reported in the system-info device-type byte
+/// (`msg[6]`).
+///
+/// `TryFrom<u8>` decodes the wire byte; an unknown byte is a typed
+/// [`Error::Unsupported`], and within this crate the [`detect`] dispatch
+/// matches this enum exhaustively — adding a model is a compile-time checklist,
+/// not a runtime fall-through.
+///
+/// ```
+/// use minipro_proto::DeviceType;
+/// assert_eq!(DeviceType::try_from(0x08).unwrap(), DeviceType::T76);
+/// assert!(DeviceType::try_from(0x01).is_err());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DeviceType {
+    T56,
+    T48,
+    T76,
+}
+
+impl TryFrom<u8> for DeviceType {
+    type Error = Error;
+
+    fn try_from(byte: u8) -> minipro_core::Result<DeviceType> {
+        match byte {
+            0x06 => Ok(DeviceType::T56),
+            0x07 => Ok(DeviceType::T48),
+            0x08 => Ok(DeviceType::T76),
+            _ => Err(Error::Unsupported(
+                "attached programmer is not a supported model (T48, T56, and T76 are supported)",
+            )),
+        }
+    }
+}
+
 /// Detect the attached programmer and return the matching driver: read the
-/// system-info report, branch on the device-type byte at `msg[6]`, and bind
-/// the matching driver.
+/// system-info report, decode the device-type byte at `msg[6]` into a
+/// [`DeviceType`], and bind the matching driver.
 pub fn detect(
     mut transport: Box<dyn minipro_core::Transport>,
 ) -> minipro_core::Result<Box<dyn minipro_core::Programmer>> {
@@ -36,26 +72,22 @@ pub fn detect(
     if report.len() < 7 {
         return Err(Error::Protocol);
     }
-    match report[6] {
-        // Device-type byte: 6 = T56, 7 = T48, 8 = T76.
-        0x06 => {
+    match DeviceType::try_from(report[6])? {
+        DeviceType::T56 => {
             let mut t56 = t56::T56::new(transport);
             t56.query_info()?;
             Ok(Box::new(t56))
         }
-        0x07 => {
+        DeviceType::T48 => {
             let mut t48 = t48::T48::new(transport);
             t48.query_info()?;
             Ok(Box::new(t48))
         }
-        0x08 => {
+        DeviceType::T76 => {
             let mut t76 = t76::T76::new(transport);
             t76.query_info()?;
             Ok(Box::new(t76))
         }
-        _ => Err(Error::Unsupported(
-            "attached programmer is not a supported model (T48, T56, and T76 are supported)",
-        )),
     }
 }
 

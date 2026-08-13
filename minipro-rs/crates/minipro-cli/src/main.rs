@@ -271,7 +271,26 @@ fn render_error(mode: Mode, op: &'static str, err: &Error) {
     }
 }
 
+/// Install the tracing subscriber (events to stderr, so JSON on stdout stays
+/// clean). `RUST_LOG` has full control; `MINIPRO_TRACE=1` is kept as the
+/// established alias for a full wire trace; default is warnings only.
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+    let filter = if let Ok(spec) = std::env::var("RUST_LOG") {
+        EnvFilter::new(spec)
+    } else if std::env::var_os("MINIPRO_TRACE").is_some() {
+        EnvFilter::new("minipro_proto=trace,minipro_usb=trace")
+    } else {
+        EnvFilter::new("warn")
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
+}
+
 fn main() -> ExitCode {
+    init_tracing();
     let cli = Cli::parse();
     if let Some(u) = cli.db_url.as_deref() {
         std::env::set_var("MINIPRO_DB_URL", u);

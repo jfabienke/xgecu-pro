@@ -50,6 +50,13 @@ impl Format {
 
     /// Sniff the content: first non-whitespace byte `:`→IHex, `S`→SRec, else
     /// Raw. Lets a mislabeled `.bin` that is really hex/srec still parse.
+    ///
+    /// ```
+    /// use minipro_core::format::Format;
+    /// assert_eq!(Format::detect(b":00000001FF\n"), Format::IHex);
+    /// assert_eq!(Format::detect(b"S9030000FC\n"), Format::SRec);
+    /// assert_eq!(Format::detect(&[0xde, 0xad]), Format::Raw);
+    /// ```
     pub fn detect(bytes: &[u8]) -> Format {
         match bytes.iter().find(|b| !b.is_ascii_whitespace()) {
             Some(b':') => Format::IHex,
@@ -60,6 +67,15 @@ impl Format {
 
     /// Parse file bytes into a flat image. `pad` fills gaps between addressed
     /// records (use the chip's blank value; [`PAD`] is the usual `0xFF`).
+    ///
+    /// Round-trips with [`Format::emit`]:
+    /// ```
+    /// use minipro_core::format::{Format, PAD};
+    /// let img = Format::Raw.parse(&[0xde, 0xad, 0xbe, 0xef], PAD).unwrap();
+    /// let hex = Format::IHex.emit(&img);
+    /// let back = Format::IHex.parse(&hex, PAD).unwrap();
+    /// assert_eq!(back.bytes, img.bytes);
+    /// ```
     pub fn parse(self, bytes: &[u8], pad: u8) -> Result<Image> {
         match self {
             Format::Raw => Ok(Image {
@@ -86,7 +102,7 @@ impl Format {
 /// non-hex character.
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
     let s = s.trim();
-    if !s.len().is_multiple_of(2) {
+    if s.len() % 2 != 0 {
         return None;
     }
     let b = s.as_bytes();

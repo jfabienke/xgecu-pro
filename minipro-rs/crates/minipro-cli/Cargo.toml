@@ -9,6 +9,10 @@ name = "minipro-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
 
 [[bin]]
 name = "minipro"
@@ -26,3 +30,4 @@ minipro-usb = { path = "../minipro-usb" }
 owo-colors = "4.3.0"
 ratatui = "0.30.2"
 serde_json.workspace = true
+tracing-subscriber.workspace = true

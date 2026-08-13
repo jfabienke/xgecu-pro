@@ -14,28 +14,29 @@ use crate::device::{ChipId, Device};
 use crate::error::{FwVersion, Result};
 use crate::transport::LinkSpeed;
 
-/// Which optional capabilities a programmer exposes. Must agree with which
-/// accessor methods on [`Programmer`] return `Some` (checked in tests).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Caps(pub u16);
-
-impl Caps {
-    pub const MEMORY: Caps = Caps(1 << 0);
-    pub const FUSES: Caps = Caps(1 << 1);
-    pub const JEDEC: Caps = Caps(1 << 2);
-    pub const EMMC: Caps = Caps(1 << 3);
-    pub const LOGIC: Caps = Caps(1 << 4);
-    pub const PINTEST: Caps = Caps(1 << 5);
-    pub const FWUPDATE: Caps = Caps(1 << 6);
-    pub const CALIBRATION: Caps = Caps(1 << 7);
-    pub const PROTECT: Caps = Caps(1 << 8);
-    pub const AUTODETECT: Caps = Caps(1 << 9);
-
-    pub fn contains(self, c: Caps) -> bool {
-        self.0 & c.0 == c.0
-    }
-    pub fn with(self, c: Caps) -> Caps {
-        Caps(self.0 | c.0)
+bitflags::bitflags! {
+    /// Which optional capabilities a programmer exposes. Must agree with which
+    /// accessor methods on [`Programmer`] return `Some` (checked in tests).
+    ///
+    /// ```
+    /// use minipro_core::programmer::Caps;
+    /// let c = Caps::MEMORY | Caps::FUSES;
+    /// assert!(c.contains(Caps::MEMORY));
+    /// assert!(!c.contains(Caps::JEDEC));
+    /// assert_eq!(Caps::default(), Caps::empty());
+    /// ```
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct Caps: u16 {
+        const MEMORY = 1 << 0;
+        const FUSES = 1 << 1;
+        const JEDEC = 1 << 2;
+        const EMMC = 1 << 3;
+        const LOGIC = 1 << 4;
+        const PINTEST = 1 << 5;
+        const FWUPDATE = 1 << 6;
+        const CALIBRATION = 1 << 7;
+        const PROTECT = 1 << 8;
+        const AUTODETECT = 1 << 9;
     }
 }
 

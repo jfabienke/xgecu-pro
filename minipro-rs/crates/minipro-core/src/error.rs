@@ -104,6 +104,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     /// Stable, non-localized identifier used as the JSON `code` field.
+    ///
+    /// ```
+    /// use minipro_core::error::Error;
+    /// assert_eq!(Error::Protocol.code(), "protocol");
+    /// assert_eq!(Error::Overcurrent.code(), "overcurrent");
+    /// ```
     pub fn code(&self) -> &'static str {
         match self {
             Error::Usb(_) => "usb",

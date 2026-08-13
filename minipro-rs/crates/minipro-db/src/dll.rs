@@ -728,3 +728,21 @@ mod oracle {
         );
     }
 }
+
+/// Property tests: the descriptor field transforms consume 116-byte records
+/// from an untrusted vendor DLL — no input may panic them.
+#[cfg(test)]
+mod prop_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn descriptor_fields_never_panic(d in proptest::collection::vec(any::<u8>(), 116)) {
+            let _ = algo_number(&d);
+            let _ = variant_field(&d);
+            let _ = flags_field(&d);
+            let _ = package_details_field(&d);
+        }
+    }
+}

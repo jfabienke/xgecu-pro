@@ -158,6 +158,11 @@ impl UsbTransport {
 
 impl Transport for UsbTransport {
     fn send(&mut self, ep: Ep, data: &[u8]) -> Result<()> {
+        tracing::trace!(
+            ep = format_args!("{:02x}", ep.0),
+            len = data.len(),
+            "usb out"
+        );
         let endpoint = self.out_ep(ep.0)?;
         let mut buf = Buffer::new(data.len());
         buf.extend_from_slice(data);
@@ -177,6 +182,7 @@ impl Transport for UsbTransport {
     }
 
     fn recv(&mut self, ep: Ep, len: usize) -> Result<Vec<u8>> {
+        tracing::trace!(ep = format_args!("{:02x}", ep.0), len, "usb in");
         if len == 0 {
             return Ok(Vec::new());
         }

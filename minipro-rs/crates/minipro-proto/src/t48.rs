@@ -142,12 +142,7 @@ impl Programmer for T48 {
     fn caps(&self) -> Caps {
         // All firmware-mediated ops. The pin-driver / bit-bang subsystem, the
         // hardware self-test, and firmware update are deferred (see module docs).
-        Caps::MEMORY
-            .with(Caps::FUSES)
-            .with(Caps::JEDEC)
-            .with(Caps::PROTECT)
-            .with(Caps::AUTODETECT)
-            .with(Caps::LOGIC)
+        Caps::MEMORY | Caps::FUSES | Caps::JEDEC | Caps::PROTECT | Caps::AUTODETECT | Caps::LOGIC
     }
 
     /// Begin a transaction: the shared 64-byte header (no

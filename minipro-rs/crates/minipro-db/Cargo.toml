@@ -8,6 +8,10 @@ name = "minipro-db"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
 
 [features]
 default = []
@@ -23,3 +27,6 @@ quick-xml = "0.41.0"
 sha2 = { version = "0.10", optional = true }
 postcard = { version = "1", features = ["use-std"], optional = true }
 ureq = { version = "2", optional = true }
+
+[dev-dependencies]
+proptest.workspace = true

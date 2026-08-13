@@ -1,8 +1,7 @@
-# minipro-rs — Rust redesign of the minipro CLI (scaffold).
+# minipro-rs — a Rust redesign and reimplementation of the minipro CLI.
 #
-# This is a STUB workspace: types and traits from docs/rust-trait-model.md are
-# defined, but operation bodies are `todo!()`. It compiles std-only so it builds
-# offline; each crate documents the real crates it will pull in when implemented.
+# Workspace layering: core (device model, traits, ops) ← proto (drivers) /
+# usb (transport) / db (chip database) ← cli (the `minipro` binary).
 [workspace]
 resolver = "2"
 members = [
@@ -17,15 +16,29 @@ members = [
 version = "0.0.0"
 edition = "2021"
 license = "MIT"
-repository = "https://gitlab.com/nmatt0/minipro"
+repository = "https://github.com/jfabienke/xgecu-pro"
+# Declared floor for this workspace's own code (dependencies may require newer).
+rust-version = "1.85"
 
 # Shared dependency versions. Crates opt in with `dep = { workspace = true }`.
-# Still intended as stubs are implemented (see each crate's header):
-#   nusb, flate2 (miniz_oxide), quick-xml, anyhow, clap, indicatif,
-#   anstream/owo-colors, comfy-table, ratatui, crossterm, postcard, tracing
 [workspace.dependencies]
-thiserror = "2.0"
+bitflags = "2"
+crc32fast = "1.5"
+proptest = "1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-crc32fast = "1.5"
 sha2 = "0.11"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Inherited by every crate via `[lints] workspace = true`.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+# The must-drain `Pending` guard is load-bearing (an undrained response wedges
+# the T76): make ignoring a #[must_use] a hard error, not a warning.
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+todo = "deny"
+dbg_macro = "deny"

@@ -27,6 +27,7 @@ pub fn link_label(link: LinkSpeed) -> &'static str {
         LinkSpeed::Full => "Full Speed (USB 1.1)",
         LinkSpeed::High => "High Speed (USB 2.0)",
         LinkSpeed::Super => "SuperSpeed (USB 3.x)",
+        _ => "unknown link speed",
     }
 }
 

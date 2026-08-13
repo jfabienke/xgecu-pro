@@ -193,12 +193,12 @@ impl Programmer for T56 {
 
     fn caps(&self) -> Caps {
         Caps::MEMORY
-            .with(Caps::CALIBRATION)
-            .with(Caps::FUSES)
-            .with(Caps::JEDEC)
-            .with(Caps::PROTECT)
-            .with(Caps::LOGIC)
-            .with(Caps::AUTODETECT)
+            | Caps::CALIBRATION
+            | Caps::FUSES
+            | Caps::JEDEC
+            | Caps::PROTECT
+            | Caps::LOGIC
+            | Caps::AUTODETECT
     }
 
     /// Begin a transaction: upload the bitstream, send the

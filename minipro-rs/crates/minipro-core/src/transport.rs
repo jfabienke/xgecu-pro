@@ -16,8 +16,12 @@ pub struct Ep(pub u8);
 /// Negotiated USB link speed. `link_speed()` surfaces it because on macOS the
 /// T76's SuperSpeed bulk path fails and we want to diagnose, not guess.
 /// Serializes as the short codes the JSON schema documents: `fs` / `hs` / `ss`.
+///
+/// `#[non_exhaustive]`: newer USB speeds may be added; consumers should keep a
+/// fallback arm rather than match exhaustively.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub enum LinkSpeed {
     #[cfg_attr(feature = "serde", serde(rename = "fs"))]
     Full,
