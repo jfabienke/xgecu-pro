@@ -17,6 +17,7 @@
 
 use minipro_core::caps::{
     Calibration, EmmcOps, FirmwareUpdate, FuseOps, JedecOps, MemoryOps, PinTest, Protect,
+    DEFAULT_BLOCK,
 };
 use minipro_core::device::{
     BlockReq, ChipId, Device, EraseKind, FuseKind, MemoryKind, Partition, Region,
@@ -970,6 +971,18 @@ impl Calibration for T76 {
     }
 }
 
+impl Drop for T76 {
+    /// Match `minipro_close` (minipro.c:466-481): reset the FPGA at the end of
+    /// the session, but only if a bitstream was actually uploaded (the C gates
+    /// on `bitstream_uploaded`). Best-effort — the device may already be gone,
+    /// and the transport (USB) closes when `self.tx` drops right after this.
+    fn drop(&mut self) {
+        if self.uploaded_algo.is_some() {
+            let _ = self.reset_fpga();
+        }
+    }
+}
+
 impl MemoryOps for T76 {
     /// `t76_read_block` (t76.c:875-1002).
     fn read_block(&mut self, s: &Session, req: &BlockReq) -> Result<Vec<u8>> {
@@ -1129,14 +1142,36 @@ impl MemoryOps for T76 {
         }
     }
 
+    /// The T76 streams a whole NAND *erase block* (page+spare × pages/block) or
+    /// one eMMC 64 KiB unit per request — and `nand_read`/`emmc_read` derive the
+    /// block/LBA index from `req.len`. Feeding page-sized requests would
+    /// mis-index and short-read, so those spaces override the default page-size
+    /// stepping (t76.c NAND/eMMC read paths).
+    fn block_size(&self, s: &Session, kind: MemoryKind) -> u32 {
+        const EMMC_UNIT: u32 = 0x1_0000; // 64 KiB (t76.c:906-935)
+        match (s.device.protocol_id, kind) {
+            (ALG_NAND, MemoryKind::Code) => {
+                let wbuf = u32::from(s.device.write_buffer_size);
+                let ppb = u32::from(s.device.pages_per_block);
+                match wbuf.checked_mul(ppb) {
+                    Some(n) if n != 0 => n,
+                    _ => DEFAULT_BLOCK, // geometry missing; nand_read will error
+                }
+            }
+            (ALG_EMMC, MemoryKind::Code) => EMMC_UNIT,
+            _ => match s.device.page_size {
+                0 => DEFAULT_BLOCK,
+                n => n,
+            },
+        }
+    }
+
     /// Blank check by reading back the region and testing for erased flash
     /// (0xff). The T76 has no dedicated blank-check opcode; the C tool reads
-    /// and compares host-side too.
+    /// and compares host-side too. Uses the same operation-specific block size
+    /// as the read loop so NAND/eMMC are stepped correctly.
     fn blank_check(&mut self, s: &Session, region: Region) -> Result<bool> {
-        let step = u64::from(match s.device.page_size {
-            0 => 4096,
-            n => n,
-        });
+        let step = u64::from(self.block_size(s, region.kind));
         let mut done = 0u64;
         while done < region.len {
             let len = step.min(region.len - done) as u32;
@@ -2258,6 +2293,54 @@ mod tests {
         t76.reset_fpga().unwrap();
         // 0x26 af + magic 0xaa55ddee LE (t76.c:864-867).
         assert_eq!(tx.sent(), vec![(0x01, vec![0x26, 0xaf, 0, 0, 0xee, 0xdd, 0x55, 0xaa])]);
+    }
+
+    /// block_size steps by the erase block for NAND, 64 KiB for eMMC, and the
+    /// page size otherwise — so ops.rs drives NAND/eMMC with the unit the
+    /// nand_read/emmc_read index math expects.
+    #[test]
+    fn block_size_is_operation_specific() {
+        let (t76, _tx) = t76_with(vec![]);
+
+        // Normal SPI code memory: page size.
+        let mut dev = device(0x03, Vec::new());
+        dev.page_size = 0x100;
+        let s = Session { device: dev, emmc_capacity: 0 };
+        assert_eq!(t76.block_size(&s, MemoryKind::Code), 0x100);
+
+        // NAND: page(+spare) x pages/block, NOT the page size.
+        let mut dev = device(ALG_NAND, Vec::new());
+        dev.page_size = 0x800;
+        dev.write_buffer_size = 0x840; // 2112 (page + spare)
+        dev.pages_per_block = 64;
+        let s = Session { device: dev, emmc_capacity: 0 };
+        assert_eq!(t76.block_size(&s, MemoryKind::Code), 0x840 * 64);
+
+        // eMMC: a fixed 64 KiB unit.
+        let dev = device(ALG_EMMC, Vec::new());
+        let s = Session { device: dev, emmc_capacity: 0 };
+        assert_eq!(t76.block_size(&s, MemoryKind::Code), 0x1_0000);
+    }
+
+    /// Dropping a T76 that uploaded a bitstream resets the FPGA (minipro.c:473);
+    /// one that never did stays silent.
+    #[test]
+    fn drop_resets_fpga_only_after_upload() {
+        // Uploaded: mark a session, then drop -> a reset_fpga packet is sent.
+        let tx = SharedTx::new(vec![]);
+        {
+            let mut t76 = T76::new(Box::new(tx.clone()));
+            t76.uploaded_algo = Some("SOMEALG".into());
+        } // drop here
+        let sent = tx.sent();
+        assert_eq!(sent.last().map(|(_, p)| p[..2].to_vec()), Some(vec![0x26, 0xaf]));
+
+        // Never uploaded: drop is silent.
+        let tx = SharedTx::new(vec![]);
+        {
+            let _t76 = T76::new(Box::new(tx.clone()));
+        }
+        assert!(tx.sent().is_empty());
     }
 
     // -----------------------------------------------------------------------

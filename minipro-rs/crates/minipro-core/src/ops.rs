@@ -10,17 +10,6 @@ use crate::transport::LinkSpeed;
 
 use sha2::Digest;
 
-/// Block size when the device does not declare a page size.
-const DEFAULT_BLOCK: u32 = 4096;
-
-/// The block size the loops use: the device's page size, or a sane default.
-fn block_len(s: &Session) -> u32 {
-    match s.device.page_size {
-        0 => DEFAULT_BLOCK,
-        n => n,
-    }
-}
-
 /// Read a whole region, looping block requests and reporting progress. This is
 /// where a driver's block-granular [`crate::caps::MemoryOps`] becomes a
 /// user-level "read the chip".
@@ -32,7 +21,7 @@ pub fn read_region(
 ) -> Result<Image> {
     let mem = prog.memory().ok_or(Error::Unsupported("memory ops"))?;
     let total = region.len;
-    let step = u64::from(block_len(s));
+    let step = u64::from(mem.block_size(s, region.kind));
     let mut bytes = Vec::with_capacity(total as usize);
     rep.event(&Event::Progress { done: 0, total });
     let mut done = 0u64;
@@ -125,7 +114,7 @@ pub fn write_region(
     {
         let mem = prog.memory().ok_or(Error::Unsupported("memory ops"))?;
         let total = region.len;
-        let step = u64::from(block_len(s));
+        let step = u64::from(mem.block_size(s, region.kind));
         rep.event(&Event::Progress { done: 0, total });
         let mut done = 0u64;
         while done < total {

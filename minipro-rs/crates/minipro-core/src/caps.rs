@@ -4,9 +4,12 @@
 //! by-value `Self`), block-granular like the C `*_block` functions — the
 //! loop/progress/verification live in [`crate::ops`], written once.
 
-use crate::device::{BlockReq, EraseKind, FuseKind, Partition, Region};
+use crate::device::{BlockReq, EraseKind, FuseKind, MemoryKind, Partition, Region};
 use crate::error::Result;
 use crate::programmer::Session;
+
+/// Fallback block size when a device declares no page size.
+pub const DEFAULT_BLOCK: u32 = 4096;
 
 /// Read/write/erase of a chip's memory spaces.
 pub trait MemoryOps {
@@ -14,6 +17,20 @@ pub trait MemoryOps {
     fn write_block(&mut self, s: &Session, req: &BlockReq, data: &[u8]) -> Result<()>;
     fn erase(&mut self, s: &Session, kind: EraseKind) -> Result<()>;
     fn blank_check(&mut self, s: &Session, region: Region) -> Result<bool>;
+
+    /// The transfer unit the block loop should step by for `kind`. The default
+    /// is the device page size (or [`DEFAULT_BLOCK`]) — correct for byte- and
+    /// page-addressed memory. Drivers whose hardware needs an operation-specific
+    /// unit override this: e.g. the T76 streams one NAND *erase block*
+    /// (page+spare × pages/block) or one eMMC 64 KiB unit per request, and
+    /// derives its block index from that size — so feeding it page-sized
+    /// requests would mis-address and short-read.
+    fn block_size(&self, s: &Session, _kind: MemoryKind) -> u32 {
+        match s.device.page_size {
+            0 => DEFAULT_BLOCK,
+            n => n,
+        }
+    }
 }
 
 /// MCU fuse/config/lock bits. `length` is how many bytes to read back;
