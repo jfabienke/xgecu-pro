@@ -19,6 +19,7 @@
 pub mod caps;
 pub mod device;
 pub mod error;
+pub mod format;
 pub mod ops;
 pub mod programmer;
 pub mod report;

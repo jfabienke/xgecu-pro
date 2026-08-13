@@ -12,7 +12,8 @@ mod tui;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use minipro_core::format::{Format, PAD};
 use minipro_core::device::{EraseKind, Image, Region};
 use minipro_core::error::{Error, Result};
 use minipro_core::ops;
@@ -69,6 +70,40 @@ struct Cli {
     command: Option<Command>,
 }
 
+/// Image file format selector. `Auto` picks by extension (`.hex`→ihex,
+/// `.s19/.srec/…`→srec, else raw); on write it also sniffs the content.
+#[derive(ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Fmt {
+    #[default]
+    Auto,
+    Raw,
+    Ihex,
+    Srec,
+}
+
+impl Fmt {
+    /// The concrete [`Format`] for reading `file` back (output side).
+    fn for_output(self, file: &Path) -> Format {
+        match self {
+            Fmt::Auto => Format::from_path(file),
+            Fmt::Raw => Format::Raw,
+            Fmt::Ihex => Format::IHex,
+            Fmt::Srec => Format::SRec,
+        }
+    }
+    /// The concrete [`Format`] for parsing `file` (input side): `Auto` uses the
+    /// extension, falling back to content sniffing for a mislabeled file.
+    fn for_input(self, file: &Path, bytes: &[u8]) -> Format {
+        match self {
+            Fmt::Auto => match Format::from_path(file) {
+                Format::Raw => Format::detect(bytes),
+                known => known,
+            },
+            other => other.for_output(file),
+        }
+    }
+}
+
 #[derive(Subcommand, Debug, Clone)]
 enum Command {
     /// Read a chip into FILE, with re-read verification (crc32/sha256/stable)
@@ -77,6 +112,9 @@ enum Command {
         chip: String,
         /// Output file for the dump
         file: PathBuf,
+        /// Output format (default: by file extension)
+        #[arg(long, value_enum, default_value_t = Fmt::Auto)]
+        format: Fmt,
         /// Proceed despite a chip-id mismatch
         #[arg(long)]
         force: bool,
@@ -90,6 +128,9 @@ enum Command {
         chip: String,
         /// Image file to program
         file: PathBuf,
+        /// Input format (default: by extension, else sniffed)
+        #[arg(long, value_enum, default_value_t = Fmt::Auto)]
+        format: Fmt,
         /// Proceed despite a chip-id mismatch
         #[arg(long)]
         force: bool,
@@ -156,12 +197,14 @@ impl Cli {
             (Some(chip), Some(file), None) => Ok(Some(Command::Read {
                 chip: chip.clone(),
                 file: file.clone(),
+                format: Fmt::Auto,
                 force: false,
                 skip_pincheck: false,
             })),
             (Some(chip), None, Some(file)) => Ok(Some(Command::Write {
                 chip: chip.clone(),
                 file: file.clone(),
+                format: Fmt::Auto,
                 force: false,
                 skip_pincheck: false,
             })),
@@ -232,11 +275,11 @@ fn main() -> ExitCode {
     let result = match &command {
         Command::Tui => tui::run(cli.db.clone()),
         Command::Search { query, limit } => run_search(db_dir, query, *limit, mode),
-        Command::Read { chip, file, force, skip_pincheck } => {
-            run_read(db_dir, chip, file, *force, *skip_pincheck, &mut *reporter_for(mode))
+        Command::Read { chip, file, format, force, skip_pincheck } => {
+            run_read(db_dir, chip, file, *format, *force, *skip_pincheck, &mut *reporter_for(mode))
         }
-        Command::Write { chip, file, force, skip_pincheck } => {
-            run_write(db_dir, chip, file, *force, *skip_pincheck, &mut *reporter_for(mode))
+        Command::Write { chip, file, format, force, skip_pincheck } => {
+            run_write(db_dir, chip, file, *format, *force, *skip_pincheck, &mut *reporter_for(mode))
         }
         Command::Erase { chip } => run_erase(db_dir, chip, &mut *reporter_for(mode)),
         Command::Info => run_info(db_dir, &mut *reporter_for(mode)),
@@ -357,10 +400,12 @@ fn check_chip_id(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_read(
     db_dir: Option<&Path>,
     chip: &str,
     file: &Path,
+    format: Fmt,
     force: bool,
     skip_pincheck: bool,
     rep: &mut dyn Reporter,
@@ -379,22 +424,45 @@ fn run_read(
         ops::read_verified(p, s, Region::code(&dev), rep)?
     };
 
-    std::fs::write(file, &verified.image.bytes)?;
+    let out = format.for_output(file).emit(&verified.image);
+    std::fs::write(file, &out)?;
     rep.finish(&verified.outcome(&dev.name, link));
     Ok(())
 }
 
+/// Parse `file` in the selected format and fit it to the chip: pad short images
+/// to `code_size` with the erased byte, and reject one larger than the chip.
+fn load_image(file: &Path, format: Fmt, code_size: u64) -> Result<Image> {
+    let raw = std::fs::read(file)?;
+    let mut image = format.for_input(file, &raw).parse(&raw)?;
+    let need = code_size as usize;
+    match image.bytes.len().cmp(&need) {
+        std::cmp::Ordering::Greater => Err(Error::Format(format!(
+            "image is {} bytes but the chip holds {} — too large",
+            image.bytes.len(),
+            need
+        ))),
+        std::cmp::Ordering::Less => {
+            image.bytes.resize(need, PAD); // pad the tail with the erased byte
+            Ok(image)
+        }
+        std::cmp::Ordering::Equal => Ok(image),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_write(
     db_dir: Option<&Path>,
     chip: &str,
     file: &Path,
+    format: Fmt,
     force: bool,
     skip_pincheck: bool,
     rep: &mut dyn Reporter,
 ) -> Result<()> {
     let db = load_db(db_dir)?;
     let dev = lookup_device(&*db, chip)?;
-    let image = Image { bytes: std::fs::read(file)? };
+    let image = load_image(file, format, dev.code_size)?;
     let mut prog = open_programmer()?;
     warn_firmware(&*prog, &*db, rep);
 
@@ -554,6 +622,45 @@ mod tests {
     }
 
     #[test]
+    fn fmt_selection_output_and_input() {
+        // Output side: extension picks the format; explicit overrides win.
+        assert_eq!(Fmt::Auto.for_output(Path::new("d.hex")), Format::IHex);
+        assert_eq!(Fmt::Auto.for_output(Path::new("d.bin")), Format::Raw);
+        assert_eq!(Fmt::Raw.for_output(Path::new("d.hex")), Format::Raw);
+        // Input side: Auto sniffs content when the extension is unknown.
+        assert_eq!(Fmt::Auto.for_input(Path::new("d.dat"), b":00000001FF"), Format::IHex);
+        assert_eq!(Fmt::Auto.for_input(Path::new("d.dat"), &[0, 1, 2]), Format::Raw);
+    }
+
+    #[test]
+    fn load_image_fits_to_chip() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("minipro-fmt-{}.bin", std::process::id()));
+        std::fs::write(&path, [0xaa, 0xbb, 0xcc, 0xdd]).unwrap();
+
+        // Short image is padded to code_size with the erased byte.
+        let img = load_image(&path, Fmt::Raw, 8).unwrap();
+        assert_eq!(img.bytes, vec![0xaa, 0xbb, 0xcc, 0xdd, PAD, PAD, PAD, PAD]);
+
+        // Exact fit is untouched.
+        assert_eq!(load_image(&path, Fmt::Raw, 4).unwrap().bytes, vec![0xaa, 0xbb, 0xcc, 0xdd]);
+
+        // Larger than the chip is rejected.
+        assert_eq!(load_image(&path, Fmt::Raw, 2).unwrap_err().code(), "format");
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn write_accepts_format_flag() {
+        let cli = parse(&["minipro", "write", "AT28C256@DIP28", "img.hex", "--format", "ihex"]);
+        match cli.command.unwrap() {
+            Command::Write { format, .. } => assert_eq!(format, Fmt::Ihex),
+            _ => panic!("expected write"),
+        }
+    }
+
+    #[test]
     fn mode_precedence_tui_beats_json() {
         let tui = Command::Tui;
         assert_eq!(select_mode(Some(&tui), true, Some("json")), Mode::Tui);
@@ -574,7 +681,7 @@ mod tests {
     fn subcommands_parse() {
         let cli = parse(&["minipro", "read", "M27C256B@DIP28", "dump.bin", "--force"]);
         match cli.resolve_command().unwrap().unwrap() {
-            Command::Read { chip, file, force, skip_pincheck } => {
+            Command::Read { chip, file, force, skip_pincheck, .. } => {
                 assert_eq!(chip, "M27C256B@DIP28");
                 assert_eq!(file, PathBuf::from("dump.bin"));
                 assert!(force);
