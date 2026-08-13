@@ -22,11 +22,11 @@
 //!    / EP81 IN, so there is no separate bulk plane and
 //!    none of the T76's must-drain-or-wedge discipline.
 //!
-//! Scope of this increment: identity, begin/end, the `0x26` bitstream upload,
-//! and the MemoryOps core (read/write/erase/blank-check/identify). Fuses,
-//! JEDEC rows, calibration, SPI autodetect, the logic test, and firmware
-//! update are deferred (they need cap-trait plumbing the core doesn't carry
-//! yet); each is a short, self-contained follow-up.
+//! Implemented: identity, begin/end, the `0x26` bitstream upload, the
+//! MemoryOps core (read/write/erase/blank-check/identify), fuses, JEDEC rows,
+//! calibration, SPI autodetect, and the logic test. Firmware update is
+//! deferred (per-device obfuscation-table transcription, unverifiable without
+//! hardware and a real `updateT56.dat`).
 
 use minipro_core::caps::{
     Calibration, FuseOps, JedecOps, LoadBitstream, LogicTest, MemoryOps, Protect, SpiAutodetect,
@@ -206,9 +206,9 @@ impl Programmer for T56 {
     fn begin(&mut self, dev: &Device) -> Result<Session> {
         self.upload_bitstream(dev)?;
 
-        // The shared header — no 0x40.. extension, no msg[24]/msg[63]
-        //. `custom_protocol` (bit-bang) chips are not yet
-        // supported by this driver.
+        // The shared header — no 0x40.. extension, no msg[24]/msg[63].
+        // `custom_protocol` (bit-bang) chips are not yet supported by this
+        // driver.
         let params = ChipParams::from_device(dev);
         let msg = pack_begin64(&params);
         self.send(&msg)?; // sends all 64 bytes, no reply

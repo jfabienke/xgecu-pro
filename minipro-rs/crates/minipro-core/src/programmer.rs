@@ -61,7 +61,6 @@ pub struct ProgrammerInfo {
 pub struct Session {
     pub device: Device,
     pub emmc_capacity: u64,
-    // (algorithm handle / partition state live here in the real impl)
 }
 
 /// A chip programmer. Object-safe and `Send` (the TUI runs ops off-thread).
