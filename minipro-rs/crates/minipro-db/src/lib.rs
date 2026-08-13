@@ -56,6 +56,11 @@ mod net;
 #[cfg(feature = "net")]
 pub use net::HttpDb;
 
+#[cfg(feature = "rar")]
+mod rar;
+#[cfg(feature = "rar")]
+pub use rar::RarDb;
+
 /// The `<database type=…>` section of `infoic.xml` this crate targets.
 const INFOIC_DB_TYPE: &str = "INFOICT76";
 /// The bitstream container in `algorithm.xml` for the T76.

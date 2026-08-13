@@ -388,8 +388,39 @@ fn default_cache_dir() -> PathBuf {
     std::env::temp_dir().join("minipro-cache")
 }
 
+/// Is this the vendor archive rather than an extracted directory?
+fn looks_like_vendor_archive(path: &Path) -> bool {
+    path.is_file()
+        && matches!(
+            path.extension()
+                .and_then(|e| e.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref(),
+            Some("rar") | Some("exe")
+        )
+}
+
+/// Open the vendor archive directly (`rar` feature), or explain how to extract
+/// it when the feature is off.
+#[cfg(feature = "rar")]
+fn load_archive_db(path: &Path) -> Result<Box<dyn ChipDb>> {
+    Ok(Box::new(minipro_db::RarDb::open(path)?))
+}
+
+#[cfg(not(feature = "rar"))]
+fn load_archive_db(path: &Path) -> Result<Box<dyn ChipDb>> {
+    Err(Error::Format(format!(
+        "{} is a vendor archive; this build cannot read one directly. \
+         Extract it (`unar {0}`, then `unar` the .exe it produces — use unar, not \
+         7z, which silently writes 0-byte files) and pass the directory, or \
+         rebuild with `--features rar`.",
+        path.display()
+    )))
+}
+
 /// Load the chip database. Precedence: `--db-url` (mirror; persists the derived
-/// catalog + bitstreams, never the DLL) > a `--db` directory with
+/// catalog + bitstreams, never the DLL) > a `--db` **vendor archive** (`.rar` /
+/// SFX `.exe`, read in place with the `rar` feature) > a `--db` directory with
 /// `InfoICT76.dll` (native `DllDb`) > `infoic.xml` (`XmlDb`).
 fn load_db(dir: Option<&Path>) -> Result<Box<dyn ChipDb>> {
     if let Ok(url) = std::env::var("MINIPRO_DB_URL") {
@@ -400,9 +431,13 @@ fn load_db(dir: Option<&Path>) -> Result<Box<dyn ChipDb>> {
     }
     let dir = dir.ok_or_else(|| {
         Error::Format(
-            "no chip database: pass --db <dir>, set MINIPRO_DB_DIR, or --db-url <mirror>".into(),
+            "no chip database: pass --db <dir or vendor .rar>, set MINIPRO_DB_DIR, or --db-url <mirror>"
+                .into(),
         )
     })?;
+    if looks_like_vendor_archive(dir) {
+        return load_archive_db(dir);
+    }
     if dir.join("InfoICT76.dll").is_file() {
         Ok(Box::new(DllDb::load(dir)?))
     } else {

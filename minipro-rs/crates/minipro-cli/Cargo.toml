@@ -18,6 +18,12 @@ workspace = true
 name = "minipro"
 path = "src/main.rs"
 
+[features]
+default = []
+# Read the chip DB straight from the vendor .rar / SFX .exe. Off by default:
+# links unrar (not MIT, C++). See minipro-db's `rar` feature.
+rar = ["minipro-db/rar"]
+
 [dependencies]
 anstream = "1.0.0"
 clap = { version = "4.6.6", features = ["derive", "env"] }

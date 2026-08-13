@@ -18,6 +18,11 @@ default = []
 # `net`: the CachedDb backend that provisions InfoICT76.dll + .alg files from a
 # mirror over HTTP(S), cached locally. Opt-in so the core stays dependency-lean.
 net = ["dep:ureq", "dep:sha2", "dep:postcard"]
+# `rar`: read the chip database straight out of the vendor .rar / SFX .exe, with
+# nothing unpacked to disk. Off by default — it links **unrar**, which is not
+# MIT (it permits decompression but forbids building a RAR compressor from the
+# source), and pulls in a C++ dependency. The default build stays pure Rust.
+rar = ["dep:unrar", "dep:tempfile"]
 
 [dependencies]
 base64 = "0.23.1"
@@ -27,6 +32,8 @@ quick-xml = "0.41.0"
 sha2 = { version = "0.10", optional = true }
 postcard = { version = "1", features = ["use-std"], optional = true }
 ureq = { version = "2", optional = true }
+unrar = { version = "0.5", optional = true }
+tempfile = { version = "3", optional = true }
 
 [dev-dependencies]
 proptest.workspace = true

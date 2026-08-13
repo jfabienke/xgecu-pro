@@ -67,9 +67,24 @@ unar Xgpro_T76_V1321.exe        # → InfoICT76.dll + algoT76/*.alg
 > it — it exits with `Unsupported Method` and leaves **0-byte files** that look
 > like a successful extraction.
 
-Alternatively `--db-url <URL>` provisions from a mirror serving the extracted
-files; the proprietary DLL is fetched to RAM and never persisted, only the
-derived catalog and bitstreams are cached.
+Two ways to skip the manual extraction:
+
+- **`--db-url <URL>`** provisions from a mirror serving the extracted files. The
+  proprietary DLL is fetched to RAM and never persisted; only the derived
+  catalog and bitstreams are cached.
+- **`--features rar`** reads the vendor archive *in place* — point `--db`
+  straight at the `.rar` or the `.exe`:
+
+  ```sh
+  cargo build --release --features rar
+  minipro --db ~/Downloads/xgpro_T76_V1321.rar search 27C256
+  ```
+
+  Nothing is unpacked to disk: the DLL and each bitstream are decompressed into
+  memory on demand (~0.3 s for the catalog, ~10 ms per bitstream). This is
+  **off by default** because it links [unrar](https://www.rarlab.com/), which is
+  not MIT and not pure Rust — enabling it puts unrar's terms on your binary,
+  while the default build stays MIT-clean and C-free.
 
 ## What it does
 

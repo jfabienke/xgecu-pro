@@ -67,7 +67,7 @@ Every non-✅ cell is principled, not an oversight:
 | `minipro-core` | Device model, `Transport`/`Programmer` + capability traits, `Reporter`, typed `Error`, op orchestration. Object-safe capability upcasts; the must-drain `Pending` guard. |
 | `minipro-proto` | Per-programmer drivers (`t76.rs`, `t56.rs`, `t48.rs`), the shared `wire.rs` (II+-class header + shared ops), and `detect()`. |
 | `minipro-usb` | `UsbTransport` (over `nusb`) + `MockTransport` for hardware-free tests. |
-| `minipro-db` | `ChipDb` trait with three backends: `XmlDb` (infoic.xml), `DllDb` (parses `InfoICT76.dll` directly), and `HttpDb` (`net` feature — provisions the DLL from a mirror into RAM, persists only the derived catalog + `.alg` bitstreams, daily version check). |
+| `minipro-db` | `ChipDb` trait with four backends: `XmlDb` (infoic.xml), `DllDb` (parses `InfoICT76.dll` directly), `HttpDb` (`net` feature — provisions the DLL from a mirror into RAM, persists only the derived catalog + `.alg` bitstreams, daily version check), and `RarDb` (`rar` feature — reads the vendor `.rar`/SFX `.exe` in place, decompressing to memory, persisting nothing; links unrar, so off by default). |
 | `minipro-cli` | The `minipro` binary: human / JSON / TUI reporters, mode selection. |
 
 ## Design in three lines
