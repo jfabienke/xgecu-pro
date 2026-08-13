@@ -22,8 +22,7 @@ cargo clippy --all-targets
 Three programmer drivers sit behind one `Programmer` trait; `detect()` dispatches
 on the system-info device-type byte (`MP_T56=6`, `MP_T48=7`, `MP_T76=8`).
 
-Legend: ✅ implemented ・ 🔷 blocked on FPGA utility-bitstream plumbing ・
-⬜ deferred (see below) ・ ➖ N/A for that hardware
+Legend: ✅ implemented ・ ⬜ deferred (see below) ・ ➖ N/A for that hardware
 
 | Capability | T76 | T56 | T48 |
 |---|:--:|:--:|:--:|
@@ -32,8 +31,8 @@ Legend: ✅ implemented ・ 🔷 blocked on FPGA utility-bitstream plumbing ・
 | JEDEC rows (PLD/GAL) | ✅ | ✅ | ✅ |
 | Protect on / off | ✅ | ✅ | ✅ |
 | Calibration readout | ✅ | ✅ | ➖ |
-| Logic-IC test | 🔷 | 🔷 | ✅ |
-| SPI 25-series autodetect | 🔷 | 🔷 | ✅ |
+| Logic-IC test | ✅ | ✅ | ✅ |
+| SPI 25-series autodetect | ✅ | ✅ | ✅ |
 | Firmware update | ✅ | ⬜ | ⬜ |
 | eMMC / NAND | ✅ | ➖ | ➖ |
 | Pin-contact test | ✅ | ➖ | ➖ |
@@ -41,17 +40,14 @@ Legend: ✅ implemented ・ 🔷 blocked on FPGA utility-bitstream plumbing ・
 
 The fuse/JEDEC/protect/calibration commands are byte-identical across the lineage
 and run on EP01/EP81 with no bitstream, so they are implemented once in
-`wire.rs` and every driver delegates.
+`wire.rs` and every driver delegates. Logic test and autodetect share the same
+vector/probe loop in `wire.rs`; on the FPGA drivers they fetch their utility
+bitstreams (`TestLgcPull`, `TTL1`, `SPI25F*`) by name from `algoT76/`, per pass.
 
 Every non-✅ cell is principled, not an oversight:
 
 - **➖** is hardware-appropriate: eMMC/NAND/pin-test are T76-only silicon; the
   pin-driver subsystem is a T48/TL866 feature; the T48 has no calibration op.
-- **🔷** is one well-defined unit: logic test and SPI autodetect on the FPGA
-  drivers (T56/T76) need a utility-algorithm bitstream uploaded first
-  (`TTL1/2`, `TestLgcPull/Down`, `SPI25F*`). The vector/probe wire protocol is
-  already shared; what's missing is DB plumbing to fetch utility algorithms by
-  name. That single task unblocks both ops on both drivers.
 - **⬜** is deferred with reason: firmware update is per-device obfuscation-table
   transcription, unverifiable without hardware and a real `updateT*.dat` (the
   T76 port is the template); the T48 pin-driver/bit-bang/self-test cluster is
@@ -88,20 +84,21 @@ against the hardware-verified T76 goldens.
 
 ## Remaining work
 
-1. **FPGA utility-bitstream plumbing** — unblocks logic test + SPI autodetect on
-   T56/T76 (the 🔷 cells).
-2. **TL866II+ driver** — II+-class, close to the T48 shape (EP02 bulk,
+1. **TL866II+ driver** — II+-class, close to the T48 shape (EP02 bulk,
    fixed-silicon).
-3. **TL866A/CS driver** — the outlier: 24-bit addressing, alternate opcode space,
+2. **TL866A/CS driver** — the outlier: 24-bit addressing, alternate opcode space,
    latch-based ZIF model, no digital voltage control.
-4. **Firmware update** (per-device, obfuscation-table transcription).
-5. **Remaining DB fidelity**: GAL/PLD `config` (fuse-map geometry) and the
+3. **Firmware update** (per-device, obfuscation-table transcription).
+4. **Remaining DB fidelity**: GAL/PLD `config` (fuse-map geometry) and the
    host-side `pin_map` package tables. (The `chip_type`/`blank_value` fields,
    the `logicic.xml` vector parser, and the `catalog.postcard` schema-version
    header are done. A compiled/baked-in DB was considered and dropped —
    direct-to-source via `DllDb`/`HttpDb` is better.)
-6. A **CLI `logic` command** to exercise the logic test now that the DB supplies
-   vectors.
+
+The FPGA logic test and SPI autodetect are **done** on T56/T76 — the driver ops
+fetch their utility bitstreams (`TestLgcPull`, `TTL1`, `SPI25F*`) by name from
+the same `algoT76/` source as chip bitstreams, and the CLI exposes them as
+`minipro logic <chip>` and `minipro autodetect [--wide]`.
 
 ## Non-goals
 
