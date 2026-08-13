@@ -44,8 +44,8 @@ const MFC_SHORT_NAME: usize = 0x08; // char[20]
 const MFC_IC_PTR: usize = 0x44; // u32 VA -> this vendor's Ic array
 const MFC_NUM_ICS: usize = 0x48; // u32
 const IC_NAME: usize = 0x0c; // char[40]
-// Remaining descriptor field offsets are used directly in `decode_ic`
-// (used by `decode_ic`), documented in docs/infoict76-dll-format.md.
+                             // Remaining descriptor field offsets are used directly in `decode_ic`
+                             // (used by `decode_ic`), documented in docs/infoict76-dll-format.md.
 
 /// A minimally-parsed PE image: just enough to map virtual addresses to file
 /// offsets and read the data sections.
@@ -90,7 +90,11 @@ impl Pe {
             let roff = rd32(o + 20);
             sections.push((vaddr, vsize, roff, rsize));
         }
-        Ok(Pe { data, image_base, sections })
+        Ok(Pe {
+            data,
+            image_base,
+            sections,
+        })
     }
 
     /// Map a relative virtual address to a file offset, if backed by file data.
@@ -142,7 +146,12 @@ impl DllDb {
     pub fn load(dir: &Path) -> Result<Self> {
         let (devices, index) = parse_dll(std::fs::read(dir.join("InfoICT76.dll"))?)?;
         let (algo_dir, algo_path) = locate_bitstreams(dir);
-        Ok(DllDb { devices, index, algo_dir, algo_path })
+        Ok(DllDb {
+            devices,
+            index,
+            algo_dir,
+            algo_path,
+        })
     }
 
     /// Parse the catalog from in-memory DLL bytes, with **no on-disk bitstream
@@ -150,7 +159,12 @@ impl DllDb {
     /// [`crate::HttpDb`]). Nothing touches disk.
     pub fn from_dll_bytes(bytes: Vec<u8>) -> Result<Self> {
         let (devices, index) = parse_dll(bytes)?;
-        Ok(DllDb { devices, index, algo_dir: None, algo_path: None })
+        Ok(DllDb {
+            devices,
+            index,
+            algo_dir: None,
+            algo_path: None,
+        })
     }
 
     /// Build from an already-parsed catalog (e.g. a persisted postcard blob),
@@ -161,7 +175,12 @@ impl DllDb {
         for (i, d) in devices.iter().enumerate() {
             index.entry(d.name.to_ascii_uppercase()).or_insert(i);
         }
-        DllDb { devices, index, algo_dir: None, algo_path: None }
+        DllDb {
+            devices,
+            index,
+            algo_dir: None,
+            algo_path: None,
+        }
     }
 
     pub fn devices(&self) -> &[Device] {
@@ -171,7 +190,9 @@ impl DllDb {
 
 impl ChipDb for DllDb {
     fn get(&self, name: &str) -> Option<&Device> {
-        self.index.get(&name.to_ascii_uppercase()).map(|&i| &self.devices[i])
+        self.index
+            .get(&name.to_ascii_uppercase())
+            .map(|&i| &self.devices[i])
     }
     fn search(&self, query: &str, limit: usize) -> Search<'_> {
         let needle = query.to_ascii_uppercase();
@@ -186,7 +207,11 @@ impl ChipDb for DllDb {
             }
         }
         let truncated = total > hits.len();
-        Search { total, hits, truncated }
+        Search {
+            total,
+            hits,
+            truncated,
+        }
     }
     fn firmware_target(&self) -> FwVersion {
         T76_FW_TARGET
@@ -238,7 +263,9 @@ fn extract(pe: &Pe) -> Result<Vec<Device>> {
         m += MFC_STRIDE;
     }
     if devices.is_empty() {
-        return Err(Error::Format("manufacturer table yielded no devices".into()));
+        return Err(Error::Format(
+            "manufacturer table yielded no devices".into(),
+        ));
     }
     Ok(devices)
 }
@@ -250,7 +277,11 @@ fn valid_mfc(pe: &Pe, m: usize) -> bool {
     if m + MFC_STRIDE > pe.data.len() {
         return false;
     }
-    let Some(short) = pe.data.get(m + MFC_SHORT_NAME..m + MFC_SHORT_NAME + 20).and_then(ascii) else {
+    let Some(short) = pe
+        .data
+        .get(m + MFC_SHORT_NAME..m + MFC_SHORT_NAME + 20)
+        .and_then(ascii)
+    else {
         return false;
     };
     if short.len() < 2 {
@@ -262,7 +293,11 @@ fn valid_mfc(pe: &Pe, m: usize) -> bool {
     }
     let ptr = pe.u32(m + MFC_IC_PTR).unwrap_or(0);
     match pe.va_off(ptr) {
-        Some(ic0) => pe.data.get(ic0 + IC_NAME..ic0 + IC_NAME + 40).and_then(ascii).is_some(),
+        Some(ic0) => pe
+            .data
+            .get(ic0 + IC_NAME..ic0 + IC_NAME + 40)
+            .and_then(ascii)
+            .is_some(),
         None => false,
     }
 }
@@ -332,38 +367,88 @@ fn algo_tree(proto: u8, d34: u8, size: u32, fam: u32, d50: u8) -> Option<u8> {
         1 => {
             let a = d50 & 0xf; // proto 2 MW93ALG
             if d34 & 0x80 == 0 {
-                if fm == 0xf600_0000 { Some(0x92) } else if a == 2 { Some(0x2A) } else { Some(0x21) }
+                if fm == 0xf600_0000 {
+                    Some(0x92)
+                } else if a == 2 {
+                    Some(0x2A)
+                } else {
+                    Some(0x21)
+                }
             } else if fm == 0xf600_0000 {
                 Some(0x91)
             } else if d34 & 0x20 != 0 {
-                Some(match a { 1 => 0x69, 2 => 0x68, _ => 0x67 })
+                Some(match a {
+                    1 => 0x69,
+                    2 => 0x68,
+                    _ => 0x67,
+                })
             } else {
-                Some(match a { 1 => 0x2B, 2 => 0x1A, _ => 0x11 })
+                Some(match a {
+                    1 => 0x2B,
+                    2 => 0x1A,
+                    _ => 0x11,
+                })
             }
         }
         2 | 0xe => {
             let cl = d34 & 3; // proto 3 / 0xf SPI25F
             if d34 & 0xf0 == 0x20 {
-                match cl { 3 => Some(0x20), 2 => Some(0x21), _ => None }
+                match cl {
+                    3 => Some(0x20),
+                    2 => Some(0x21),
+                    _ => None,
+                }
             } else {
-                match cl { 3 => Some(0x10), 2 => Some(0x11), 1 => Some(0x12), 0 => Some(0x13), _ => None }
+                match cl {
+                    3 => Some(0x10),
+                    2 => Some(0x11),
+                    1 => Some(0x12),
+                    0 => Some(0x13),
+                    _ => None,
+                }
             }
         }
         4 => Some(if fam == 5 { 0x76 } else { 0x75 }), // proto 5 F29EE
         5 => {
-            if d34 & 0x80 != 0 { Some(if fam == 5 { 0x73 } else { 0x71 }) } // proto 6 W29F32P
-            else if fam == 5 { Some(0x72) } else if size == 0x80000 { Some(0x70) } else { Some(0x71) }
+            if d34 & 0x80 != 0 {
+                Some(if fam == 5 { 0x73 } else { 0x71 })
+            }
+            // proto 6 W29F32P
+            else if fam == 5 {
+                Some(0x72)
+            } else if size == 0x80000 {
+                Some(0x70)
+            } else {
+                Some(0x71)
+            }
         }
         6 => {
-            if d34 & 0x10 == 0 { Some(0x41) } // proto 7 ROM28P
-            else if size == 0x10000 { Some(0x31) }
-            else if size == 0x8000 { Some(0x32) }
-            else { Some(0x33) }
+            if d34 & 0x10 == 0 {
+                Some(0x41)
+            }
+            // proto 7 ROM28P
+            else if size == 0x10000 {
+                Some(0x31)
+            } else if size == 0x8000 {
+                Some(0x32)
+            } else {
+                Some(0x33)
+            }
         }
         7 => Some(if fam != 5 {
-            match d34 { 4 => 0x12, 3 => 0x13, 2 => 0x14, _ => 0x11 } // proto 8 ROM32P
+            match d34 {
+                4 => 0x12,
+                3 => 0x13,
+                2 => 0x14,
+                _ => 0x11,
+            } // proto 8 ROM32P
         } else {
-            match d34 { 4 => 0x22, 3 => 0x23, 2 => 0x24, _ => 0x21 }
+            match d34 {
+                4 => 0x22,
+                3 => 0x23,
+                2 => 0x24,
+                _ => 0x21,
+            }
         }),
         8 => match fam {
             0x2800_0000 => Some(if size == 0x80000 { 0x2A } else { 0x1A }), // proto 9 ROM40P
@@ -372,24 +457,61 @@ fn algo_tree(proto: u8, d34: u8, size: u32, fam: u32, d50: u8) -> Option<u8> {
             _ => None,
         },
         9 => {
-            if d34 & 0x80 != 0 { Some(0x42) } // proto 0xa R28TO32P
-            else if size == 0x10000 { Some(0x34) } else if size == 0x8000 { Some(0x35) } else { Some(0x36) }
+            if d34 & 0x80 != 0 {
+                Some(0x42)
+            }
+            // proto 0xa R28TO32P
+            else if size == 0x10000 {
+                Some(0x34)
+            } else if size == 0x8000 {
+                Some(0x35)
+            } else {
+                Some(0x36)
+            }
         }
         0xa => {
-            if d34 & 0x10 != 0 { Some(0x43) } else if size == 0x800 { Some(0x3A) } else { Some(0x3B) }
+            if d34 & 0x10 != 0 {
+                Some(0x43)
+            } else if size == 0x800 {
+                Some(0x3A)
+            } else {
+                Some(0x3B)
+            }
         }
         0xc => Some(if fam == 5 { 0x45 } else { 0x44 }), // proto 0xd EE28C32P
-        0xd => Some(0x50),                                // proto 0xe RAM32
+        0xd => Some(0x50),                               // proto 0xe RAM32
         0xf => Some(match d34 {
-            0x10 | 0x11 => if fam == 5 { 0x7E } else { 0x7B }, // proto 0x10 28F32P
-            0x12 => if fam == 5 { 0x7F } else { 0x7C },
-            _ => if fam == 5 { 0x7D } else { 0x7A },
+            0x10 | 0x11 => {
+                if fam == 5 {
+                    0x7E
+                } else {
+                    0x7B
+                }
+            } // proto 0x10 28F32P
+            0x12 => {
+                if fam == 5 {
+                    0x7F
+                } else {
+                    0x7C
+                }
+            }
+            _ => {
+                if fam == 5 {
+                    0x7D
+                } else {
+                    0x7A
+                }
+            }
         }),
         0x10 => {
             let a = d34 & 0xf; // proto 0x11 FWH
-            if fam == 5 { Some(if a == 1 { 0x92 } else { 0x94 }) }
-            else if fam == 3 { Some(if a == 1 { 0x95 } else { 0x96 }) }
-            else { Some(if a == 1 { 0x91 } else { 0x93 }) }
+            if fam == 5 {
+                Some(if a == 1 { 0x92 } else { 0x94 })
+            } else if fam == 3 {
+                Some(if a == 1 { 0x95 } else { 0x96 })
+            } else {
+                Some(if a == 1 { 0x91 } else { 0x93 })
+            }
         }
         _ => Some(0),
     }
@@ -413,8 +535,8 @@ fn variant_field(d: &[u8]) -> Option<u16> {
 fn flags_field(d: &[u8]) -> u32 {
     let v = u32le(d, 0x70);
     match d[0x00] {
-        0x2d => v,          // NAND (minipro re-ORs 0x800 at send time)
-        0x31 => v & !0x20,  // eMMC: clear has_chip_id
+        0x2d => v,         // NAND (minipro re-ORs 0x800 at send time)
+        0x31 => v & !0x20, // eMMC: clear has_chip_id
         1 => v | if d[0x50] == 0 { 0x100000 } else { 0 },
         2 => v | if d[0x34] & 0x20 == 0 { 0x100000 } else { 0 },
         3 => {
@@ -432,8 +554,17 @@ fn flags_field(d: &[u8]) -> u32 {
 /// Package-details field: `desc[0x6c]` + the family-signature OR.
 fn package_details_field(d: &[u8]) -> u32 {
     let v = u32le(d, 0x6c);
-    let fam_or = match d[0x00] { 1 => 0xb00, 2 => 0xa00, 3 => 0x900, _ => 0 };
-    if fam_or != 0 && (v & 0xff00) != 0x500 { v | fam_or } else { v }
+    let fam_or = match d[0x00] {
+        1 => 0xb00,
+        2 => 0xa00,
+        3 => 0x900,
+        _ => 0,
+    };
+    if fam_or != 0 && (v & 0xff00) != 0x500 {
+        v | fam_or
+    } else {
+        v
+    }
 }
 
 /// Decode a 116-byte chip descriptor into a [`Device`]. Returns
@@ -451,12 +582,17 @@ fn decode_ic(pe: &Pe, ic: usize) -> Option<Device> {
 
     // chip_id: fold `chip_id_bytes` bytes big-endian from 0x5c (M27C256B 0x208d, W25Q64BV 0xef4017).
     let id_len = (u32le(d, 0x64).min(4)) as usize;
-    let chip_id = d[0x5c..0x5c + id_len].iter().fold(0u32, |a, &b| (a << 8) | u32::from(b));
+    let chip_id = d[0x5c..0x5c + id_len]
+        .iter()
+        .fold(0u32, |a, &b| (a << 8) | u32::from(b));
     let package_details = package_details_field(d);
     let pins = pin_count(package_details);
 
     Some(Device {
-        package: Package { pin_count: pins, name: package_name(&name, pins) },
+        package: Package {
+            pin_count: pins,
+            name: package_name(&name, pins),
+        },
         chip_id_bytes: id_bytes_count(chip_id),
         name,
         protocol_id: d[0x00],
@@ -498,7 +634,9 @@ mod tests {
     /// Opt-in: extract the real DLL. `MINIPRO_DLL_DIR=/tmp/dlldb-test cargo test -p minipro-db real_dll`
     #[test]
     fn real_dll_catalog() {
-        let Ok(dir) = std::env::var("MINIPRO_DLL_DIR") else { return };
+        let Ok(dir) = std::env::var("MINIPRO_DLL_DIR") else {
+            return;
+        };
         let db = DllDb::load(Path::new(&dir)).unwrap();
         println!("DllDb extracted {} devices", db.devices().len());
         assert!(db.devices().len() > 30_000, "got {}", db.devices().len());
@@ -531,9 +669,10 @@ mod oracle {
     /// `MINIPRO_DLL_DIR=/tmp/dlldb-test MINIPRO_XML_DIR=/path/to/xgpro-db cargo test -p minipro-db oracle -- --nocapture`
     #[test]
     fn dll_vs_xml_oracle() {
-        let (Ok(dll_dir), Ok(xml_dir)) =
-            (std::env::var("MINIPRO_DLL_DIR"), std::env::var("MINIPRO_XML_DIR"))
-        else {
+        let (Ok(dll_dir), Ok(xml_dir)) = (
+            std::env::var("MINIPRO_DLL_DIR"),
+            std::env::var("MINIPRO_XML_DIR"),
+        ) else {
             return;
         };
         let dll = DllDb::load(Path::new(&dll_dir)).unwrap();
@@ -559,7 +698,9 @@ mod oracle {
         let mut agree = vec![0usize; fields.len()];
         let mut shared = 0usize;
         for dd in dll.all() {
-            let Some(xd) = xml.get(&dd.name) else { continue };
+            let Some(xd) = xml.get(&dd.name) else {
+                continue;
+            };
             shared += 1;
             for (i, (_, f)) in fields.iter().enumerate() {
                 if f(dd) == f(xd) {
@@ -569,11 +710,18 @@ mod oracle {
         }
         println!("\n=== DLL vs XML oracle: {shared} shared chips ===");
         for (i, (name, _)) in fields.iter().enumerate() {
-            println!("  {name:16} {:6.2}%  ({}/{shared})", 100.0 * agree[i] as f64 / shared as f64, agree[i]);
+            println!(
+                "  {name:16} {:6.2}%  ({}/{shared})",
+                100.0 * agree[i] as f64 / shared as f64,
+                agree[i]
+            );
         }
         assert!(shared > 20_000, "too few shared chips: {shared}");
         // variant (the algo!) must be essentially perfect — that's the whole point.
         let variant_pct = 100.0 * agree[0] as f64 / shared as f64;
-        assert!(variant_pct > 90.0, "variant/algo agreement too low: {variant_pct:.1}%");
+        assert!(
+            variant_pct > 90.0,
+            "variant/algo agreement too low: {variant_pct:.1}%"
+        );
     }
 }

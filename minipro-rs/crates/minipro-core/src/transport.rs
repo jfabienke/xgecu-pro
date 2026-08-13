@@ -70,5 +70,9 @@ pub fn command<'t>(
     resp_len: usize,
 ) -> Result<Pending<'t>> {
     tx.send(out, pkt)?;
-    Ok(Pending { tx, ep: r#in, len: resp_len })
+    Ok(Pending {
+        tx,
+        ep: r#in,
+        len: resp_len,
+    })
 }

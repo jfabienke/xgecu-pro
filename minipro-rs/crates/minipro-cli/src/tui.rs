@@ -92,9 +92,9 @@ impl App {
                 }
                 Err(e) => app.push_log(format!("chip DB load failed: {e}")),
             },
-            None => app.push_log(
-                "no chip database (pass --db <dir> or set MINIPRO_DB_DIR)".to_string(),
-            ),
+            None => {
+                app.push_log("no chip database (pass --db <dir> or set MINIPRO_DB_DIR)".to_string())
+            }
         }
         app
     }
@@ -122,7 +122,11 @@ impl App {
             UiMsg::BadContact(open) => {
                 for (i, pin) in self.pins.iter_mut().enumerate() {
                     let number = (i + 1) as u8;
-                    *pin = if open.contains(&number) { PinState::Bad } else { PinState::Good };
+                    *pin = if open.contains(&number) {
+                        PinState::Bad
+                    } else {
+                        PinState::Good
+                    };
                 }
                 self.push_log(format!("bad contact on pins {open:?}"));
             }
@@ -210,12 +214,15 @@ impl App {
         let db = self.db.as_ref().ok_or("no chip database loaded")?;
         let selected = self.list_state.selected().ok_or("select a chip first")?;
         let name = self.hits.get(selected).ok_or("selection out of range")?;
-        let mut dev =
-            db.get(name).cloned().ok_or("selected chip vanished from the database")?;
+        let mut dev = db
+            .get(name)
+            .cloned()
+            .ok_or("selected chip vanished from the database")?;
         // Without this the FPGA drivers' `begin()` fails with "no bitstream
         // loaded" — the exact gap the TUI had.
-        dev.algorithm =
-            db.load_algorithm(&dev).map_err(|e| format!("algorithm load failed: {e}"))?;
+        dev.algorithm = db
+            .load_algorithm(&dev)
+            .map_err(|e| format!("algorithm load failed: {e}"))?;
         Ok((dev, db.firmware_target()))
     }
 
@@ -324,8 +331,10 @@ impl App {
         self.draw_hex(frame, hex_area);
         self.draw_log(frame, log_area);
         frame.render_widget(
-            Paragraph::new(" [q]/[Esc] quit · [c] connect · [↑↓] select · [Enter] read · type to search")
-                .style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new(
+                " [q]/[Esc] quit · [c] connect · [↑↓] select · [Enter] read · type to search",
+            )
+            .style(Style::default().fg(Color::DarkGray)),
             help_area,
         );
     }
@@ -355,7 +364,11 @@ impl App {
         } else {
             " chips · no database loaded ".to_string()
         };
-        let items: Vec<ListItem> = self.hits.iter().map(|n| ListItem::new(n.as_str())).collect();
+        let items: Vec<ListItem> = self
+            .hits
+            .iter()
+            .map(|n| ListItem::new(n.as_str()))
+            .collect();
         let list = List::new(items)
             .block(Block::default().borders(Borders::ALL).title(title))
             .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
@@ -365,15 +378,22 @@ impl App {
 
     fn draw_zif(&self, frame: &mut Frame, area: Rect) {
         frame.render_widget(
-            Paragraph::new(zif_lines(&self.pins))
-                .block(Block::default().borders(Borders::ALL).title(" ZIF-40 contact ")),
+            Paragraph::new(zif_lines(&self.pins)).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" ZIF-40 contact "),
+            ),
             area,
         );
     }
 
     fn draw_gauge(&self, frame: &mut Frame, area: Rect) {
         let (done, total) = self.progress.unwrap_or((0, 0));
-        let ratio = if total == 0 { 0.0 } else { (done as f64 / total as f64).clamp(0.0, 1.0) };
+        let ratio = if total == 0 {
+            0.0
+        } else {
+            (done as f64 / total as f64).clamp(0.0, 1.0)
+        };
         let label = if total == 0 {
             "idle".to_string()
         } else {
@@ -397,11 +417,13 @@ impl App {
                 Style::default().fg(Color::DarkGray),
             ))]
         } else {
-            hex_rows(&self.hex, rows).into_iter().map(Line::from).collect()
+            hex_rows(&self.hex, rows)
+                .into_iter()
+                .map(Line::from)
+                .collect()
         };
         frame.render_widget(
-            Paragraph::new(text)
-                .block(Block::default().borders(Borders::ALL).title(" hex ")),
+            Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" hex ")),
             area,
         );
     }
@@ -409,7 +431,10 @@ impl App {
     fn draw_log(&self, frame: &mut Frame, area: Rect) {
         let visible = area.rows().count().saturating_sub(2);
         let start = self.log.len().saturating_sub(visible);
-        let lines: Vec<Line> = self.log[start..].iter().map(|l| Line::from(l.as_str())).collect();
+        let lines: Vec<Line> = self.log[start..]
+            .iter()
+            .map(|l| Line::from(l.as_str()))
+            .collect();
         frame.render_widget(
             Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" log ")),
             area,
@@ -429,8 +454,13 @@ fn zif_lines(pins: &[PinState; 40]) -> Vec<Line<'static>> {
         };
         Span::styled(format!("{number:>3}"), style)
     }
-    let top: Vec<Span> = (1..=20).map(|n| pin_span(n, pins[n as usize - 1])).collect();
-    let bottom: Vec<Span> = (21..=40).rev().map(|n| pin_span(n, pins[n as usize - 1])).collect();
+    let top: Vec<Span> = (1..=20)
+        .map(|n| pin_span(n, pins[n as usize - 1]))
+        .collect();
+    let bottom: Vec<Span> = (21..=40)
+        .rev()
+        .map(|n| pin_span(n, pins[n as usize - 1]))
+        .collect();
     let legend = Line::from(vec![
         Span::styled("  ● good  ", Style::default().fg(Color::Green)),
         Span::styled("● bad  ", Style::default().fg(Color::Red)),
@@ -449,7 +479,13 @@ fn hex_rows(bytes: &[u8], max_rows: usize) -> Vec<String> {
             let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02x}")).collect();
             let ascii: String = chunk
                 .iter()
-                .map(|&b| if (0x20..0x7f).contains(&b) { b as char } else { '.' })
+                .map(|&b| {
+                    if (0x20..0x7f).contains(&b) {
+                        b as char
+                    } else {
+                        '.'
+                    }
+                })
                 .collect();
             format!("{:06x}  {:<47}  |{}|", i * 16, hex.join(" "), ascii)
         })
@@ -584,17 +620,27 @@ mod tests {
                 (name == self.dev.name).then_some(&self.dev)
             }
             fn search(&self, _q: &str, _l: usize) -> Search<'_> {
-                Search { total: 0, hits: Vec::new(), truncated: false }
+                Search {
+                    total: 0,
+                    hits: Vec::new(),
+                    truncated: false,
+                }
             }
             fn firmware_target(&self) -> FwVersion {
                 FwVersion(0x0111)
             }
             fn load_algorithm(&self, _dev: &Device) -> Result<Option<Algorithm>> {
-                Ok(Some(Algorithm { name: "ALG".into(), bitstream: vec![1, 2, 3] }))
+                Ok(Some(Algorithm {
+                    name: "ALG".into(),
+                    bitstream: vec![1, 2, 3],
+                }))
             }
         }
 
-        let dev = Device { name: "CHIP@DIP8".into(), ..Device::default() };
+        let dev = Device {
+            name: "CHIP@DIP8".into(),
+            ..Device::default()
+        };
         let mut app = App::new(None);
         app.db = Some(Box::new(MockDb { dev }));
         app.hits = vec!["CHIP@DIP8".into()];

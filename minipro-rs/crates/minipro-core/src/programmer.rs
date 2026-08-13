@@ -28,8 +28,12 @@ impl Caps {
     pub const PROTECT: Caps = Caps(1 << 8);
     pub const AUTODETECT: Caps = Caps(1 << 9);
 
-    pub fn contains(self, c: Caps) -> bool { self.0 & c.0 == c.0 }
-    pub fn with(self, c: Caps) -> Caps { Caps(self.0 | c.0) }
+    pub fn contains(self, c: Caps) -> bool {
+        self.0 & c.0 == c.0
+    }
+    pub fn with(self, c: Caps) -> Caps {
+        Caps(self.0 | c.0)
+    }
 }
 
 /// Identity/status of the attached programmer (the queryable identity fields).
@@ -78,16 +82,36 @@ pub trait Programmer: Send {
     // Default `None`; a driver overrides each supported one with `Some(self)`.
     // This is what keeps `dyn Programmer` object-safe while exposing optional,
     // heterogeneous behaviour.
-    fn memory(&mut self) -> Option<&mut dyn MemoryOps> { None }
-    fn fuses(&mut self) -> Option<&mut dyn FuseOps> { None }
-    fn jedec(&mut self) -> Option<&mut dyn JedecOps> { None }
-    fn emmc(&mut self) -> Option<&mut dyn EmmcOps> { None }
-    fn logic(&mut self) -> Option<&mut dyn LogicTest> { None }
-    fn pins(&mut self) -> Option<&mut dyn PinTest> { None }
-    fn firmware(&mut self) -> Option<&mut dyn FirmwareUpdate> { None }
-    fn calibration(&mut self) -> Option<&mut dyn Calibration> { None }
-    fn protect(&mut self) -> Option<&mut dyn Protect> { None }
-    fn autodetect(&mut self) -> Option<&mut dyn SpiAutodetect> { None }
+    fn memory(&mut self) -> Option<&mut dyn MemoryOps> {
+        None
+    }
+    fn fuses(&mut self) -> Option<&mut dyn FuseOps> {
+        None
+    }
+    fn jedec(&mut self) -> Option<&mut dyn JedecOps> {
+        None
+    }
+    fn emmc(&mut self) -> Option<&mut dyn EmmcOps> {
+        None
+    }
+    fn logic(&mut self) -> Option<&mut dyn LogicTest> {
+        None
+    }
+    fn pins(&mut self) -> Option<&mut dyn PinTest> {
+        None
+    }
+    fn firmware(&mut self) -> Option<&mut dyn FirmwareUpdate> {
+        None
+    }
+    fn calibration(&mut self) -> Option<&mut dyn Calibration> {
+        None
+    }
+    fn protect(&mut self) -> Option<&mut dyn Protect> {
+        None
+    }
+    fn autodetect(&mut self) -> Option<&mut dyn SpiAutodetect> {
+        None
+    }
 }
 
 /// RAII transaction guard: ends the transaction on drop (best-effort), so a
@@ -102,7 +126,10 @@ impl<'p> Txn<'p> {
     /// Begin a guarded transaction.
     pub fn begin(prog: &'p mut dyn Programmer, dev: &Device) -> Result<Txn<'p>> {
         let session = prog.begin(dev)?;
-        Ok(Txn { prog, session: Some(session) })
+        Ok(Txn {
+            prog,
+            session: Some(session),
+        })
     }
     /// Access the programmer and session together for an operation.
     pub fn parts(&mut self) -> (&mut dyn Programmer, &Session) {

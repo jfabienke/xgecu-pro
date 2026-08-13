@@ -8,7 +8,13 @@ use crate::error::FwVersion;
 
 /// Which memory space of a chip an operation targets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MemoryKind { Code, Data, Data2, Config, User }
+pub enum MemoryKind {
+    Code,
+    Data,
+    Data2,
+    Config,
+    User,
+}
 
 /// A contiguous span within a memory space.
 #[derive(Clone, Copy, Debug)]
@@ -21,7 +27,11 @@ pub struct Region {
 impl Region {
     /// The full code region of a device.
     pub fn code(dev: &Device) -> Region {
-        Region { kind: MemoryKind::Code, offset: 0, len: dev.code_size }
+        Region {
+            kind: MemoryKind::Code,
+            offset: 0,
+            len: dev.code_size,
+        }
     }
 }
 
@@ -35,11 +45,19 @@ pub struct BlockReq {
 
 /// What an erase should target.
 #[derive(Clone, Copy, Debug)]
-pub enum EraseKind { Chip, Sector { address: u64 }, Fuses }
+pub enum EraseKind {
+    Chip,
+    Sector { address: u64 },
+    Fuses,
+}
 
 /// Which fuse/config space a fuse op targets (C `MP_FUSE_USER/CFG/LOCK`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FuseKind { User, Config, Lock }
+pub enum FuseKind {
+    User,
+    Config,
+    Lock,
+}
 
 /// Device-class codes (C `chip_type`, the XML `type` attribute / DLL
 /// `desc[0x08]`), carried on [`Device::chip_type`].
@@ -53,7 +71,12 @@ pub mod chip_type {
 
 /// eMMC hardware partition (T76 `--partition`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Partition { User, Boot1, Boot2, Rpmb }
+pub enum Partition {
+    User,
+    Boot1,
+    Boot2,
+    Rpmb,
+}
 
 /// A read chip identity (manufacturer + device bytes).
 #[derive(Clone, Copy, Debug)]
@@ -164,6 +187,10 @@ pub struct Image {
 }
 
 impl Image {
-    pub fn len(&self) -> usize { self.bytes.len() }
-    pub fn is_empty(&self) -> bool { self.bytes.is_empty() }
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
 }

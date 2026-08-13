@@ -67,7 +67,15 @@ impl serde::Serialize for Outcome {
             bytes.iter().map(|b| format!("{b:02x}")).collect()
         }
         match self {
-            Outcome::Read { device, bytes, crc32, sha256, reads, stable, link } => {
+            Outcome::Read {
+                device,
+                bytes,
+                crc32,
+                sha256,
+                reads,
+                stable,
+                link,
+            } => {
                 let mut m = ser.serialize_map(Some(9))?;
                 m.serialize_entry("op", "read")?;
                 m.serialize_entry("ok", &true)?;
@@ -80,7 +88,16 @@ impl serde::Serialize for Outcome {
                 m.serialize_entry("link", link)?;
                 m.end()
             }
-            Outcome::Info { model, firmware, firmware_expected, serial, mfg_date, device_code, link, vcc } => {
+            Outcome::Info {
+                model,
+                firmware,
+                firmware_expected,
+                serial,
+                mfg_date,
+                device_code,
+                link,
+                vcc,
+            } => {
                 let mut m = ser.serialize_map(Some(10))?;
                 m.serialize_entry("op", "info")?;
                 m.serialize_entry("ok", &true)?;

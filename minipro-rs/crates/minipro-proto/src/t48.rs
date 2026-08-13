@@ -101,8 +101,8 @@ impl T48 {
             model: "T48".into(),
             firmware: FwVersion((u32::from(major) << 8) | u32::from(minor)),
             serial: ascii_field(&msg[32..56]),
-            mfg_date: ascii_field(&msg[8..24]),      // mfg date @8, 16 B
-            device_code: ascii_field(&msg[24..32]),  // device code @24, 8 B
+            mfg_date: ascii_field(&msg[8..24]), // mfg date @8, 16 B
+            device_code: ascii_field(&msg[24..32]), // device code @24, 8 B
             link: self.tx.link_speed(),
             voltage,
         };
@@ -169,7 +169,10 @@ impl Programmer for T48 {
         if ovc != 0 {
             return Err(Error::Overcurrent);
         }
-        Ok(Session { device: dev.clone(), emmc_capacity: 0 })
+        Ok(Session {
+            device: dev.clone(),
+            emmc_capacity: 0,
+        })
     }
 
     /// End the transaction: a bare END_TRANS, no reply.
@@ -194,11 +197,17 @@ impl Programmer for T48 {
         let raw = if id_length == 0 {
             0
         } else if id_type == 0x03 || id_type == 0x04 {
-            bytes.iter().rev().fold(0u32, |acc, &b| (acc << 8) | u32::from(b))
+            bytes
+                .iter()
+                .rev()
+                .fold(0u32, |acc, &b| (acc << 8) | u32::from(b))
         } else {
             bytes.iter().fold(0u32, |acc, &b| (acc << 8) | u32::from(b))
         };
-        Ok(ChipId { raw, bytes: id_length })
+        Ok(ChipId {
+            raw,
+            bytes: id_length,
+        })
     }
 
     fn reset(&mut self) -> Result<()> {
@@ -235,7 +244,14 @@ impl FuseOps for T48 {
         items_count: u8,
     ) -> Result<Vec<u8>> {
         let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
-        wire::fuse_read(self.tx.as_mut(), s.device.protocol_id, code, kind, length, items_count)
+        wire::fuse_read(
+            self.tx.as_mut(),
+            s.device.protocol_id,
+            code,
+            kind,
+            length,
+            items_count,
+        )
     }
     /// Write a fuse block via the shared wire helper.
     fn write_fuses(
@@ -246,7 +262,14 @@ impl FuseOps for T48 {
         data: &[u8],
     ) -> Result<()> {
         let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
-        wire::fuse_write(self.tx.as_mut(), s.device.protocol_id, code, kind, items_count, data)
+        wire::fuse_write(
+            self.tx.as_mut(),
+            s.device.protocol_id,
+            code,
+            kind,
+            items_count,
+            data,
+        )
     }
 }
 
@@ -256,15 +279,15 @@ impl JedecOps for T48 {
         wire::jedec_read(self.tx.as_mut(), s.device.protocol_id, row, flags, size)
     }
     /// Write a JEDEC row via the shared wire helper.
-    fn write_row(
-        &mut self,
-        s: &Session,
-        row: u8,
-        flags: u8,
-        size: u16,
-        data: &[u8],
-    ) -> Result<()> {
-        wire::jedec_write(self.tx.as_mut(), s.device.protocol_id, row, flags, size, data)
+    fn write_row(&mut self, s: &Session, row: u8, flags: u8, size: u16, data: &[u8]) -> Result<()> {
+        wire::jedec_write(
+            self.tx.as_mut(),
+            s.device.protocol_id,
+            row,
+            flags,
+            size,
+            data,
+        )
     }
 }
 
@@ -298,7 +321,11 @@ impl LogicTest for T48 {
     /// via the shared vector loop, then the L/H/Z comparison. Fixed-silicon: no
     /// FPGA bitstream, so the loader is unused.
     fn run(&mut self, s: &Session, _load: LoadBitstream<'_>) -> Result<bool> {
-        let (pc, vc, vcc) = (s.device.package.pin_count, s.device.vector_count, s.device.logic_vcc);
+        let (pc, vc, vcc) = (
+            s.device.package.pin_count,
+            s.device.vector_count,
+            s.device.logic_vcc,
+        );
         let first = wire::logic_pass(self.tx.as_mut(), pc, vc, vcc, &s.device.vectors, 0)?;
         let second = wire::logic_pass(self.tx.as_mut(), pc, vc, vcc, &s.device.vectors, 1)?;
         Ok(wire::logic_compare(&s.device.vectors, &first, &second))
@@ -379,8 +406,16 @@ impl MemoryOps for T48 {
         let mut done = 0u64;
         while done < region.len {
             let len = step.min(region.len - done) as u32;
-            let req = BlockReq { kind: region.kind, address: region.offset + done, len };
-            if self.read_block(s, &req)?.iter().any(|&b| b != s.device.blank_value) {
+            let req = BlockReq {
+                kind: region.kind,
+                address: region.offset + done,
+                len,
+            };
+            if self
+                .read_block(s, &req)?
+                .iter()
+                .any(|&b| b != s.device.blank_value)
+            {
                 return Ok(false);
             }
             done += u64::from(len);
@@ -407,7 +442,10 @@ mod tests {
 
     impl SharedTx {
         fn new(replies: Vec<Vec<u8>>) -> Self {
-            SharedTx(Arc::new(Mutex::new(Rec { sent: Vec::new(), replies: replies.into() })))
+            SharedTx(Arc::new(Mutex::new(Rec {
+                sent: Vec::new(),
+                replies: replies.into(),
+            })))
         }
         fn sent(&self) -> Vec<(u8, Vec<u8>)> {
             self.0.lock().unwrap().sent.clone()
@@ -420,7 +458,12 @@ mod tests {
             Ok(())
         }
         fn recv(&mut self, _ep: Ep, _len: usize) -> Result<Vec<u8>> {
-            self.0.lock().unwrap().replies.pop_front().ok_or(Error::Protocol)
+            self.0
+                .lock()
+                .unwrap()
+                .replies
+                .pop_front()
+                .ok_or(Error::Protocol)
         }
         fn link_speed(&self) -> LinkSpeed {
             LinkSpeed::High
@@ -446,7 +489,10 @@ mod tests {
             chip_id: 0x1234,
             chip_id_bytes: 2,
             spi_clock,
-            package: Package { pin_count: 8, name: "DIP8".into() },
+            package: Package {
+                pin_count: 8,
+                name: "DIP8".into(),
+            },
             fw_target: FwVersion(0),
             ..Device::default()
         }
@@ -476,8 +522,15 @@ mod tests {
         let mut dev = device(0x04);
         dev.protocol_id = 0x11;
         dev.code_size = 0x4000;
-        let s = Session { device: dev, emmc_capacity: 0 };
-        let out = t48.fuses().unwrap().read_fuses(&s, FuseKind::Config, 4, 3).unwrap();
+        let s = Session {
+            device: dev,
+            emmc_capacity: 0,
+        };
+        let out = t48
+            .fuses()
+            .unwrap()
+            .read_fuses(&s, FuseKind::Config, 4, 3)
+            .unwrap();
         assert_eq!(out, vec![0xc0, 0xde, 0xba, 0xbe]);
         // 8-byte cmd: 0x08 (READ_CFG), protocol 0x11, items 3, code_size LE at [4].
         assert_eq!(tx.sent()[0].1, vec![0x08, 0x11, 0x03, 0, 0x00, 0x40, 0, 0]);
@@ -489,8 +542,14 @@ mod tests {
         let mut dev = device(0x04);
         dev.protocol_id = 0x11;
         dev.code_size = 0x100;
-        let s = Session { device: dev, emmc_capacity: 0 };
-        t48.fuses().unwrap().write_fuses(&s, FuseKind::User, 2, &[0xaa, 0xbb]).unwrap();
+        let s = Session {
+            device: dev,
+            emmc_capacity: 0,
+        };
+        t48.fuses()
+            .unwrap()
+            .write_fuses(&s, FuseKind::User, 2, &[0xaa, 0xbb])
+            .unwrap();
         let msg = &tx.sent()[0].1;
         assert_eq!(msg.len(), 64);
         assert_eq!(msg[0], 0x07); // WRITE_USER
@@ -504,8 +563,14 @@ mod tests {
         let (mut t48, tx) = t48_with(vec![]);
         let mut dev = device(0x04);
         dev.protocol_id = 0x2a;
-        let s = Session { device: dev, emmc_capacity: 0 };
-        t48.jedec().unwrap().write_row(&s, 5, 1, 20, &[0x11, 0x22, 0x33]).unwrap();
+        let s = Session {
+            device: dev,
+            emmc_capacity: 0,
+        };
+        t48.jedec()
+            .unwrap()
+            .write_row(&s, 5, 1, 20, &[0x11, 0x22, 0x33])
+            .unwrap();
         let msg = &tx.sent()[0].1;
         assert_eq!(msg[0], 0x1e); // WRITE_JEDEC
         assert_eq!(msg[1], 0x2a); // protocol
@@ -523,7 +588,10 @@ mod tests {
         let (mut t48, _tx) = t48_with(vec![reply]);
         let mut dev = device(0x04);
         dev.protocol_id = 0x2a;
-        let s = Session { device: dev, emmc_capacity: 0 };
+        let s = Session {
+            device: dev,
+            emmc_capacity: 0,
+        };
         let row = t48.jedec().unwrap().read_row(&s, 0, 0, 20).unwrap();
         assert_eq!(row, vec![0xde, 0xad, 0xbe]);
     }
@@ -531,7 +599,10 @@ mod tests {
     #[test]
     fn protect_on_off_packets() {
         let (mut t48, tx) = t48_with(vec![]);
-        let s = Session { device: device(0x04), emmc_capacity: 0 };
+        let s = Session {
+            device: device(0x04),
+            emmc_capacity: 0,
+        };
         t48.protect().unwrap().protect_on(&s).unwrap();
         t48.protect().unwrap().protect_off(&s).unwrap();
         assert_eq!(tx.sent()[0].1[0], 0x19);
@@ -543,7 +614,11 @@ mod tests {
         let mut reply = vec![0u8; 32];
         reply[2..5].copy_from_slice(&[0xef, 0x40, 0x18]); // big-endian id
         let (mut t48, tx) = t48_with(vec![reply]);
-        let id = t48.autodetect().unwrap().spi_autodetect(true, &mut |_| Ok(vec![])).unwrap();
+        let id = t48
+            .autodetect()
+            .unwrap()
+            .spi_autodetect(true, &mut |_| Ok(vec![]))
+            .unwrap();
         assert_eq!(id, 0x00ef_4018);
         let msg = &tx.sent()[0].1;
         assert_eq!(msg.len(), 10);
@@ -568,13 +643,19 @@ mod tests {
             r
         };
         let (mut t48, _tx) = t48_with(vec![good(), good()]);
-        let s = Session { device: dev.clone(), emmc_capacity: 0 };
+        let s = Session {
+            device: dev.clone(),
+            emmc_capacity: 0,
+        };
         assert!(t48.logic().unwrap().run(&s, &mut |_| Ok(vec![])).unwrap());
 
         // Failing: pin0 reads 0 (should be H). resp[8] = 0x00.
         let bad = || vec![0u8; 32];
         let (mut t48, _tx) = t48_with(vec![bad(), bad()]);
-        let s = Session { device: dev, emmc_capacity: 0 };
+        let s = Session {
+            device: dev,
+            emmc_capacity: 0,
+        };
         assert!(!t48.logic().unwrap().run(&s, &mut |_| Ok(vec![])).unwrap());
     }
 
@@ -611,8 +692,15 @@ mod tests {
         reply.extend_from_slice(&[0xff; 0x20]); // pad to 64
         let (mut t48, tx) = t48_with(vec![reply]);
         let dev = device(0x04);
-        let s = Session { device: dev.clone(), emmc_capacity: 0 };
-        let req = BlockReq { kind: MemoryKind::Code, address: 0, len: 0x20 };
+        let s = Session {
+            device: dev.clone(),
+            emmc_capacity: 0,
+        };
+        let req = BlockReq {
+            kind: MemoryKind::Code,
+            address: 0,
+            len: 0x20,
+        };
         let out = t48.read_block(&s, &req).unwrap();
         assert_eq!(out, (0..0x20u8).collect::<Vec<u8>>());
         // Command went out on EP01.
@@ -625,8 +713,15 @@ mod tests {
     fn write_block_payload_on_ep02() {
         let (mut t48, tx) = t48_with(vec![]);
         let dev = device(0x04);
-        let s = Session { device: dev.clone(), emmc_capacity: 0 };
-        let req = BlockReq { kind: MemoryKind::Code, address: 0x40, len: 4 };
+        let s = Session {
+            device: dev.clone(),
+            emmc_capacity: 0,
+        };
+        let req = BlockReq {
+            kind: MemoryKind::Code,
+            address: 0x40,
+            len: 4,
+        };
         t48.write_block(&s, &req, &[1, 2, 3, 4]).unwrap();
         let sent = tx.sent();
         assert_eq!(sent[0].0, 0x01); // command

@@ -78,7 +78,11 @@ impl T56 {
             link: LinkSpeed::High,
             voltage: 0.0,
         };
-        T56 { tx, info, uploaded_algo: None }
+        T56 {
+            tx,
+            info,
+            uploaded_algo: None,
+        }
     }
 
     /// Query programmer identity from the T56 system-info report: send a
@@ -103,8 +107,8 @@ impl T56 {
             model: "T56".into(),
             firmware: FwVersion((u32::from(major) << 8) | u32::from(minor)),
             serial: ascii_field(&msg[32..56]),
-            mfg_date: ascii_field(&msg[8..24]),      // mfg date @8, 16 B
-            device_code: ascii_field(&msg[24..32]),  // device code @24, 8 B
+            mfg_date: ascii_field(&msg[8..24]), // mfg date @8, 16 B
+            device_code: ascii_field(&msg[24..32]), // device code @24, 8 B
             link: self.tx.link_speed(),
             voltage,
         };
@@ -210,7 +214,10 @@ impl Programmer for T56 {
         if ovc != 0 {
             return Err(Error::Overcurrent);
         }
-        Ok(Session { device: dev.clone(), emmc_capacity: 0 })
+        Ok(Session {
+            device: dev.clone(),
+            emmc_capacity: 0,
+        })
     }
 
     /// End the transaction: a bare END_TRANS, no reply.
@@ -236,11 +243,17 @@ impl Programmer for T56 {
         let raw = if id_length == 0 {
             0
         } else if id_type == 0x03 || id_type == 0x04 {
-            bytes.iter().rev().fold(0u32, |acc, &b| (acc << 8) | u32::from(b))
+            bytes
+                .iter()
+                .rev()
+                .fold(0u32, |acc, &b| (acc << 8) | u32::from(b))
         } else {
             bytes.iter().fold(0u32, |acc, &b| (acc << 8) | u32::from(b))
         };
-        Ok(ChipId { raw, bytes: id_length })
+        Ok(ChipId {
+            raw,
+            bytes: id_length,
+        })
     }
 
     fn reset(&mut self) -> Result<()> {
@@ -279,7 +292,11 @@ impl LogicTest for T56 {
         let ttl1 = load("TTL1")?;
         let ttl2 = load("TTL2")?;
         self.upload_logic_ttl(&ttl1, &ttl2)?;
-        let (pc, vc, vcc) = (s.device.package.pin_count, s.device.vector_count, s.device.logic_vcc);
+        let (pc, vc, vcc) = (
+            s.device.package.pin_count,
+            s.device.vector_count,
+            s.device.logic_vcc,
+        );
         let first = wire::logic_pass(self.tx.as_mut(), pc, vc, vcc, &s.device.vectors, 0)?;
         let second = wire::logic_pass(self.tx.as_mut(), pc, vc, vcc, &s.device.vectors, 1)?;
         Ok(wire::logic_compare(&s.device.vectors, &first, &second))
@@ -322,7 +339,14 @@ impl FuseOps for T56 {
         items_count: u8,
     ) -> Result<Vec<u8>> {
         let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
-        wire::fuse_read(self.tx.as_mut(), s.device.protocol_id, code, kind, length, items_count)
+        wire::fuse_read(
+            self.tx.as_mut(),
+            s.device.protocol_id,
+            code,
+            kind,
+            length,
+            items_count,
+        )
     }
     /// Write a fuse block via the shared wire helper.
     fn write_fuses(
@@ -333,7 +357,14 @@ impl FuseOps for T56 {
         data: &[u8],
     ) -> Result<()> {
         let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
-        wire::fuse_write(self.tx.as_mut(), s.device.protocol_id, code, kind, items_count, data)
+        wire::fuse_write(
+            self.tx.as_mut(),
+            s.device.protocol_id,
+            code,
+            kind,
+            items_count,
+            data,
+        )
     }
 }
 
@@ -343,15 +374,15 @@ impl JedecOps for T56 {
         wire::jedec_read(self.tx.as_mut(), s.device.protocol_id, row, flags, size)
     }
     /// Write a JEDEC row via the shared wire helper.
-    fn write_row(
-        &mut self,
-        s: &Session,
-        row: u8,
-        flags: u8,
-        size: u16,
-        data: &[u8],
-    ) -> Result<()> {
-        wire::jedec_write(self.tx.as_mut(), s.device.protocol_id, row, flags, size, data)
+    fn write_row(&mut self, s: &Session, row: u8, flags: u8, size: u16, data: &[u8]) -> Result<()> {
+        wire::jedec_write(
+            self.tx.as_mut(),
+            s.device.protocol_id,
+            row,
+            flags,
+            size,
+            data,
+        )
     }
 }
 
@@ -443,8 +474,16 @@ impl MemoryOps for T56 {
         let mut done = 0u64;
         while done < region.len {
             let len = step.min(region.len - done) as u32;
-            let req = BlockReq { kind: region.kind, address: region.offset + done, len };
-            if self.read_block(s, &req)?.iter().any(|&b| b != s.device.blank_value) {
+            let req = BlockReq {
+                kind: region.kind,
+                address: region.offset + done,
+                len,
+            };
+            if self
+                .read_block(s, &req)?
+                .iter()
+                .any(|&b| b != s.device.blank_value)
+            {
                 return Ok(false);
             }
             done += u64::from(len);
@@ -472,7 +511,10 @@ mod tests {
 
     impl SharedTx {
         fn new(replies: Vec<Vec<u8>>) -> Self {
-            SharedTx(Arc::new(Mutex::new(Rec { sent: Vec::new(), replies: replies.into() })))
+            SharedTx(Arc::new(Mutex::new(Rec {
+                sent: Vec::new(),
+                replies: replies.into(),
+            })))
         }
         fn sent(&self) -> Vec<(u8, Vec<u8>)> {
             self.0.lock().unwrap().sent.clone()
@@ -485,7 +527,12 @@ mod tests {
             Ok(())
         }
         fn recv(&mut self, _ep: Ep, _len: usize) -> Result<Vec<u8>> {
-            self.0.lock().unwrap().replies.pop_front().ok_or(Error::Protocol)
+            self.0
+                .lock()
+                .unwrap()
+                .replies
+                .pop_front()
+                .ok_or(Error::Protocol)
         }
         fn link_speed(&self) -> LinkSpeed {
             LinkSpeed::High
@@ -512,8 +559,14 @@ mod tests {
             chip_id_bytes: 2,
             i2c_address: 0x51, // set on purpose: the T56 must NOT emit it
             spi_clock: 0x04,
-            package: Package { pin_count: 8, name: "DIP8".into() },
-            algorithm: Some(Algorithm { name: "SPI25F21".into(), bitstream }),
+            package: Package {
+                pin_count: 8,
+                name: "DIP8".into(),
+            },
+            algorithm: Some(Algorithm {
+                name: "SPI25F21".into(),
+                bitstream,
+            }),
             fw_target: FwVersion(0),
             ..Device::default()
         }
@@ -555,7 +608,10 @@ mod tests {
             r
         };
         let (mut t56, tx) = t56_with(vec![good(), good()]);
-        let s = Session { device: dev, emmc_capacity: 0 };
+        let s = Session {
+            device: dev,
+            emmc_capacity: 0,
+        };
         // Loader returns distinct TTL payloads.
         let mut load = |name: &str| Ok(name.as_bytes().to_vec());
         assert!(t56.logic().unwrap().run(&s, &mut load).unwrap());
@@ -575,7 +631,11 @@ mod tests {
         reply[2..5].copy_from_slice(&[0xef, 0x40, 0x18]);
         let (mut t56, tx) = t56_with(vec![reply]);
         let mut load = |name: &str| Ok(name.as_bytes().to_vec());
-        let id = t56.autodetect().unwrap().spi_autodetect(true, &mut load).unwrap();
+        let id = t56
+            .autodetect()
+            .unwrap()
+            .spi_autodetect(true, &mut load)
+            .unwrap();
         assert_eq!(id, 0x00ef_4018);
         let sent = tx.sent();
         // 0x26 header + SPI25F21 bitstream, then the 10-byte 0x37 probe.
@@ -594,11 +654,18 @@ mod tests {
         let (mut t56, tx) = t56_with(vec![reply]);
         let mut dev = device(0x11, 0x0100, vec![0x01]);
         dev.code_size = 0x4000;
-        let s = Session { device: dev, emmc_capacity: 0 };
-        let out = t56.fuses().unwrap().read_fuses(&s, FuseKind::User, 4, 2).unwrap();
+        let s = Session {
+            device: dev,
+            emmc_capacity: 0,
+        };
+        let out = t56
+            .fuses()
+            .unwrap()
+            .read_fuses(&s, FuseKind::User, 4, 2)
+            .unwrap();
         assert_eq!(out, vec![0x11, 0x22, 0x33, 0x44]);
         assert_eq!(&tx.sent()[0].1[..3], &[0x06, 0x11, 0x02]); // READ_USER, proto, items
-        // protect on/off over the same command endpoint.
+                                                               // protect on/off over the same command endpoint.
         t56.protect().unwrap().protect_on(&s).unwrap();
         assert_eq!(tx.sent()[1].1[0], 0x19);
     }
@@ -633,7 +700,10 @@ mod tests {
         let (ep, begin) = &sent[2];
         assert_eq!(*ep, 0x01);
         assert_eq!(begin.len(), 64);
-        assert_eq!(begin, &pack_begin64(&ChipParams::from_device(&dev)).to_vec());
+        assert_eq!(
+            begin,
+            &pack_begin64(&ChipParams::from_device(&dev)).to_vec()
+        );
         // The T56-vs-T76 distinction: algorithm number and I2C address are NOT
         // emitted even though variant>>8 = 0x21 and i2c_address = 0x51.
         assert_eq!(begin[63], 0, "T56 must not send the algorithm number");
@@ -670,8 +740,15 @@ mod tests {
         reply.extend_from_slice(&[0xff; 16]);
         let (mut t56, tx) = t56_with(vec![reply]);
         let dev = device(0x03, 0x2100, vec![0x01]);
-        let s = Session { device: dev.clone(), emmc_capacity: 0 };
-        let req = BlockReq { kind: MemoryKind::Code, address: 0x80, len: 0x40 };
+        let s = Session {
+            device: dev.clone(),
+            emmc_capacity: 0,
+        };
+        let req = BlockReq {
+            kind: MemoryKind::Code,
+            address: 0x80,
+            len: 0x40,
+        };
         let out = t56.read_block(&s, &req).unwrap();
         assert_eq!(out, (0..0x40u8).collect::<Vec<u8>>());
         // 8-byte command: 0x0d, size 0x40 LE at [2], addr 0x80 LE at [4].
@@ -687,7 +764,10 @@ mod tests {
         resp[3] = 0x34;
         let (mut t56, _tx) = t56_with(vec![resp]);
         let dev = device(0x03, 0x2100, vec![0x01]);
-        let s = Session { device: dev.clone(), emmc_capacity: 0 };
+        let s = Session {
+            device: dev.clone(),
+            emmc_capacity: 0,
+        };
         let id = t56.identify(&s).unwrap();
         assert_eq!(id.raw, 0x1234);
         assert_eq!(id.bytes, 2);
@@ -715,6 +795,10 @@ mod tests {
         assert_eq!(t56.info().serial, "ABC12");
         assert_eq!(t56.info().firmware, FwVersion(0x0149));
         // (1500 * 0xccf6 / 0x27000) / 100 = (1500*52470/159744)/100 ~= 4.92 V.
-        assert!((t56.info().voltage - 4.926).abs() < 0.05, "got {}", t56.info().voltage);
+        assert!(
+            (t56.info().voltage - 4.926).abs() < 0.05,
+            "got {}",
+            t56.info().voltage
+        );
     }
 }

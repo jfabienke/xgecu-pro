@@ -173,9 +173,18 @@ fn ext_spi_nor(msg: &mut [u8; 128], p: &ChipParams) -> bool {
     write_ext(
         msg,
         &[
-            Field { off: 0x40, val: f40 },
-            Field { off: 0x50, val: f50 },
-            Field { off: 0x60, val: EXT_READ_SETUP },
+            Field {
+                off: 0x40,
+                val: f40,
+            },
+            Field {
+                off: 0x50,
+                val: f50,
+            },
+            Field {
+                off: 0x60,
+                val: EXT_READ_SETUP,
+            },
         ],
     );
     true
@@ -198,12 +207,30 @@ fn ext_parallel_nor(msg: &mut [u8; 128], p: &ChipParams) -> bool {
     write_ext(
         msg,
         &[
-            Field { off: 0x40, val: 0x0100_0000 },
-            Field { off: 0x44, val: 0x0000_0040 },
-            Field { off: 0x48, val: b48 },
-            Field { off: 0x50, val: 0x1000_0000 },
-            Field { off: 0x54, val: 0x0000_8000 },
-            Field { off: 0x60, val: EXT_READ_SETUP },
+            Field {
+                off: 0x40,
+                val: 0x0100_0000,
+            },
+            Field {
+                off: 0x44,
+                val: 0x0000_0040,
+            },
+            Field {
+                off: 0x48,
+                val: b48,
+            },
+            Field {
+                off: 0x50,
+                val: 0x1000_0000,
+            },
+            Field {
+                off: 0x54,
+                val: 0x0000_8000,
+            },
+            Field {
+                off: 0x60,
+                val: EXT_READ_SETUP,
+            },
         ],
     );
     true
@@ -216,7 +243,11 @@ fn ext_parallel_nor(msg: &mut [u8; 128], p: &ChipParams) -> bool {
 fn ext_nand(msg: &mut [u8; 128], p: &ChipParams) -> bool {
     if p.pages_per_block != 0 {
         // One block (data + spare) per 0x0d transfer, not the whole-chip size.
-        le32(msg, 16, u32::from(p.write_buffer_size) * u32::from(p.pages_per_block));
+        le32(
+            msg,
+            16,
+            u32::from(p.write_buffer_size) * u32::from(p.pages_per_block),
+        );
     }
     le32(msg, 56, p.raw_flags | 0x800); // NAND flag bit
     le32(msg, 0x60, 0x0b09_272f); // lower clock tier than NOR
@@ -314,7 +345,11 @@ pub(crate) fn pack_nand_prelude(p: &ChipParams) -> Result<[u8; 64]> {
     // Bus/width code and clock/adapter selection.
     let big = u32::from(ppb) * u32::from(page_or_blocks) > 0x10000;
     let busw: u32 = if real_page >= 0x800 {
-        if big { 3 } else { 1 }
+        if big {
+            3
+        } else {
+            1
+        }
     } else if big {
         2
     } else {
@@ -435,7 +470,13 @@ impl T76 {
             link: LinkSpeed::High,
             voltage: 0.0,
         };
-        T76 { tx, info, uploaded_algo: None, emmc_geom: EmmcGeometry::default(), emmc_capacity: 0 }
+        T76 {
+            tx,
+            info,
+            uploaded_algo: None,
+            emmc_geom: EmmcGeometry::default(),
+            emmc_capacity: 0,
+        }
     }
 
     /// Query programmer identity and populate [`ProgrammerInfo`]: firmware,
@@ -464,8 +505,8 @@ impl T76 {
             // low two bytes carry major/minor (0x0107 -> "00.1.07").
             firmware: FwVersion(((major as u32) << 8) | minor as u32),
             serial: ascii_field(&msg[32..56]),
-            mfg_date: ascii_field(&msg[8..24]),      // mfg date @8, 16 B
-            device_code: ascii_field(&msg[24..32]),  // device code @24, 8 B
+            mfg_date: ascii_field(&msg[8..24]), // mfg date @8, 16 B
+            device_code: ascii_field(&msg[24..32]), // device code @24, 8 B
             link: self.tx.link_speed(),
             voltage: voltage_mv as f32 / 1000.0,
         };
@@ -475,11 +516,23 @@ impl T76 {
     /// Send an 8-byte command and drain `resp_len` bytes from EP81.
     fn cmd(&mut self, pkt: &[u8], resp_len: usize) -> Result<Vec<u8>> {
         if std::env::var_os("MINIPRO_TRACE").is_some() {
-            eprintln!("[t76] cmd op={:02x}/{:02x} out={} want={resp_len}", pkt[0], pkt.get(1).copied().unwrap_or(0), pkt.len());
+            eprintln!(
+                "[t76] cmd op={:02x}/{:02x} out={} want={resp_len}",
+                pkt[0],
+                pkt.get(1).copied().unwrap_or(0),
+                pkt.len()
+            );
         }
         let r = command(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, pkt, resp_len)?.read();
         if std::env::var_os("MINIPRO_TRACE").is_some() {
-            match &r { Ok(v) => eprintln!("[t76]   -> {} bytes: {:02x?}", v.len(), &v[..v.len().min(8)]), Err(e) => eprintln!("[t76]   -> ERR {e}") }
+            match &r {
+                Ok(v) => eprintln!(
+                    "[t76]   -> {} bytes: {:02x?}",
+                    v.len(),
+                    &v[..v.len().min(8)]
+                ),
+                Err(e) => eprintln!("[t76]   -> ERR {e}"),
+            }
         }
         r
     }
@@ -694,7 +747,14 @@ impl T76 {
         let lba = (req.address / 512).min(u64::from(u32::MAX)) as u32;
         let blocks = (u64::from(req.len)).div_ceil(0x10000) as u32;
         let init = pack_emmc_io_init(CMD_READ_CODE, lba, blocks);
-        command(self.tx.as_mut(), EP_MSG_OUT, EP_DAT_IN, &init, req.len as usize)?.read()
+        command(
+            self.tx.as_mut(),
+            EP_MSG_OUT,
+            EP_DAT_IN,
+            &init,
+            req.len as usize,
+        )?
+        .read()
     }
 
     /// eMMC block program: 0x27 op0x50 setup, PRE timing,
@@ -733,12 +793,23 @@ impl T76 {
             0x08, 0x00, 0x08, 0x00, // msg[8..b]
             0x69, 0x01, 0x00, 0x00, // msg[c..f]
         ];
-        let block_index = if req.len != 0 { req.address / u64::from(req.len) } else { 0 };
+        let block_index = if req.len != 0 {
+            req.address / u64::from(req.len)
+        } else {
+            0
+        };
         let mut msg = [0u8; 16];
         msg[0] = CMD_READ_CODE;
         le16(&mut msg, 2, block_index.min(u64::from(u16::MAX)) as u16);
         msg[4..16].copy_from_slice(&NAND_READ_HDR);
-        command(self.tx.as_mut(), EP_MSG_OUT, EP_DAT_IN, &msg, req.len as usize)?.read()
+        command(
+            self.tx.as_mut(),
+            EP_MSG_OUT,
+            EP_DAT_IN,
+            &msg,
+            req.len as usize,
+        )?
+        .read()
     }
 
     /// NAND block program: 16-byte 0x1f init, then each
@@ -758,7 +829,11 @@ impl T76 {
                 data.len()
             )));
         }
-        let block_index = if req.len != 0 { req.address / u64::from(req.len) } else { 0 };
+        let block_index = if req.len != 0 {
+            req.address / u64::from(req.len)
+        } else {
+            0
+        };
 
         let mut init = [0u8; 16];
         init[0] = CMD_NAND_PROGRAM;
@@ -935,7 +1010,10 @@ impl Programmer for T76 {
             self.emmc_capacity = emmc_capacity;
         }
 
-        Ok(Session { device: dev.clone(), emmc_capacity })
+        Ok(Session {
+            device: dev.clone(),
+            emmc_capacity,
+        })
     }
 
     /// End the transaction: a bare END_TRANS, no reply.
@@ -961,11 +1039,17 @@ impl Programmer for T76 {
         let raw = if id_length == 0 {
             0
         } else if id_type == ID_TYPE3 || id_type == ID_TYPE4 {
-            bytes.iter().rev().fold(0u32, |acc, &b| (acc << 8) | u32::from(b))
+            bytes
+                .iter()
+                .rev()
+                .fold(0u32, |acc, &b| (acc << 8) | u32::from(b))
         } else {
             bytes.iter().fold(0u32, |acc, &b| (acc << 8) | u32::from(b))
         };
-        Ok(ChipId { raw, bytes: id_length })
+        Ok(ChipId {
+            raw,
+            bytes: id_length,
+        })
     }
 
     fn reset(&mut self) -> Result<()> {
@@ -1011,7 +1095,11 @@ impl LogicTest for T76 {
     /// `TestLgcDown` for pull-down — then runs the shared vector loop. The
     /// caller's `load` fetches them from `algoT76/` by name.
     fn run(&mut self, s: &Session, load: LoadBitstream<'_>) -> Result<bool> {
-        let (pc, vc, vcc) = (s.device.package.pin_count, s.device.vector_count, s.device.logic_vcc);
+        let (pc, vc, vcc) = (
+            s.device.package.pin_count,
+            s.device.vector_count,
+            s.device.logic_vcc,
+        );
         let pull = load("TestLgcPull")?;
         self.write_bitstream_named("TestLgcPull", &pull, false)?;
         let first = wire::logic_pass(self.tx.as_mut(), pc, vc, vcc, &s.device.vectors, 0)?;
@@ -1051,7 +1139,14 @@ impl FuseOps for T76 {
         items_count: u8,
     ) -> Result<Vec<u8>> {
         let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
-        wire::fuse_read(self.tx.as_mut(), s.device.protocol_id, code, kind, length, items_count)
+        wire::fuse_read(
+            self.tx.as_mut(),
+            s.device.protocol_id,
+            code,
+            kind,
+            length,
+            items_count,
+        )
     }
     /// Write a fuse block via the shared wire helper.
     fn write_fuses(
@@ -1062,7 +1157,14 @@ impl FuseOps for T76 {
         data: &[u8],
     ) -> Result<()> {
         let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
-        wire::fuse_write(self.tx.as_mut(), s.device.protocol_id, code, kind, items_count, data)
+        wire::fuse_write(
+            self.tx.as_mut(),
+            s.device.protocol_id,
+            code,
+            kind,
+            items_count,
+            data,
+        )
     }
 }
 
@@ -1073,15 +1175,15 @@ impl JedecOps for T76 {
         wire::jedec_read(self.tx.as_mut(), s.device.protocol_id, row, flags, size)
     }
     /// Write a JEDEC row via the shared wire helper.
-    fn write_row(
-        &mut self,
-        s: &Session,
-        row: u8,
-        flags: u8,
-        size: u16,
-        data: &[u8],
-    ) -> Result<()> {
-        wire::jedec_write(self.tx.as_mut(), s.device.protocol_id, row, flags, size, data)
+    fn write_row(&mut self, s: &Session, row: u8, flags: u8, size: u16, data: &[u8]) -> Result<()> {
+        wire::jedec_write(
+            self.tx.as_mut(),
+            s.device.protocol_id,
+            row,
+            flags,
+            size,
+            data,
+        )
     }
 }
 
@@ -1134,7 +1236,14 @@ impl MemoryOps for T76 {
                 le16(&mut msg, 2, req.len.min(u32::from(u16::MAX)) as u16);
                 le32(&mut msg, 4, req.address.min(u64::from(u32::MAX)) as u32);
                 le32(&mut msg, 8, 1); // block_count
-                command(self.tx.as_mut(), EP_MSG_OUT, EP_DAT_IN, &msg, req.len as usize)?.read()
+                command(
+                    self.tx.as_mut(),
+                    EP_MSG_OUT,
+                    EP_DAT_IN,
+                    &msg,
+                    req.len as usize,
+                )?
+                .read()
             }
             // MP_DATA: 0x10, payload is 16 header bytes +
             // data on EP82.
@@ -1304,7 +1413,11 @@ impl MemoryOps for T76 {
         let mut done = 0u64;
         while done < region.len {
             let len = step.min(region.len - done) as u32;
-            let req = BlockReq { kind: region.kind, address: region.offset + done, len };
+            let req = BlockReq {
+                kind: region.kind,
+                address: region.offset + done,
+                len,
+            };
             let block = self.read_block(s, &req)?;
             if block.iter().any(|&b| b != s.device.blank_value) {
                 return Ok(false);
@@ -1397,7 +1510,9 @@ impl<'a> UpdateFile<'a> {
         let count = u32::from_le_bytes(image[12..16].try_into().unwrap()) as usize;
         let body = &image[UPDATE_HEADER_LEN..];
         if count.checked_mul(UPDATE_BLOCK_LEN) != Some(body.len()) {
-            return Err(Error::Format("updateT76.dat: block count/size mismatch".into()));
+            return Err(Error::Format(
+                "updateT76.dat: block count/size mismatch".into(),
+            ));
         }
         // CRC-32/IEEE with initial 0xffffffff and no final complement, taken
         // over the post-header body — the file's own integrity check.
@@ -1492,7 +1607,11 @@ mod tests {
 
     impl ScriptedTx {
         fn new(replies: Vec<Vec<u8>>) -> Self {
-            ScriptedTx { sent: Vec::new(), replies: replies.into(), recv_log: Vec::new() }
+            ScriptedTx {
+                sent: Vec::new(),
+                replies: replies.into(),
+                recv_log: Vec::new(),
+            }
         }
     }
 
@@ -1523,15 +1642,24 @@ mod tests {
             page_size: 0x40,
             chip_id: 0x1234,
             chip_id_bytes: 2,
-            package: Package { pin_count: 8, name: "DIP8".into() },
-            algorithm: Some(Algorithm { name: "TESTALG".into(), bitstream }),
+            package: Package {
+                pin_count: 8,
+                name: "DIP8".into(),
+            },
+            algorithm: Some(Algorithm {
+                name: "TESTALG".into(),
+                bitstream,
+            }),
             fw_target: FwVersion(0),
             ..Device::default()
         }
     }
 
     fn session(dev: &Device) -> Session {
-        Session { device: dev.clone(), emmc_capacity: 0 }
+        Session {
+            device: dev.clone(),
+            emmc_capacity: 0,
+        }
     }
 
     /// A `Send`-able handle to a shared `ScriptedTx`, so tests can hand the
@@ -1542,7 +1670,9 @@ mod tests {
 
     impl SharedTx {
         fn new(replies: Vec<Vec<u8>>) -> Self {
-            SharedTx(std::sync::Arc::new(std::sync::Mutex::new(ScriptedTx::new(replies))))
+            SharedTx(std::sync::Arc::new(std::sync::Mutex::new(ScriptedTx::new(
+                replies,
+            ))))
         }
         fn sent(&self) -> Vec<(u8, Vec<u8>)> {
             self.0.lock().unwrap().sent.clone()
@@ -1587,7 +1717,10 @@ mod tests {
         assert_eq!(caps.contains(Caps::FUSES), t76.fuses().is_some());
         assert_eq!(caps.contains(Caps::JEDEC), t76.jedec().is_some());
         assert_eq!(caps.contains(Caps::PROTECT), t76.protect().is_some());
-        assert_eq!(caps.contains(Caps::CALIBRATION), t76.calibration().is_some());
+        assert_eq!(
+            caps.contains(Caps::CALIBRATION),
+            t76.calibration().is_some()
+        );
         assert_eq!(caps.contains(Caps::LOGIC), t76.logic().is_some());
         assert_eq!(caps.contains(Caps::AUTODETECT), t76.autodetect().is_some());
         assert!(caps.contains(Caps::FUSES) && caps.contains(Caps::PROTECT));
@@ -1607,22 +1740,33 @@ mod tests {
         };
         let ok8 = || vec![0x26u8, 0, 0, 0, 0, 0, 0, 0];
         let (mut t76, tx) = t76_with(vec![
-            ok8(), ok8(), good_vec(), // pass 0: BEGIN_BS, END_BS, vector
-            ok8(), ok8(), good_vec(), // pass 1
+            ok8(),
+            ok8(),
+            good_vec(), // pass 0: BEGIN_BS, END_BS, vector
+            ok8(),
+            ok8(),
+            good_vec(), // pass 1
         ]);
         let mut dev = device(0x00, Vec::new());
         dev.package.pin_count = 2;
         dev.vector_count = 1;
         dev.logic_vcc = 5;
         dev.vectors = vec![3, 2];
-        let s = Session { device: dev, emmc_capacity: 0 };
+        let s = Session {
+            device: dev,
+            emmc_capacity: 0,
+        };
         let mut load = |name: &str| Ok(name.as_bytes().to_vec());
         assert!(t76.logic().unwrap().run(&s, &mut load).unwrap());
         // The two bitstream uploads carry the pull then down payloads (in the
         // BS_BLOCK packet, offset 8).
         let bodies: Vec<Vec<u8>> = tx.sent().into_iter().map(|(_, p)| p).collect();
-        assert!(bodies.iter().any(|p| p.len() > 12 && &p[8..8 + 11] == b"TestLgcPull"));
-        assert!(bodies.iter().any(|p| p.len() > 12 && &p[8..8 + 11] == b"TestLgcDown"));
+        assert!(bodies
+            .iter()
+            .any(|p| p.len() > 12 && &p[8..8 + 11] == b"TestLgcPull"));
+        assert!(bodies
+            .iter()
+            .any(|p| p.len() > 12 && &p[8..8 + 11] == b"TestLgcDown"));
     }
 
     #[test]
@@ -1634,8 +1778,15 @@ mod tests {
         let mut dev = device(0x01, Vec::new());
         dev.protocol_id = 0x11;
         dev.code_size = 0x2000;
-        let s = Session { device: dev, emmc_capacity: 0 };
-        let fuses = t76.fuses().unwrap().read_fuses(&s, FuseKind::Lock, 3, 1).unwrap();
+        let s = Session {
+            device: dev,
+            emmc_capacity: 0,
+        };
+        let fuses = t76
+            .fuses()
+            .unwrap()
+            .read_fuses(&s, FuseKind::Lock, 3, 1)
+            .unwrap();
         assert_eq!(fuses, vec![0xa5, 0x5a, 0x3c]);
         // READ_LOCK (0x15), protocol 0x11, items 1, code_size LE at [4].
         assert_eq!(tx.sent()[0].1, vec![0x15, 0x11, 0x01, 0, 0x00, 0x20, 0, 0]);
@@ -1667,7 +1818,10 @@ mod tests {
         // BEGIN_BS: opcode, sub, packet size 0x200 LE, total length LE32
         //.
         assert_eq!(sent[0].0, 0x01);
-        assert_eq!(sent[0].1, vec![0x26, 0x00, 0x00, 0x02, 0xe8, 0x03, 0x00, 0x00]);
+        assert_eq!(
+            sent[0].1,
+            vec![0x26, 0x00, 0x00, 0x02, 0xe8, 0x03, 0x00, 0x00]
+        );
         // Chunk 1: full 504-byte payload.
         assert_eq!(sent[1].1.len(), 512);
         assert_eq!(&sent[1].1[..8], &[0x26, 0x01, 0xf8, 0x01, 0, 0, 0, 0]);
@@ -1678,7 +1832,11 @@ mod tests {
         assert_eq!(sent[2].1.len(), 512);
         assert_eq!(&sent[2].1[..8], &[0x26, 0x01, 0xf0, 0x01, 0, 0, 0, 0]);
         assert_eq!(&sent[2].1[8..8 + 496], &bits[504..1000]);
-        assert_eq!(&sent[2].1[8 + 496..], &[0u8; 8], "tail past the payload is zero-padded");
+        assert_eq!(
+            &sent[2].1[8 + 496..],
+            &[0u8; 8],
+            "tail past the payload is zero-padded"
+        );
         // END_BS: non-NAND leaves msg[2..3] zero.
         assert_eq!(sent[3].1, vec![0x26, 0x02, 0x00, 0x00, 0, 0, 0, 0]);
         // Both replies drained from EP81, 8 bytes each.
@@ -1737,9 +1895,18 @@ mod tests {
 
         let sent = tx.sent();
         assert_eq!(sent.len(), 5);
-        assert_eq!(sent[0].1, vec![0x24, 0xf0, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00]);
-        assert_eq!(sent[1].1, vec![0x24, 0xe4, 0x30, 0x00, 0x11, 0x01, 0x08, 0x00]);
-        assert_eq!(sent[2].1, vec![0x24, 0xf1, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(
+            sent[0].1,
+            vec![0x24, 0xf0, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00]
+        );
+        assert_eq!(
+            sent[1].1,
+            vec![0x24, 0xe4, 0x30, 0x00, 0x11, 0x01, 0x08, 0x00]
+        );
+        assert_eq!(
+            sent[2].1,
+            vec![0x24, 0xf1, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        );
         // Pin detection: 16-byte form, run twice.
         let mut pd = vec![0u8; 16];
         pd[0] = 0x3e;
@@ -1747,7 +1914,10 @@ mod tests {
         assert_eq!(sent[4].1, pd);
         // Drain lengths: 8 for power-down, 0x30 for the id, none for
         // power-up (recv_len 0), 32 per pin detection.
-        assert_eq!(tx.recv_log(), vec![(0x81, 8), (0x81, 0x30), (0x81, 32), (0x81, 32)]);
+        assert_eq!(
+            tx.recv_log(),
+            vec![(0x81, 8), (0x81, 0x30), (0x81, 32), (0x81, 32)]
+        );
     }
 
     #[test]
@@ -1760,7 +1930,10 @@ mod tests {
         t76.emmc_adapter_init().unwrap();
         let sent = tx.sent();
         assert_eq!(sent.len(), 4);
-        assert_eq!(sent[1].1, vec![0x24, 0xe0, 0x28, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            sent[1].1,
+            vec![0x24, 0xe0, 0x28, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
         assert_eq!(tx.recv_log(), vec![(0x81, 8), (0x81, 0x28), (0x81, 32)]);
     }
 
@@ -1818,7 +1991,11 @@ mod tests {
     #[test]
     fn begin_trans_spi_extension_8p_and_16p() {
         // 8-pin (variant high byte 0x11).
-        let p8 = ChipParams { protocol_id: ALG_SPI25F_1, variant: 0x1100, ..Default::default() };
+        let p8 = ChipParams {
+            protocol_id: ALG_SPI25F_1,
+            variant: 0x1100,
+            ..Default::default()
+        };
         let (msg, len) = pack_begin_trans(&p8);
         assert_eq!(len, 128);
         assert_eq!(&msg[0x40..0x44], &[0x00, 0x00, 0x00, 0x08]); // 0x08000000 LE
@@ -1827,7 +2004,11 @@ mod tests {
         assert_eq!(msg[0x65], 0x03);
 
         // 16-pin (variant high byte 0x21).
-        let p16 = ChipParams { protocol_id: ALG_SPI25F_2, variant: 0x2100, ..Default::default() };
+        let p16 = ChipParams {
+            protocol_id: ALG_SPI25F_2,
+            variant: 0x2100,
+            ..Default::default()
+        };
         let (msg, len) = pack_begin_trans(&p16);
         assert_eq!(len, 128);
         assert_eq!(&msg[0x40..0x44], &[0x00, 0x00, 0x02, 0x00]); // 0x00020000 LE
@@ -1909,13 +2090,20 @@ mod tests {
 
     #[test]
     fn nand_prelude_requires_geometry() {
-        let p = ChipParams { protocol_id: ALG_NAND, ..Default::default() };
+        let p = ChipParams {
+            protocol_id: ALG_NAND,
+            ..Default::default()
+        };
         assert_eq!(pack_nand_prelude(&p).unwrap_err().code(), "unsupported");
     }
 
     #[test]
     fn begin_trans_emmc_bus_mode_byte() {
-        let p = ChipParams { protocol_id: ALG_EMMC, variant: 0x5300, ..Default::default() };
+        let p = ChipParams {
+            protocol_id: ALG_EMMC,
+            variant: 0x5300,
+            ..Default::default()
+        };
         let (msg, len) = pack_begin_trans(&p);
         assert_eq!(len, 128);
         assert_eq!(msg[0x0c], 0x53);
@@ -1938,8 +2126,8 @@ mod tests {
 
         let sent = tx.sent();
         assert_eq!(sent.len(), 5); // BEGIN_BS, chunk, END_BS, BEGIN_TRANS, 0x39
-        // BEGIN_TRANS: 64 bytes for a plain device, header from the Device
-        // fields the core carries.
+                                   // BEGIN_TRANS: 64 bytes for a plain device, header from the Device
+                                   // fields the core carries.
         let bt = &sent[3].1;
         assert_eq!(bt.len(), 64);
         assert_eq!(bt[0], 0x03);
@@ -1947,7 +2135,7 @@ mod tests {
         assert_eq!(&bt[8..10], &[0x00, 0x01]); // data_size 0x100
         assert_eq!(&bt[10..12], &[0x40, 0x00]); // page_size 0x40
         assert_eq!(&bt[16..20], &[0x00, 0x80, 0x00, 0x00]); // code_size 0x8000
-        // Plain 0x39 (non-NAND/eMMC leaves the header zeroed).
+                                                            // Plain 0x39 (non-NAND/eMMC leaves the header zeroed).
         assert_eq!(sent[4].1, vec![0x39, 0, 0, 0, 0, 0, 0, 0]);
     }
 
@@ -2018,7 +2206,11 @@ mod tests {
         let dev = device(0x07, vec![]);
         let payload = vec![0x5au8; 0x40];
         let (mut t76, tx) = t76_with(vec![payload.clone()]);
-        let req = BlockReq { kind: MemoryKind::Code, address: 0x1000, len: 0x40 };
+        let req = BlockReq {
+            kind: MemoryKind::Code,
+            address: 0x1000,
+            len: 0x40,
+        };
         let got = t76.read_block(&session(&dev), &req).unwrap();
         assert_eq!(got, payload);
         // 16-byte 0x0d: size LE16 at [2], address LE32 at [4], block count at
@@ -2040,7 +2232,11 @@ mod tests {
         let mut raw = vec![0xeeu8; 16]; // header junk
         raw.extend(vec![0x77u8; 8]);
         let (mut t76, tx) = t76_with(vec![raw]);
-        let req = BlockReq { kind: MemoryKind::Data, address: 4, len: 8 };
+        let req = BlockReq {
+            kind: MemoryKind::Data,
+            address: 4,
+            len: 8,
+        };
         let got = t76.read_block(&session(&dev), &req).unwrap();
         assert_eq!(got, vec![0x77u8; 8]);
         let sent = tx.sent();
@@ -2057,7 +2253,11 @@ mod tests {
         let mut raw = vec![0u8; 16];
         raw.extend([1, 2, 3, 4]);
         let (mut t76, tx) = t76_with(vec![raw]);
-        let req = BlockReq { kind: MemoryKind::User, address: 0, len: 4 };
+        let req = BlockReq {
+            kind: MemoryKind::User,
+            address: 0,
+            len: 4,
+        };
         let got = t76.read_block(&session(&dev), &req).unwrap();
         assert_eq!(got, vec![1, 2, 3, 4]);
         // MP_USER reply comes back on EP81 (msg_recv), not EP82.
@@ -2069,7 +2269,11 @@ mod tests {
         let dev = device(0x07, vec![]);
         let data = vec![0xabu8; 0x40];
         let (mut t76, tx) = t76_with(vec![]);
-        let req = BlockReq { kind: MemoryKind::Code, address: 0x200, len: 0x40 };
+        let req = BlockReq {
+            kind: MemoryKind::Code,
+            address: 0x200,
+            len: 0x40,
+        };
         t76.write_block(&session(&dev), &req, &data).unwrap();
 
         let sent = tx.sent();
@@ -2095,7 +2299,11 @@ mod tests {
         let dev = device(0x07, vec![]);
         let data = [9u8, 8, 7, 6];
         let (mut t76, tx) = t76_with(vec![]);
-        let req = BlockReq { kind: MemoryKind::User, address: 0, len: 4 };
+        let req = BlockReq {
+            kind: MemoryKind::User,
+            address: 0,
+            len: 4,
+        };
         t76.write_block(&session(&dev), &req, &data).unwrap();
         let sent = tx.sent();
         assert_eq!(sent.len(), 1);
@@ -2115,7 +2323,11 @@ mod tests {
         let block = vec![0xffu8; 0x21000];
         let (mut t76, tx) = t76_with(vec![block.clone()]);
         // Block 2: address = 2 * 0x21000.
-        let req = BlockReq { kind: MemoryKind::Code, address: 2 * 0x21000, len: 0x21000 };
+        let req = BlockReq {
+            kind: MemoryKind::Code,
+            address: 2 * 0x21000,
+            len: 0x21000,
+        };
         let got = t76.read_block(&session(&dev), &req).unwrap();
         assert_eq!(got.len(), block.len());
         // 16-byte 0x0d with block index at [2..3] + fixed NAND header
@@ -2144,7 +2356,11 @@ mod tests {
         let block_len = 2112u32 * 64;
         let data: Vec<u8> = (0..block_len).map(|i| i as u8).collect();
         let (mut t76, tx) = t76_with(vec![vec![0u8; 32]]); // 0x39 commit reply
-        let req = BlockReq { kind: MemoryKind::Code, address: 0, len: block_len };
+        let req = BlockReq {
+            kind: MemoryKind::Code,
+            address: 0,
+            len: block_len,
+        };
         t76.nand_write(&p, &req, &data).unwrap();
         let _ = s;
 
@@ -2185,7 +2401,7 @@ mod tests {
         assert_eq!(sent.len(), 3);
         assert_eq!(sent[0].1, vec![0x3a, 0, 0, 0, 0, 0, 0, 0]); // check blk 0
         assert_eq!(sent[1].1, vec![0x3a, 0, 1, 0, 0, 0, 0, 0]); // check blk 1
-        // Erase is the 16-byte form.
+                                                                // Erase is the 16-byte form.
         let mut erase = vec![0u8; 16];
         erase[0] = 0x0e;
         erase[2] = 1;
@@ -2202,7 +2418,11 @@ mod tests {
         let payload = vec![0x42u8; 0x10000];
         let (mut t76, tx) = t76_with(vec![payload.clone()]);
         // 64 KiB block at byte offset 0x200000 -> LBA 0x1000.
-        let req = BlockReq { kind: MemoryKind::Code, address: 0x20_0000, len: 0x10000 };
+        let req = BlockReq {
+            kind: MemoryKind::Code,
+            address: 0x20_0000,
+            len: 0x10000,
+        };
         let got = t76.read_block(&session(&dev), &req).unwrap();
         assert_eq!(got, payload);
 
@@ -2212,8 +2432,8 @@ mod tests {
         assert_eq!(
             sent[0].1,
             vec![
-                0x27, 0x00, 0xff, 0x00, 0x3b, 0x0e, 0x05, 0x02, 0x00, 0x02, 0xb7, 0x03, 0x00,
-                0x12, 0xb9, 0x03
+                0x27, 0x00, 0xff, 0x00, 0x3b, 0x0e, 0x05, 0x02, 0x00, 0x02, 0xb7, 0x03, 0x00, 0x12,
+                0xb9, 0x03
             ]
         );
         // 40-byte 0x0d region init: LBA 0x1000, one 64 KiB
@@ -2242,7 +2462,11 @@ mod tests {
             vec![0u8; 32], // first 0x39
             vec![0u8; 32], // second 0x39
         ]);
-        let req = BlockReq { kind: MemoryKind::Code, address: 0, len: 0x10000 };
+        let req = BlockReq {
+            kind: MemoryKind::Code,
+            address: 0,
+            len: 0x10000,
+        };
         t76.write_block(&session(&dev), &req, &data).unwrap();
 
         let sent = tx.sent();
@@ -2298,10 +2522,18 @@ mod tests {
     fn emmc_select_partition_updates_capacity() {
         let dev = device(ALG_EMMC, vec![]);
         let (mut t76, tx) = t76_with(vec![vec![0u8; 8]]);
-        t76.emmc_geom = EmmcGeometry { sec_count: 0x00e9_0000, boot_mult: 0x20, rpmb_mult: 2 };
-        t76.select_partition(&session(&dev), Partition::Boot1).unwrap();
+        t76.emmc_geom = EmmcGeometry {
+            sec_count: 0x00e9_0000,
+            boot_mult: 0x20,
+            rpmb_mult: 2,
+        };
+        t76.select_partition(&session(&dev), Partition::Boot1)
+            .unwrap();
         // BOOT1 arg 0x01B30100 LE.
-        assert_eq!(tx.sent()[0].1, vec![0x27, 0x46, 0, 0, 0x00, 0x01, 0xb3, 0x01]);
+        assert_eq!(
+            tx.sent()[0].1,
+            vec![0x27, 0x46, 0, 0, 0x00, 0x01, 0xb3, 0x01]
+        );
         // BOOT capacity = BOOT_SIZE_MULT * 128 KiB = 4 MiB.
         assert_eq!(t76.capacity(), 0x20 * 128 * 1024);
     }
@@ -2309,8 +2541,8 @@ mod tests {
     #[test]
     fn emmc_erase_groups_and_polls() {
         let (mut t76, tx) = t76_with(vec![
-            vec![0u8; 8],                                  // erase group ack
-            vec![0x27, 0, 0, 0, 0, 0x09, 0, 0],            // poll: ready
+            vec![0u8; 8],                       // erase group ack
+            vec![0x27, 0, 0, 0, 0, 0x09, 0, 0], // poll: ready
         ]);
         t76.emmc_capacity = 0x20000 * 512; // exactly one erase group
         t76.emmc_erase(0).unwrap();
@@ -2322,7 +2554,10 @@ mod tests {
         cmd[8..12].copy_from_slice(&0x1ffffu32.to_le_bytes());
         assert_eq!(sent[0].1, cmd);
         // Status poll 0x27 op 0x4d.
-        assert_eq!(sent[1].1, vec![0x27, 0x4d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00]);
+        assert_eq!(
+            sent[1].1,
+            vec![0x27, 0x4d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00]
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2450,7 +2685,10 @@ mod tests {
         let (mut t76, tx) = t76_with(vec![vec![0x26, 0, 0, 0, 0, 0, 0, 0]]);
         t76.reset_fpga().unwrap();
         // 0x26 af + magic 0xaa55ddee LE.
-        assert_eq!(tx.sent(), vec![(0x01, vec![0x26, 0xaf, 0, 0, 0xee, 0xdd, 0x55, 0xaa])]);
+        assert_eq!(
+            tx.sent(),
+            vec![(0x01, vec![0x26, 0xaf, 0, 0, 0xee, 0xdd, 0x55, 0xaa])]
+        );
     }
 
     /// block_size steps by the erase block for NAND, 64 KiB for eMMC, and the
@@ -2463,7 +2701,10 @@ mod tests {
         // Normal SPI code memory: page size.
         let mut dev = device(0x03, Vec::new());
         dev.page_size = 0x100;
-        let s = Session { device: dev, emmc_capacity: 0 };
+        let s = Session {
+            device: dev,
+            emmc_capacity: 0,
+        };
         assert_eq!(t76.block_size(&s, MemoryKind::Code), 0x100);
 
         // NAND: page(+spare) x pages/block, NOT the page size.
@@ -2471,12 +2712,18 @@ mod tests {
         dev.page_size = 0x800;
         dev.write_buffer_size = 0x840; // 2112 (page + spare)
         dev.pages_per_block = 64;
-        let s = Session { device: dev, emmc_capacity: 0 };
+        let s = Session {
+            device: dev,
+            emmc_capacity: 0,
+        };
         assert_eq!(t76.block_size(&s, MemoryKind::Code), 0x840 * 64);
 
         // eMMC: a fixed 64 KiB unit.
         let dev = device(ALG_EMMC, Vec::new());
-        let s = Session { device: dev, emmc_capacity: 0 };
+        let s = Session {
+            device: dev,
+            emmc_capacity: 0,
+        };
         assert_eq!(t76.block_size(&s, MemoryKind::Code), 0x1_0000);
     }
 
@@ -2491,7 +2738,10 @@ mod tests {
             t76.uploaded_algo = Some("SOMEALG".into());
         } // drop here
         let sent = tx.sent();
-        assert_eq!(sent.last().map(|(_, p)| p[..2].to_vec()), Some(vec![0x26, 0xaf]));
+        assert_eq!(
+            sent.last().map(|(_, p)| p[..2].to_vec()),
+            Some(vec![0x26, 0xaf])
+        );
 
         // Never uploaded: drop is silent.
         let tx = SharedTx::new(vec![]);
@@ -2512,64 +2762,82 @@ mod tests {
     fn golden_fixtures() -> Vec<(&'static str, ChipParams)> {
         vec![
             // plain I2C EEPROM — no 0x40.. extension; else-branch voltages.
-            ("i2c", ChipParams {
-                protocol_id: 0x01,
-                variant: 0x0000,
-                raw_voltages: 0x0000_0025,
-                code_memory_size: 0x2000,
-                data_memory_size: 0x100,
-                page_size: 0x40,
-                pin_map: 0x02,
-                ..Default::default()
-            }),
+            (
+                "i2c",
+                ChipParams {
+                    protocol_id: 0x01,
+                    variant: 0x0000,
+                    raw_voltages: 0x0000_0025,
+                    code_memory_size: 0x2000,
+                    data_memory_size: 0x100,
+                    page_size: 0x40,
+                    pin_map: 0x02,
+                    ..Default::default()
+                },
+            ),
             // SPI25 non-16P — SPI extension; low-byte 0xf0 voltage branch.
-            ("spi25_8p", ChipParams {
-                protocol_id: ALG_SPI25F_1,
-                variant: 0x0100,
-                raw_voltages: 0x0003_00f0,
-                code_memory_size: 0x10_0000,
-                spi_clock: 0x04,
-                pin_map: 0x00,
-                ..Default::default()
-            }),
+            (
+                "spi25_8p",
+                ChipParams {
+                    protocol_id: ALG_SPI25F_1,
+                    variant: 0x0100,
+                    raw_voltages: 0x0003_00f0,
+                    code_memory_size: 0x10_0000,
+                    spi_clock: 0x04,
+                    pin_map: 0x00,
+                    ..Default::default()
+                },
+            ),
             // SPI25 16P — SPI extension 16P path; 0x8000_0000 voltage branch.
-            ("spi25_16p", ChipParams {
-                protocol_id: ALG_SPI25F_2,
-                variant: 0x2100,
-                raw_voltages: 0x8005_0034,
-                code_memory_size: 0x40_0000,
-                spi_clock: 0x02,
-                ..Default::default()
-            }),
+            (
+                "spi25_16p",
+                ChipParams {
+                    protocol_id: ALG_SPI25F_2,
+                    variant: 0x2100,
+                    raw_voltages: 0x8005_0034,
+                    code_memory_size: 0x40_0000,
+                    spi_clock: 0x02,
+                    ..Default::default()
+                },
+            ),
             // Parallel NOR x16 (T48 family) — the 0x40.. NOR extension.
-            ("nor_t48", ChipParams {
-                protocol_id: ALG_T48,
-                variant: 0x0128, // adapter 0x20, geom 0x08
-                raw_voltages: 0x0002_0021,
-                code_memory_size: 0x80_0000,
-                packed_package: 0x0000_000b, // family byte 0x0b
-                ..Default::default()
-            }),
+            (
+                "nor_t48",
+                ChipParams {
+                    protocol_id: ALG_T48,
+                    variant: 0x0128, // adapter 0x20, geom 0x08
+                    raw_voltages: 0x0002_0021,
+                    code_memory_size: 0x80_0000,
+                    packed_package: 0x0000_000b, // family byte 0x0b
+                    ..Default::default()
+                },
+            ),
             // NAND — the 0x40.. NAND adjustments + msg[16] per-block size.
-            ("nand", ChipParams {
-                protocol_id: ALG_NAND,
-                variant: 0x0100,
-                raw_voltages: 0x0001_0033,
-                code_memory_size: 0x800_0000,
-                page_size: 0x800,
-                write_buffer_size: 0x840,
-                pages_per_block: 64,
-                raw_flags: 0x0000_0002,
-                ..Default::default()
-            }),
+            (
+                "nand",
+                ChipParams {
+                    protocol_id: ALG_NAND,
+                    variant: 0x0100,
+                    raw_voltages: 0x0001_0033,
+                    code_memory_size: 0x800_0000,
+                    page_size: 0x800,
+                    write_buffer_size: 0x840,
+                    pages_per_block: 64,
+                    raw_flags: 0x0000_0002,
+                    ..Default::default()
+                },
+            ),
             // eMMC — 128-byte BEGIN, msg[0x0c] bus/CSD byte, no 0x40.. packer.
-            ("emmc", ChipParams {
-                protocol_id: ALG_EMMC,
-                variant: 0x5300,
-                raw_voltages: 0x0000_0053,
-                code_memory_size: 0x1000_0000u32.wrapping_sub(0), // 256 MiB cap sentinel
-                ..Default::default()
-            }),
+            (
+                "emmc",
+                ChipParams {
+                    protocol_id: ALG_EMMC,
+                    variant: 0x5300,
+                    raw_voltages: 0x0000_0053,
+                    code_memory_size: 0x1000_0000u32.wrapping_sub(0), // 256 MiB cap sentinel
+                    ..Default::default()
+                },
+            ),
         ]
     }
 
@@ -2601,7 +2869,11 @@ mod tests {
     /// Frozen NAND prelude, eMMC timing, and eMMC region-init packets.
     #[test]
     fn pack_aux_goldens() {
-        let nand = golden_fixtures().into_iter().find(|(n, _)| *n == "nand").unwrap().1;
+        let nand = golden_fixtures()
+            .into_iter()
+            .find(|(n, _)| *n == "nand")
+            .unwrap()
+            .1;
         assert_eq!(
             hex(&pack_nand_prelude(&nand).unwrap()),
             "0200000000000000400000080008400001000100030000000800000000000000000001003b4f1527000000000000000000000000000000000000000000000000",

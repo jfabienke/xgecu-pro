@@ -262,7 +262,11 @@ impl ChipDb for XmlDb {
             }
         }
         let truncated = total > hits.len();
-        Search { total, hits, truncated }
+        Search {
+            total,
+            hits,
+            truncated,
+        }
     }
 
     fn firmware_target(&self) -> FwVersion {
@@ -394,7 +398,10 @@ fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
     let pin_count = pin_count(package_details);
     for alias in names.split(',').map(str::trim).filter(|a| !a.is_empty()) {
         devices.push(Device {
-            package: Package { pin_count, name: package_name(alias, pin_count) },
+            package: Package {
+                pin_count,
+                name: package_name(alias, pin_count),
+            },
             chip_id_bytes: id_bytes_count(chip_id),
             name: alias.to_string(),
             protocol_id,
@@ -417,8 +424,8 @@ fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
             packed_package: package_details,
             // the ICSP byte lives in package_details bits 8..16.
             icsp: ((package_details & 0x0000_ff00) >> 8) as u8,
-            i2c_address: 0, // runtime-adjustable, not in the DB
-            spi_clock: 0,   // runtime-adjustable, not in the DB
+            i2c_address: 0,  // runtime-adjustable, not in the DB
+            spi_clock: 0,    // runtime-adjustable, not in the DB
             algorithm: None, // located lazily via XmlDb::algorithm
             fw_target: T76_FW_TARGET,
             vectors: Vec::new(),
@@ -500,8 +507,9 @@ impl LogicIc {
             if c.is_ascii_whitespace() {
                 continue;
             }
-            let s = logic_state(c)
-                .ok_or_else(|| Error::Format(format!("logicic.xml: bad vector char {:?}", c as char)))?;
+            let s = logic_state(c).ok_or_else(|| {
+                Error::Format(format!("logicic.xml: bad vector char {:?}", c as char))
+            })?;
             self.vectors.push(s);
             n += 1;
             if n >= self.pin_count {
@@ -528,7 +536,10 @@ impl LogicIc {
                 name: name.to_string(),
                 chip_type: chip_type::LOGIC,
                 blank_value: 0xFF,
-                package: Package { pin_count: self.pin_count, name: package_name(name, self.pin_count) },
+                package: Package {
+                    pin_count: self.pin_count,
+                    name: package_name(name, self.pin_count),
+                },
                 vectors: self.vectors.clone(),
                 vector_count: self.vector_count,
                 logic_vcc: self.vcc,
@@ -541,7 +552,10 @@ impl LogicIc {
 fn parse_logic_ic(e: &BytesStart<'_>) -> Result<LogicIc> {
     Ok(LogicIc {
         names: attr(e, b"name")?.unwrap_or_default(),
-        pin_count: attr(e, b"pins")?.map(|s| parse_num(&s)).transpose()?.unwrap_or(0) as u8,
+        pin_count: attr(e, b"pins")?
+            .map(|s| parse_num(&s))
+            .transpose()?
+            .unwrap_or(0) as u8,
         vcc: attr(e, b"voltage")?.map(|s| logic_vcc(&s)).unwrap_or(0),
         vectors: Vec::new(),
         vector_count: 0,
@@ -568,7 +582,8 @@ fn parse_logicic<R: BufRead>(reader: R) -> Result<Vec<Device>> {
             Event::Eof => break,
             Event::Start(e) => match e.name().as_ref() {
                 b"database" => {
-                    in_logic_db = attr(&e, b"type")?.is_some_and(|t| t.eq_ignore_ascii_case("LOGIC"))
+                    in_logic_db =
+                        attr(&e, b"type")?.is_some_and(|t| t.eq_ignore_ascii_case("LOGIC"))
                 }
                 b"ic" if in_logic_db => cur = Some(parse_logic_ic(&e)?),
                 b"vector" if cur.is_some() => in_vector = true,
@@ -640,8 +655,7 @@ fn find_algorithm<R: BufRead>(reader: R, section: &str, name: &str) -> Result<Op
                 if tag.as_ref() == section.as_bytes() {
                     in_section = true;
                 } else if in_section && tag.as_ref() == b"algorithm" {
-                    let matches = attr(&e, b"name")?
-                        .is_some_and(|n| n.eq_ignore_ascii_case(name));
+                    let matches = attr(&e, b"name")?.is_some_and(|n| n.eq_ignore_ascii_case(name));
                     if matches {
                         let b64 = attr(&e, b"bitstream")?.ok_or_else(|| {
                             Error::Format(format!("algorithm {name:?} has no bitstream"))
@@ -825,14 +839,24 @@ mod tests {
         for (i, d) in devices.iter().enumerate() {
             index.entry(d.name.to_ascii_uppercase()).or_insert(i);
         }
-        XmlDb { devices, index, algo_path: None, algo_dir: None, fw: T76_FW_TARGET }
+        XmlDb {
+            devices,
+            index,
+            algo_path: None,
+            algo_dir: None,
+            fw: T76_FW_TARGET,
+        }
     }
 
     #[test]
     fn parses_target_database_only() {
         let db = fixture_db();
         // W25Q64BV + W25Q64BV@SOIC8 (alias expansion) + W25X20 + AT89C51@PLCC44.
-        assert_eq!(db.devices().len(), 4, "custom block included, other DBs excluded");
+        assert_eq!(
+            db.devices().len(),
+            4,
+            "custom block included, other DBs excluded"
+        );
         assert!(db.get("OTHERDB_ONLY").is_none());
     }
 
@@ -848,7 +872,10 @@ mod tests {
         assert_eq!(d.chip_id_bytes, 3, "0xef4017 has 3 significant bytes");
         assert_eq!(d.package.pin_count, 8);
         assert_eq!(d.chip_type, 1, "type=\"1\" -> MEMORY");
-        assert_eq!(d.blank_value, 0x00, "explicit blank_value attribute honored");
+        assert_eq!(
+            d.blank_value, 0x00,
+            "explicit blank_value attribute honored"
+        );
         // An IC with no blank_value attribute defaults to the erased byte.
         assert_eq!(db.get("W25X20").unwrap().blank_value, 0xFF);
         assert_eq!(d.package.name, "SOIC8");
@@ -864,7 +891,11 @@ mod tests {
         assert_eq!(d.chip_info, 0);
         assert_eq!(d.packed_package, 0x0800_0000);
         assert_eq!(d.icsp, 0, "no ICSP byte packed in package_details");
-        assert_eq!((d.i2c_address, d.spi_clock), (0, 0), "runtime knobs default 0");
+        assert_eq!(
+            (d.i2c_address, d.spi_clock),
+            (0, 0),
+            "runtime knobs default 0"
+        );
 
         // The other alias of the same <ic> shares the parameter set but keeps
         // its own package label (no @suffix → default socket for pin count).
@@ -902,7 +933,10 @@ mod tests {
         let xml = r#"<infoic><database type="LOGIC">
           <ic name="X" type="5" pins="14" voltage="5"><vector>V1H</vector></ic>
           </database></infoic>"#;
-        assert_eq!(parse_logicic(Cursor::new(xml)).unwrap_err().code(), "format");
+        assert_eq!(
+            parse_logicic(Cursor::new(xml)).unwrap_err().code(),
+            "format"
+        );
     }
 
     #[test]
@@ -923,7 +957,10 @@ mod tests {
         let d = &devices[0];
         assert_eq!(d.code_size, 0x400 * 64 * 0x840, "reconstructed = 0x8400000");
         assert_eq!(d.pages_per_block, 64, "flag byte stripped");
-        assert_eq!(d.page_size, 0x400, "block count left in place for the prelude");
+        assert_eq!(
+            d.page_size, 0x400,
+            "block count left in place for the prelude"
+        );
         assert_eq!(d.data_memory2_size, 0, "spurious user section cleared");
 
         // Parallel NAND with a real code size is untouched by the fix-up.
@@ -970,7 +1007,13 @@ mod tests {
     #[test]
     fn id_bytes_count_is_highest_nonzero_byte() {
         // index of the highest non-zero byte.
-        for (id, n) in [(0u32, 0u8), (0x1e, 1), (0x1e51, 2), (0xef4017, 3), (0x89014012, 4)] {
+        for (id, n) in [
+            (0u32, 0u8),
+            (0x1e, 1),
+            (0x1e51, 2),
+            (0xef4017, 3),
+            (0x89014012, 4),
+        ] {
             assert_eq!(id_bytes_count(id), n, "chip_id {id:#x}");
         }
     }
@@ -1046,9 +1089,10 @@ mod tests {
     /// `MINIPRO_XML_DIR=/path/to/xgpro-db MINIPRO_ALG_DIR=/tmp/alg-native cargo test -p minipro-db alg_matches_xml`
     #[test]
     fn alg_matches_xml_real() {
-        let (Ok(xdir), Ok(adir)) =
-            (std::env::var("MINIPRO_XML_DIR"), std::env::var("MINIPRO_ALG_DIR"))
-        else {
+        let (Ok(xdir), Ok(adir)) = (
+            std::env::var("MINIPRO_XML_DIR"),
+            std::env::var("MINIPRO_ALG_DIR"),
+        ) else {
             return;
         };
         let xdb = XmlDb::load(Path::new(&xdir)).unwrap(); // uses algorithm.xml
@@ -1056,7 +1100,10 @@ mod tests {
         let x = xdb.algorithm("ROM28P32").unwrap().expect("xml ROM28P32");
         let a = adb.algorithm("ROM28P32").unwrap().expect("alg ROM28P32");
         assert_eq!(a.bitstream.len(), x.bitstream.len(), "length");
-        assert_eq!(a.bitstream, x.bitstream, "native .alg vs algorithm.xml bitstream");
+        assert_eq!(
+            a.bitstream, x.bitstream,
+            "native .alg vs algorithm.xml bitstream"
+        );
     }
 
     #[test]
@@ -1066,7 +1113,11 @@ mod tests {
             &b"zeros\x00\x00\x00\x00\x00\x00then more"[..],
         ] {
             let alg = make_alg(raw, "24C02 desc");
-            assert_eq!(decode_alg(&alg).unwrap(), raw, "native .alg round-trip {raw:?}");
+            assert_eq!(
+                decode_alg(&alg).unwrap(),
+                raw,
+                "native .alg round-trip {raw:?}"
+            );
         }
         // Too short is a clean format error, not a panic.
         assert_eq!(decode_alg(&[0u8; 16]).unwrap_err().code(), "format");
@@ -1083,9 +1134,15 @@ mod tests {
         std::fs::write(algo.join("SPI2C.alg"), make_alg(b"from alg", "W25Q64BV")).unwrap();
 
         let db = XmlDb::load(&dir).unwrap();
-        assert_eq!(db.algorithm("SPI2C").unwrap().unwrap().bitstream, b"from alg");
+        assert_eq!(
+            db.algorithm("SPI2C").unwrap().unwrap().bitstream,
+            b"from alg"
+        );
         // A name only present in algorithm.xml still falls back.
-        assert_eq!(db.algorithm("EE24C").unwrap().unwrap().bitstream, b"wrong section or entry");
+        assert_eq!(
+            db.algorithm("EE24C").unwrap().unwrap().bitstream,
+            b"wrong section or entry"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1123,13 +1180,18 @@ mod tests {
             .unwrap()
             .expect("SPI2C present in algorithms_T76");
         assert_eq!(algo.name, "SPI2C");
-        assert_eq!(algo.bitstream, payload, "picked the T76 entry, not the T56 one");
+        assert_eq!(
+            algo.bitstream, payload,
+            "picked the T76 entry, not the T56 one"
+        );
     }
 
     #[test]
     fn missing_algorithm_is_none() {
         let xml = algo_fixture(b"x");
-        assert!(find_algorithm(Cursor::new(&xml), ALGO_SECTION, "NOPE").unwrap().is_none());
+        assert!(find_algorithm(Cursor::new(&xml), ALGO_SECTION, "NOPE")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -1190,19 +1252,29 @@ mod tests {
         let s = db.search("W25Q64", 5);
         assert!(s.truncated && s.total > 5);
         // A real bitstream (W25Q64BV's SPI25F + variant 0x11), inflated lazily.
-        let a = db.algorithm("SPI25F11").unwrap().expect("SPI25F11 in algorithms_T76");
-        assert!(a.bitstream.len() > 10_000, "got {} bytes", a.bitstream.len());
+        let a = db
+            .algorithm("SPI25F11")
+            .unwrap()
+            .expect("SPI25F11 in algorithms_T76");
+        assert!(
+            a.bitstream.len() > 10_000,
+            "got {} bytes",
+            a.bitstream.len()
+        );
     }
 
     #[test]
     fn load_without_algorithm_xml() {
-        let dir = std::env::temp_dir()
-            .join(format!("minipro-db-test-noalgo-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("minipro-db-test-noalgo-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("infoic.xml"), FIXTURE).unwrap();
 
         let db = XmlDb::load(&dir).unwrap();
-        assert!(db.algorithm("SPI2C").unwrap().is_none(), "no algorithm.xml → None");
+        assert!(
+            db.algorithm("SPI2C").unwrap().is_none(),
+            "no algorithm.xml → None"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }

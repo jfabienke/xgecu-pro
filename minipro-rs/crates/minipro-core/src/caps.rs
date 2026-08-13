@@ -57,8 +57,7 @@ pub trait FuseOps {
 /// `(size + 7) / 8` bytes); `flags` selects the row bank (C `jedec_set_t`).
 pub trait JedecOps {
     fn read_row(&mut self, s: &Session, row: u8, flags: u8, size: u16) -> Result<Vec<u8>>;
-    fn write_row(&mut self, s: &Session, row: u8, flags: u8, size: u16, data: &[u8])
-        -> Result<()>;
+    fn write_row(&mut self, s: &Session, row: u8, flags: u8, size: u16, data: &[u8]) -> Result<()>;
 }
 
 /// Software write-protect toggle (PROTECT_ON/OFF).

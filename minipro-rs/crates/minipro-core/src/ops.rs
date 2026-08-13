@@ -27,7 +27,11 @@ pub fn read_region(
     let mut done = 0u64;
     while done < total {
         let len = step.min(total - done) as u32;
-        let req = BlockReq { kind: region.kind, address: region.offset + done, len };
+        let req = BlockReq {
+            kind: region.kind,
+            address: region.offset + done,
+            len,
+        };
         let block = mem.read_block(s, &req)?;
         if block.len() != len as usize {
             // A short/long response means the command stream desynced.
@@ -84,11 +88,19 @@ pub fn read_verified(
     let b = read_region(prog, s, region, rep)?;
     let stable = a.bytes == b.bytes;
     if !stable {
-        rep.event(&Event::Note("re-read differs from first read: dump is unstable".into()));
+        rep.event(&Event::Note(
+            "re-read differs from first read: dump is unstable".into(),
+        ));
     }
     let crc32 = crc32fast::hash(&a.bytes);
     let sha256: [u8; 32] = sha2::Sha256::digest(&a.bytes).into();
-    Ok(VerifiedRead { image: a, stable, reads: 2, crc32, sha256 })
+    Ok(VerifiedRead {
+        image: a,
+        stable,
+        reads: 2,
+        crc32,
+        sha256,
+    })
 }
 
 /// Write a region and verify by read-back. The write loop reports progress
@@ -119,7 +131,11 @@ pub fn write_region(
         let mut done = 0u64;
         while done < total {
             let len = step.min(total - done) as u32;
-            let req = BlockReq { kind: region.kind, address: region.offset + done, len };
+            let req = BlockReq {
+                kind: region.kind,
+                address: region.offset + done,
+                len,
+            };
             let start = done as usize;
             mem.write_block(s, &req, &image.bytes[start..start + len as usize])?;
             done += u64::from(len);
@@ -129,8 +145,15 @@ pub fn write_region(
 
     // Read-back verify.
     let back = read_region(prog, s, region, rep)?;
-    if let Some(i) = back.bytes.iter().zip(&image.bytes).position(|(a, b)| a != b) {
-        return Err(Error::Verify { addr: (region.offset + i as u64) as u32 });
+    if let Some(i) = back
+        .bytes
+        .iter()
+        .zip(&image.bytes)
+        .position(|(a, b)| a != b)
+    {
+        return Err(Error::Verify {
+            addr: (region.offset + i as u64) as u32,
+        });
     }
     Ok(())
 }
@@ -192,17 +215,33 @@ mod tests {
     }
 
     impl Programmer for FakeProg {
-        fn info(&self) -> &ProgrammerInfo { &self.info }
-        fn caps(&self) -> Caps { Caps::MEMORY }
+        fn info(&self) -> &ProgrammerInfo {
+            &self.info
+        }
+        fn caps(&self) -> Caps {
+            Caps::MEMORY
+        }
         fn begin(&mut self, dev: &Device) -> Result<Session> {
-            Ok(Session { device: dev.clone(), emmc_capacity: 0 })
+            Ok(Session {
+                device: dev.clone(),
+                emmc_capacity: 0,
+            })
         }
-        fn end(&mut self, _session: Session) -> Result<()> { Ok(()) }
+        fn end(&mut self, _session: Session) -> Result<()> {
+            Ok(())
+        }
         fn identify(&mut self, s: &Session) -> Result<ChipId> {
-            Ok(ChipId { raw: s.device.chip_id, bytes: s.device.chip_id_bytes })
+            Ok(ChipId {
+                raw: s.device.chip_id,
+                bytes: s.device.chip_id_bytes,
+            })
         }
-        fn reset(&mut self) -> Result<()> { Ok(()) }
-        fn memory(&mut self) -> Option<&mut dyn crate::caps::MemoryOps> { Some(self) }
+        fn reset(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn memory(&mut self) -> Option<&mut dyn crate::caps::MemoryOps> {
+            Some(self)
+        }
     }
 
     impl crate::caps::MemoryOps for FakeProg {
@@ -246,15 +285,24 @@ mod tests {
             page_size,
             chip_id: 0x1234,
             chip_id_bytes: 2,
-            package: Package { pin_count: 8, name: "DIP8".into() },
-            algorithm: Some(Algorithm { name: "test".into(), bitstream: Vec::new() }),
+            package: Package {
+                pin_count: 8,
+                name: "DIP8".into(),
+            },
+            algorithm: Some(Algorithm {
+                name: "test".into(),
+                bitstream: Vec::new(),
+            }),
             fw_target: FwVersion(0x00_01_11),
             ..Device::default()
         }
     }
 
     fn session_for(dev: &Device) -> Session {
-        Session { device: dev.clone(), emmc_capacity: 0 }
+        Session {
+            device: dev.clone(),
+            emmc_capacity: 0,
+        }
     }
 
     #[test]
@@ -267,7 +315,10 @@ mod tests {
     fn sha256_known_vector() {
         let d: [u8; 32] = sha2::Sha256::digest(b"").into();
         let hex: String = d.iter().map(|b| format!("{b:02x}")).collect();
-        assert_eq!(hex, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            hex,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     #[test]
@@ -302,7 +353,11 @@ mod tests {
         let s = session_for(&dev);
         let mut prog = FakeProg::new(data);
         let mut rep = Collect::default();
-        let region = Region { kind: MemoryKind::Code, offset: 8, len: 8 };
+        let region = Region {
+            kind: MemoryKind::Code,
+            offset: 8,
+            len: 8,
+        };
         let img = read_region(&mut prog, &s, region, &mut rep).unwrap();
         assert_eq!(img.bytes, (8u8..16).collect::<Vec<u8>>());
     }
@@ -326,7 +381,14 @@ mod tests {
         // And the Outcome built from it carries the same evidence.
         let out = v.outcome(&dev.name, LinkSpeed::High);
         match out {
-            Outcome::Read { device, bytes, crc32, reads, stable, .. } => {
+            Outcome::Read {
+                device,
+                bytes,
+                crc32,
+                reads,
+                stable,
+                ..
+            } => {
                 assert_eq!(device, "TEST@DIP8");
                 assert_eq!(bytes, 9);
                 assert_eq!(crc32, 0xcbf4_3926);
@@ -358,7 +420,9 @@ mod tests {
         let s = session_for(&dev);
         let mut prog = FakeProg::new(vec![0xff; 10]);
         let mut rep = Collect::default();
-        let image = Image { bytes: (0u8..10).collect() };
+        let image = Image {
+            bytes: (0u8..10).collect(),
+        };
         write_region(&mut prog, &s, Region::code(&dev), &image, &mut rep).unwrap();
         assert_eq!(prog.mem, image.bytes);
         // Write pass + verify pass each report a full progress ramp.
@@ -372,7 +436,9 @@ mod tests {
         let mut prog = FakeProg::new(vec![0xff; 10]);
         prog.corrupt_at = Some(6);
         let mut rep = Collect::default();
-        let image = Image { bytes: vec![0x00; 10] };
+        let image = Image {
+            bytes: vec![0x00; 10],
+        };
         let err = write_region(&mut prog, &s, Region::code(&dev), &image, &mut rep).unwrap_err();
         match err {
             Error::Verify { addr } => assert_eq!(addr, 6),
@@ -386,7 +452,9 @@ mod tests {
         let s = session_for(&dev);
         let mut prog = FakeProg::new(vec![0xff; 10]);
         let mut rep = Collect::default();
-        let image = Image { bytes: vec![0x00; 4] };
+        let image = Image {
+            bytes: vec![0x00; 4],
+        };
         let err = write_region(&mut prog, &s, Region::code(&dev), &image, &mut rep).unwrap_err();
         assert_eq!(err.code(), "format");
     }
@@ -396,16 +464,27 @@ mod tests {
         /// A programmer with no capabilities at all.
         struct NoCaps(ProgrammerInfo);
         impl Programmer for NoCaps {
-            fn info(&self) -> &ProgrammerInfo { &self.0 }
-            fn caps(&self) -> Caps { Caps::default() }
-            fn begin(&mut self, dev: &Device) -> Result<Session> {
-                Ok(Session { device: dev.clone(), emmc_capacity: 0 })
+            fn info(&self) -> &ProgrammerInfo {
+                &self.0
             }
-            fn end(&mut self, _session: Session) -> Result<()> { Ok(()) }
+            fn caps(&self) -> Caps {
+                Caps::default()
+            }
+            fn begin(&mut self, dev: &Device) -> Result<Session> {
+                Ok(Session {
+                    device: dev.clone(),
+                    emmc_capacity: 0,
+                })
+            }
+            fn end(&mut self, _session: Session) -> Result<()> {
+                Ok(())
+            }
             fn identify(&mut self, _s: &Session) -> Result<ChipId> {
                 Ok(ChipId { raw: 0, bytes: 0 })
             }
-            fn reset(&mut self) -> Result<()> { Ok(()) }
+            fn reset(&mut self) -> Result<()> {
+                Ok(())
+            }
         }
         let dev = test_device(10, 4);
         let s = session_for(&dev);
@@ -427,13 +506,27 @@ mod tests {
     fn short_read_block_is_protocol_error() {
         struct Short(FakeProg);
         impl Programmer for Short {
-            fn info(&self) -> &ProgrammerInfo { self.0.info() }
-            fn caps(&self) -> Caps { Caps::MEMORY }
-            fn begin(&mut self, dev: &Device) -> Result<Session> { self.0.begin(dev) }
-            fn end(&mut self, session: Session) -> Result<()> { self.0.end(session) }
-            fn identify(&mut self, s: &Session) -> Result<ChipId> { self.0.identify(s) }
-            fn reset(&mut self) -> Result<()> { Ok(()) }
-            fn memory(&mut self) -> Option<&mut dyn crate::caps::MemoryOps> { Some(self) }
+            fn info(&self) -> &ProgrammerInfo {
+                self.0.info()
+            }
+            fn caps(&self) -> Caps {
+                Caps::MEMORY
+            }
+            fn begin(&mut self, dev: &Device) -> Result<Session> {
+                self.0.begin(dev)
+            }
+            fn end(&mut self, session: Session) -> Result<()> {
+                self.0.end(session)
+            }
+            fn identify(&mut self, s: &Session) -> Result<ChipId> {
+                self.0.identify(s)
+            }
+            fn reset(&mut self) -> Result<()> {
+                Ok(())
+            }
+            fn memory(&mut self) -> Option<&mut dyn crate::caps::MemoryOps> {
+                Some(self)
+            }
         }
         impl crate::caps::MemoryOps for Short {
             fn read_block(&mut self, _s: &Session, _req: &BlockReq) -> Result<Vec<u8>> {

@@ -106,7 +106,15 @@ impl Reporter for HumanReporter {
             bar.finish_and_clear();
         }
         match out {
-            Outcome::Read { device, bytes, crc32, sha256, reads, stable, link } => {
+            Outcome::Read {
+                device,
+                bytes,
+                crc32,
+                sha256,
+                reads,
+                stable,
+                link,
+            } => {
                 let stability = if *stable {
                     format!("{}", "stable".green())
                 } else {
@@ -144,9 +152,11 @@ impl Reporter for HumanReporter {
                 table.add_row(vec!["model", model]);
                 table.add_row(vec!["firmware", &fw]);
                 // Identity fields are only shown when the programmer reports them.
-                for (label, value) in
-                    [("serial", serial), ("mfg date", mfg_date), ("device code", device_code)]
-                {
+                for (label, value) in [
+                    ("serial", serial),
+                    ("mfg date", mfg_date),
+                    ("device code", device_code),
+                ] {
                     if !value.is_empty() {
                         table.add_row(vec![label, value]);
                     }
@@ -289,7 +299,10 @@ pub fn search_json_line(query: &str, search: &Search<'_>) -> String {
 /// render-thread channel (the core types borrow / are not `Clone`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiMsg {
-    Progress { done: u64, total: u64 },
+    Progress {
+        done: u64,
+        total: u64,
+    },
     Note(String),
     Warn(String),
     /// Open pins reported by the contact check — drives the live ZIF map.
@@ -320,11 +333,19 @@ impl TuiReporter {
 /// One-line summary of an outcome for the TUI log pane.
 pub fn outcome_summary(out: &Outcome) -> String {
     match out {
-        Outcome::Read { device, bytes, crc32, stable, .. } => format!(
+        Outcome::Read {
+            device,
+            bytes,
+            crc32,
+            stable,
+            ..
+        } => format!(
             "read {device}: {bytes} bytes, crc32 {crc32:08x}, {}",
             if *stable { "stable" } else { "UNSTABLE" }
         ),
-        Outcome::Info { model, firmware, .. } => format!("{model} fw {firmware}"),
+        Outcome::Info {
+            model, firmware, ..
+        } => format!("{model} fw {firmware}"),
         Outcome::Ok { op } => format!("{op}: ok"),
     }
 }
@@ -332,7 +353,10 @@ pub fn outcome_summary(out: &Outcome) -> String {
 impl Reporter for TuiReporter {
     fn event(&mut self, ev: &Event) {
         let msg = match ev {
-            Event::Progress { done, total } => UiMsg::Progress { done: *done, total: *total },
+            Event::Progress { done, total } => UiMsg::Progress {
+                done: *done,
+                total: *total,
+            },
             Event::Note(n) => UiMsg::Note(n.to_string()),
             Event::Warn(Warning::BadContact(pins)) => UiMsg::BadContact(pins.clone()),
             Event::Warn(w) => UiMsg::Warn(warning_text(w)),
@@ -380,7 +404,10 @@ mod tests {
             page_size: 64,
             chip_id: 0x208d,
             chip_id_bytes: 2,
-            package: Package { pin_count: 28, name: "DIP28".into() },
+            package: Package {
+                pin_count: 28,
+                name: "DIP28".into(),
+            },
             algorithm: None,
             fw_target: FwVersion(0x00_01_11),
             ..Device::default()
@@ -400,7 +427,10 @@ mod tests {
         assert_eq!(out.take_string(), "{\"op\":\"erase\",\"ok\":true}\n");
         let err_lines = err.take_string();
         let mut lines = err_lines.lines();
-        assert_eq!(lines.next().unwrap(), r#"{"progress":{"done":4,"total":10}}"#);
+        assert_eq!(
+            lines.next().unwrap(),
+            r#"{"progress":{"done":4,"total":10}}"#
+        );
         assert_eq!(lines.next().unwrap(), r#"{"warn":{"bad_contact":[3,4]}}"#);
         assert!(lines.next().is_none());
     }
@@ -449,8 +479,15 @@ mod tests {
 
     #[test]
     fn search_json_line_is_bounded_and_counted() {
-        let devs = [fake_device("M27C256B@DIP28"), fake_device("M27C256B@PLCC32")];
-        let search = Search { total: 70, hits: devs.iter().collect(), truncated: true };
+        let devs = [
+            fake_device("M27C256B@DIP28"),
+            fake_device("M27C256B@PLCC32"),
+        ];
+        let search = Search {
+            total: 70,
+            hits: devs.iter().collect(),
+            truncated: true,
+        };
         let v: serde_json::Value =
             serde_json::from_str(&search_json_line("27C256", &search)).unwrap();
         assert_eq!(v["op"], "search");
@@ -463,7 +500,11 @@ mod tests {
     #[test]
     fn search_table_lists_hits_and_counts() {
         let devs = [fake_device("M27C256B@DIP28")];
-        let search = Search { total: 1, hits: devs.iter().collect(), truncated: false };
+        let search = Search {
+            total: 1,
+            hits: devs.iter().collect(),
+            truncated: false,
+        };
         let table = search_table("27C256", &search);
         assert!(table.contains("M27C256B@DIP28"));
         assert!(table.contains("DIP28"));

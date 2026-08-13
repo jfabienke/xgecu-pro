@@ -31,11 +31,16 @@ impl Format {
     /// Pick a format from a file extension (`.hex`→IHex, `.s19/.srec/…`→SRec,
     /// otherwise Raw). Used for both output naming and input selection.
     pub fn from_path(path: &Path) -> Format {
-        let ext =
-            path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
         match ext.as_str() {
             "hex" | "ihex" | "ihx" => Format::IHex,
-            "s19" | "s28" | "s37" | "srec" | "s-record" | "mot" | "s1" | "s2" | "s3" => Format::SRec,
+            "s19" | "s28" | "s37" | "srec" | "s-record" | "mot" | "s1" | "s2" | "s3" => {
+                Format::SRec
+            }
             _ => Format::Raw,
         }
     }
@@ -54,7 +59,9 @@ impl Format {
     /// records (use the chip's blank value; [`PAD`] is the usual `0xFF`).
     pub fn parse(self, bytes: &[u8], pad: u8) -> Result<Image> {
         match self {
-            Format::Raw => Ok(Image { bytes: bytes.to_vec() }),
+            Format::Raw => Ok(Image {
+                bytes: bytes.to_vec(),
+            }),
             Format::IHex => parse_ihex(bytes, pad),
             Format::SRec => parse_srec(bytes, pad),
         }
@@ -92,7 +99,11 @@ fn decode_hex(s: &str) -> Option<Vec<u8>> {
 /// Build a flat image from `(address, data)` records: sized to the highest end
 /// address, `pad`-filled, with each record written at its address.
 fn assemble(records: &[(u32, Vec<u8>)], pad: u8) -> Image {
-    let end = records.iter().map(|(a, d)| *a as usize + d.len()).max().unwrap_or(0);
+    let end = records
+        .iter()
+        .map(|(a, d)| *a as usize + d.len())
+        .max()
+        .unwrap_or(0);
     let mut out = vec![pad; end];
     for (a, d) in records {
         out[*a as usize..*a as usize + d.len()].copy_from_slice(d);
@@ -119,16 +130,21 @@ fn parse_ihex(bytes: &[u8], pad: u8) -> Result<Image> {
             continue;
         }
         let n = i + 1;
-        let rest =
-            line.strip_prefix(':').ok_or_else(|| Error::Format(format!("Intel HEX line {n}: missing ':'")))?;
-        let rec =
-            decode_hex(rest).ok_or_else(|| Error::Format(format!("Intel HEX line {n}: bad hex")))?;
+        let rest = line
+            .strip_prefix(':')
+            .ok_or_else(|| Error::Format(format!("Intel HEX line {n}: missing ':'")))?;
+        let rec = decode_hex(rest)
+            .ok_or_else(|| Error::Format(format!("Intel HEX line {n}: bad hex")))?;
         if rec.len() < 5 {
-            return Err(Error::Format(format!("Intel HEX line {n}: record too short")));
+            return Err(Error::Format(format!(
+                "Intel HEX line {n}: record too short"
+            )));
         }
         let len = rec[0] as usize;
         if rec.len() != 5 + len {
-            return Err(Error::Format(format!("Intel HEX line {n}: length byte mismatch")));
+            return Err(Error::Format(format!(
+                "Intel HEX line {n}: length byte mismatch"
+            )));
         }
         if rec.iter().fold(0u8, |a, &b| a.wrapping_add(b)) != 0 {
             return Err(Error::Format(format!("Intel HEX line {n}: checksum error")));
@@ -137,11 +153,15 @@ fn parse_ihex(bytes: &[u8], pad: u8) -> Result<Image> {
         let data = &rec[4..4 + len];
         match rec[3] {
             0x00 => records.push((base + addr, data.to_vec())),
-            0x01 => break, // EOF
+            0x01 => break,                                                       // EOF
             0x02 => base = (u16::from_be_bytes([data[0], data[1]]) as u32) << 4, // segment
             0x04 => base = (u16::from_be_bytes([data[0], data[1]]) as u32) << 16, // linear
             0x03 | 0x05 => {} // start-address records — no image data
-            t => return Err(Error::Format(format!("Intel HEX line {n}: unknown record type {t:#x}"))),
+            t => {
+                return Err(Error::Format(format!(
+                    "Intel HEX line {n}: unknown record type {t:#x}"
+                )))
+            }
         }
     }
     Ok(assemble(&records, pad))
@@ -150,7 +170,10 @@ fn parse_ihex(bytes: &[u8], pad: u8) -> Result<Image> {
 /// Write one Intel HEX record body `[len, addr_hi, addr_lo, type, data…]` with
 /// its trailing checksum (two's-complement of the byte sum).
 fn ihex_record(out: &mut String, body: &[u8]) {
-    let cksum = body.iter().fold(0u8, |a, &b| a.wrapping_add(b)).wrapping_neg();
+    let cksum = body
+        .iter()
+        .fold(0u8, |a, &b| a.wrapping_add(b))
+        .wrapping_neg();
     out.push(':');
     for &b in body {
         hex_byte(out, b);
@@ -167,7 +190,10 @@ fn emit_ihex(data: &[u8]) -> Vec<u8> {
         let hi = (addr >> 16) as u16;
         if hi != upper {
             upper = hi;
-            ihex_record(&mut out, &[0x02, 0x00, 0x00, 0x04, (hi >> 8) as u8, hi as u8]);
+            ihex_record(
+                &mut out,
+                &[0x02, 0x00, 0x00, 0x04, (hi >> 8) as u8, hi as u8],
+            );
         }
         let mut body = Vec::with_capacity(4 + chunk.len());
         body.extend_from_slice(&[chunk.len() as u8, (addr >> 8) as u8, addr as u8, 0x00]);
@@ -194,13 +220,20 @@ fn parse_srec(bytes: &[u8], pad: u8) -> Result<Image> {
         if bytes[0] != b'S' || line.len() < 4 {
             return Err(Error::Format(format!("S-record line {n}: not an S-record")));
         }
-        let rec =
-            decode_hex(&line[2..]).ok_or_else(|| Error::Format(format!("S-record line {n}: bad hex")))?;
-        let count = *rec.first().ok_or_else(|| Error::Format(format!("S-record line {n}: empty")))? as usize;
+        let rec = decode_hex(&line[2..])
+            .ok_or_else(|| Error::Format(format!("S-record line {n}: bad hex")))?;
+        let count = *rec
+            .first()
+            .ok_or_else(|| Error::Format(format!("S-record line {n}: empty")))?
+            as usize;
         if rec.len() != 1 + count {
-            return Err(Error::Format(format!("S-record line {n}: count byte mismatch")));
+            return Err(Error::Format(format!(
+                "S-record line {n}: count byte mismatch"
+            )));
         }
-        let sum = rec[..rec.len() - 1].iter().fold(0u8, |a, &b| a.wrapping_add(b));
+        let sum = rec[..rec.len() - 1]
+            .iter()
+            .fold(0u8, |a, &b| a.wrapping_add(b));
         if !sum != rec[rec.len() - 1] {
             return Err(Error::Format(format!("S-record line {n}: checksum error")));
         }
@@ -211,9 +244,16 @@ fn parse_srec(bytes: &[u8], pad: u8) -> Result<Image> {
             b'2' => 3,
             b'3' => 4,
             b'0' | b'4' | b'5' | b'6' | b'7' | b'8' | b'9' => continue,
-            t => return Err(Error::Format(format!("S-record line {n}: unknown type S{}", t as char))),
+            t => {
+                return Err(Error::Format(format!(
+                    "S-record line {n}: unknown type S{}",
+                    t as char
+                )))
+            }
         };
-        let addr = rec[1..1 + addr_len].iter().fold(0u32, |a, &b| (a << 8) | b as u32);
+        let addr = rec[1..1 + addr_len]
+            .iter()
+            .fold(0u32, |a, &b| (a << 8) | b as u32);
         records.push((addr, rec[1 + addr_len..rec.len() - 1].to_vec()));
     }
     Ok(assemble(&records, pad))
@@ -261,7 +301,9 @@ mod tests {
     use std::path::Path;
 
     fn img(bytes: &[u8]) -> Image {
-        Image { bytes: bytes.to_vec() }
+        Image {
+            bytes: bytes.to_vec(),
+        }
     }
 
     #[test]
@@ -287,14 +329,17 @@ mod tests {
     #[test]
     fn ihex_rejects_bad_checksum() {
         let hex = ":03000000010203AA\n:00000001FF\n";
-        assert_eq!(Format::IHex.parse(hex.as_bytes(), PAD).unwrap_err().code(), "format");
+        assert_eq!(
+            Format::IHex.parse(hex.as_bytes(), PAD).unwrap_err().code(),
+            "format"
+        );
     }
 
     #[test]
     fn srec_known_vector() {
         // S1 record, addr 0000, data 01 02 03, checksum.
         // count=06, sum(06 00 00 01 02 03)=0x0c, cksum=0xF3.
-        let srec = "S106000001020" .to_string() + "3F3\nS9030000FC\n";
+        let srec = "S106000001020".to_string() + "3F3\nS9030000FC\n";
         let image = Format::SRec.parse(srec.as_bytes(), PAD).unwrap();
         assert_eq!(image.bytes, vec![0x01, 0x02, 0x03]);
     }
@@ -339,7 +384,7 @@ mod tests {
         // Two data records with a hole between them -> hole is 0xFF.
         // rec1 @0000: 0xAA (len 01, cksum: 01+00+00+00+AA=AB -> neg 55)
         // rec2 @0004: 0xBB (len 01, addr 0004, cksum: 01+00+04+00+BB=C0 -> neg 40)
-        let hex = ":01000000AA55\n:0100040" .to_string() + "0BB40\n:00000001FF\n";
+        let hex = ":01000000AA55\n:0100040".to_string() + "0BB40\n:00000001FF\n";
         let image = Format::IHex.parse(hex.as_bytes(), PAD).unwrap();
         assert_eq!(image.bytes, vec![0xAA, PAD, PAD, PAD, 0xBB]);
     }

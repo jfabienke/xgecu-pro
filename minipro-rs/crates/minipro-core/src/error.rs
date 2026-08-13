@@ -18,7 +18,9 @@ impl fmt::Display for FwVersion {
     }
 }
 impl fmt::Debug for FwVersion {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{self}") }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self}")
+    }
 }
 
 /// Serializes as its display string (`"00.1.17"`) — the JSON schema's shape.
@@ -64,7 +66,11 @@ pub enum Error {
     /// Electronic chip-id did not match the selected device.
     #[error("chip id mismatch: expected {expected:04x}, got {got:04x}{}",
             alias.as_deref().map(|a| format!(" ({a})")).unwrap_or_default())]
-    ChipIdMismatch { expected: u32, got: u32, alias: Option<String> },
+    ChipIdMismatch {
+        expected: u32,
+        got: u32,
+        alias: Option<String>,
+    },
     /// Pin-contact check reported open pins (advisory — reads may still work).
     #[error("bad contact on pins {0:?}")]
     BadContact(Vec<u8>),
@@ -73,7 +79,10 @@ pub enum Error {
     Overcurrent,
     /// Device firmware and the bitstream DB target different versions.
     #[error("firmware mismatch: device {device}, bitstreams target {target}")]
-    FirmwareMismatch { device: FwVersion, target: FwVersion },
+    FirmwareMismatch {
+        device: FwVersion,
+        target: FwVersion,
+    },
     /// Read-back verification differed from the written image.
     #[error("verify failed at 0x{addr:06x}")]
     Verify { addr: u32 },
@@ -110,11 +119,17 @@ impl Error {
     /// A short, actionable remediation for the human/JSON layers, when one exists.
     pub fn hint(&self) -> Option<&'static str> {
         match self {
-            Error::Usb(_) => Some("on macOS + T76, connect via a USB 2.0 cable to force High Speed"),
+            Error::Usb(_) => {
+                Some("on macOS + T76, connect via a USB 2.0 cable to force High Speed")
+            }
             Error::ChipIdMismatch { .. } => Some("add --force to read anyway"),
-            Error::BadContact(_) => Some("reseat/clean the pins, or --skip-pincheck to read anyway"),
+            Error::BadContact(_) => {
+                Some("reseat/clean the pins, or --skip-pincheck to read anyway")
+            }
             Error::Overcurrent => Some("check chip orientation and socket position, then retry"),
-            Error::FirmwareMismatch { .. } => Some("regenerate algorithm.xml for the device firmware"),
+            Error::FirmwareMismatch { .. } => {
+                Some("regenerate algorithm.xml for the device firmware")
+            }
             _ => None,
         }
     }
@@ -136,10 +151,23 @@ mod tests {
         let cases: Vec<(Error, &str)> = vec![
             (Error::Usb("x".into()), "usb"),
             (Error::Protocol, "protocol"),
-            (Error::ChipIdMismatch { expected: 0x208d, got: 0x1e8c, alias: None }, "chip_id_mismatch"),
+            (
+                Error::ChipIdMismatch {
+                    expected: 0x208d,
+                    got: 0x1e8c,
+                    alias: None,
+                },
+                "chip_id_mismatch",
+            ),
             (Error::BadContact(vec![3, 4]), "bad_contact"),
             (Error::Overcurrent, "overcurrent"),
-            (Error::FirmwareMismatch { device: FwVersion(1), target: FwVersion(2) }, "firmware_mismatch"),
+            (
+                Error::FirmwareMismatch {
+                    device: FwVersion(1),
+                    target: FwVersion(2),
+                },
+                "firmware_mismatch",
+            ),
             (Error::Verify { addr: 0x100 }, "verify_failed"),
             (Error::Unsupported("x"), "unsupported"),
             (Error::Format("x".into()), "format"),
@@ -152,9 +180,20 @@ mod tests {
 
     #[test]
     fn chip_id_mismatch_display_includes_alias() {
-        let e = Error::ChipIdMismatch { expected: 0x208d, got: 0x1e8c, alias: Some("AT27C256R".into()) };
-        assert_eq!(e.to_string(), "chip id mismatch: expected 208d, got 1e8c (AT27C256R)");
-        let e = Error::ChipIdMismatch { expected: 0x208d, got: 0x1e8c, alias: None };
+        let e = Error::ChipIdMismatch {
+            expected: 0x208d,
+            got: 0x1e8c,
+            alias: Some("AT27C256R".into()),
+        };
+        assert_eq!(
+            e.to_string(),
+            "chip id mismatch: expected 208d, got 1e8c (AT27C256R)"
+        );
+        let e = Error::ChipIdMismatch {
+            expected: 0x208d,
+            got: 0x1e8c,
+            alias: None,
+        };
         assert_eq!(e.to_string(), "chip id mismatch: expected 208d, got 1e8c");
     }
 
@@ -166,8 +205,18 @@ mod tests {
             let back: FwVersion = serde_json::from_str(&json).unwrap();
             assert_eq!(back, v, "{json}");
         }
-        assert_eq!(serde_json::from_str::<FwVersion>("\"00.1.17\"").unwrap(), FwVersion(0x0111));
-        for bad in ["\"\"", "\"1.2\"", "\"1.2.3.4\"", "\"1.2.999\"", "\"x.y.z\"", "42"] {
+        assert_eq!(
+            serde_json::from_str::<FwVersion>("\"00.1.17\"").unwrap(),
+            FwVersion(0x0111)
+        );
+        for bad in [
+            "\"\"",
+            "\"1.2\"",
+            "\"1.2.3.4\"",
+            "\"1.2.999\"",
+            "\"x.y.z\"",
+            "42",
+        ] {
             assert!(serde_json::from_str::<FwVersion>(bad).is_err(), "{bad}");
         }
     }

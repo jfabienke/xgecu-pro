@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
-use minipro_core::format::Format;
 use minipro_core::device::{EraseKind, Image, Region};
 use minipro_core::error::{Error, Result};
+use minipro_core::format::Format;
 use minipro_core::ops;
 use minipro_core::programmer::Txn;
 use minipro_core::report::{Event, Outcome, Reporter, Warning};
@@ -53,7 +53,12 @@ struct Cli {
     legacy_chip: Option<String>,
 
     /// Read chip into FILE (legacy alias for `minipro read`)
-    #[arg(short = 'r', value_name = "FILE", help_heading = "Legacy flags", requires = "legacy_chip")]
+    #[arg(
+        short = 'r',
+        value_name = "FILE",
+        help_heading = "Legacy flags",
+        requires = "legacy_chip"
+    )]
     legacy_read: Option<PathBuf>,
 
     /// Write FILE to chip (legacy alias for `minipro write`)
@@ -221,9 +226,9 @@ impl Cli {
                 force: false,
                 skip_pincheck: false,
             })),
-            (Some(_), None, None) => {
-                Err(Error::Format("-p needs -r FILE (read) or -w FILE (write)".into()))
-            }
+            (Some(_), None, None) => Err(Error::Format(
+                "-p needs -r FILE (read) or -w FILE (write)".into(),
+            )),
             _ => Ok(None),
         }
     }
@@ -288,12 +293,36 @@ fn main() -> ExitCode {
     let result = match &command {
         Command::Tui => tui::run(cli.db.clone()),
         Command::Search { query, limit } => run_search(db_dir, query, *limit, mode),
-        Command::Read { chip, file, format, force, skip_pincheck } => {
-            run_read(db_dir, chip, file, *format, *force, *skip_pincheck, &mut *reporter_for(mode))
-        }
-        Command::Write { chip, file, format, force, skip_pincheck } => {
-            run_write(db_dir, chip, file, *format, *force, *skip_pincheck, &mut *reporter_for(mode))
-        }
+        Command::Read {
+            chip,
+            file,
+            format,
+            force,
+            skip_pincheck,
+        } => run_read(
+            db_dir,
+            chip,
+            file,
+            *format,
+            *force,
+            *skip_pincheck,
+            &mut *reporter_for(mode),
+        ),
+        Command::Write {
+            chip,
+            file,
+            format,
+            force,
+            skip_pincheck,
+        } => run_write(
+            db_dir,
+            chip,
+            file,
+            *format,
+            *force,
+            *skip_pincheck,
+            &mut *reporter_for(mode),
+        ),
         Command::Erase { chip } => run_erase(db_dir, chip, &mut *reporter_for(mode)),
         Command::Info => run_info(db_dir, &mut *reporter_for(mode)),
         Command::Detect { like } => run_detect(db_dir, like, mode),
@@ -348,7 +377,9 @@ fn load_db(dir: Option<&Path>) -> Result<Box<dyn ChipDb>> {
         }
     }
     let dir = dir.ok_or_else(|| {
-        Error::Format("no chip database: pass --db <dir>, set MINIPRO_DB_DIR, or --db-url <mirror>".into())
+        Error::Format(
+            "no chip database: pass --db <dir>, set MINIPRO_DB_DIR, or --db-url <mirror>".into(),
+        )
     })?;
     if dir.join("InfoICT76.dll").is_file() {
         Ok(Box::new(DllDb::load(dir)?))
@@ -378,11 +409,18 @@ fn warn_firmware(prog: &dyn Programmer, db: &dyn ChipDb, rep: &mut dyn Reporter)
 
 /// Contact check (advisory hardware permitting): errors with `BadContact`
 /// unless skipped; programmers without pin-test support silently pass.
-fn pincheck(prog: &mut dyn Programmer, s: &minipro_core::Session, skip: bool, rep: &mut dyn Reporter) -> Result<()> {
+fn pincheck(
+    prog: &mut dyn Programmer,
+    s: &minipro_core::Session,
+    skip: bool,
+    rep: &mut dyn Reporter,
+) -> Result<()> {
     if skip {
         return Ok(());
     }
-    let Some(pins) = prog.pins() else { return Ok(()) };
+    let Some(pins) = prog.pins() else {
+        return Ok(());
+    };
     let open = pins.contact_check(s)?;
     if open.is_empty() {
         return Ok(());
@@ -408,10 +446,17 @@ fn check_chip_id(
         return Ok(());
     }
     if force {
-        rep.event(&Event::Warn(Warning::ChipIdMismatch { expected: dev.chip_id, got: id.raw }));
+        rep.event(&Event::Warn(Warning::ChipIdMismatch {
+            expected: dev.chip_id,
+            got: id.raw,
+        }));
         Ok(())
     } else {
-        Err(Error::ChipIdMismatch { expected: dev.chip_id, got: id.raw, alias: None })
+        Err(Error::ChipIdMismatch {
+            expected: dev.chip_id,
+            got: id.raw,
+            alias: None,
+        })
     }
 }
 
@@ -598,7 +643,12 @@ fn run_detect(db_dir: Option<&Path>, like: &str, mode: Mode) -> Result<()> {
             );
         }
         _ => {
-            anstream::println!("Electronic id: 0x{:0width$X}  ({} bytes) — {}", id.raw, id.bytes, mfr);
+            anstream::println!(
+                "Electronic id: 0x{:0width$X}  ({} bytes) — {}",
+                id.raw,
+                id.bytes,
+                mfr
+            );
             if matches.is_empty() {
                 anstream::println!(
                     "No database match (chip may be blank/mis-seated, or the id isn't in the DB)."
@@ -623,7 +673,9 @@ fn bitstream_loader(db: &dyn ChipDb) -> impl FnMut(&str) -> Result<Vec<u8>> + '_
     move |name: &str| {
         db.load_algorithm_named(name)?
             .map(|a| a.bitstream)
-            .ok_or(Error::Unsupported("utility bitstream not found in the database"))
+            .ok_or(Error::Unsupported(
+                "utility bitstream not found in the database",
+            ))
     }
 }
 
@@ -640,18 +692,25 @@ fn run_logic(db_dir: Option<&Path>, chip: &str, mode: Mode) -> Result<()> {
         ));
     }
     let mut prog = open_programmer()?;
-    let session = minipro_core::Session { device: dev.clone(), emmc_capacity: 0 };
+    let session = minipro_core::Session {
+        device: dev.clone(),
+        emmc_capacity: 0,
+    };
     let pass = {
         let mut load = bitstream_loader(&*db);
-        let logic =
-            prog.logic().ok_or(Error::Unsupported("this programmer has no logic test"))?;
+        let logic = prog
+            .logic()
+            .ok_or(Error::Unsupported("this programmer has no logic test"))?;
         logic.run(&session, &mut load)?
     };
     prog.end(session)?; // de-energize the socket (end the transaction)
 
     match mode {
         Mode::Json => {
-            println!("{{\"op\":\"logic\",\"ok\":true,\"device\":{:?},\"pass\":{pass}}}", dev.name)
+            println!(
+                "{{\"op\":\"logic\",\"ok\":true,\"device\":{:?},\"pass\":{pass}}}",
+                dev.name
+            )
         }
         _ => anstream::println!(
             "Logic test {}: {}",
@@ -715,8 +774,14 @@ mod tests {
         assert_eq!(Fmt::Auto.for_output(Path::new("d.bin")), Format::Raw);
         assert_eq!(Fmt::Raw.for_output(Path::new("d.hex")), Format::Raw);
         // Input side: Auto sniffs content when the extension is unknown.
-        assert_eq!(Fmt::Auto.for_input(Path::new("d.dat"), b":00000001FF"), Format::IHex);
-        assert_eq!(Fmt::Auto.for_input(Path::new("d.dat"), &[0, 1, 2]), Format::Raw);
+        assert_eq!(
+            Fmt::Auto.for_input(Path::new("d.dat"), b":00000001FF"),
+            Format::IHex
+        );
+        assert_eq!(
+            Fmt::Auto.for_input(Path::new("d.dat"), &[0, 1, 2]),
+            Format::Raw
+        );
     }
 
     #[test]
@@ -731,10 +796,16 @@ mod tests {
         assert_eq!(img.bytes, vec![0xaa, 0xbb, 0xcc, 0xdd, 0, 0, 0, 0]);
 
         // Exact fit is untouched.
-        assert_eq!(load_image(&path, Fmt::Raw, 4, PAD).unwrap().bytes, vec![0xaa, 0xbb, 0xcc, 0xdd]);
+        assert_eq!(
+            load_image(&path, Fmt::Raw, 4, PAD).unwrap().bytes,
+            vec![0xaa, 0xbb, 0xcc, 0xdd]
+        );
 
         // Larger than the chip is rejected.
-        assert_eq!(load_image(&path, Fmt::Raw, 2, PAD).unwrap_err().code(), "format");
+        assert_eq!(
+            load_image(&path, Fmt::Raw, 2, PAD).unwrap_err().code(),
+            "format"
+        );
 
         std::fs::remove_file(&path).ok();
     }
@@ -757,7 +828,14 @@ mod tests {
 
     #[test]
     fn write_accepts_format_flag() {
-        let cli = parse(&["minipro", "write", "AT28C256@DIP28", "img.hex", "--format", "ihex"]);
+        let cli = parse(&[
+            "minipro",
+            "write",
+            "AT28C256@DIP28",
+            "img.hex",
+            "--format",
+            "ihex",
+        ]);
         match cli.command.unwrap() {
             Command::Write { format, .. } => assert_eq!(format, Fmt::Ihex),
             _ => panic!("expected write"),
@@ -785,7 +863,13 @@ mod tests {
     fn subcommands_parse() {
         let cli = parse(&["minipro", "read", "M27C256B@DIP28", "dump.bin", "--force"]);
         match cli.resolve_command().unwrap().unwrap() {
-            Command::Read { chip, file, force, skip_pincheck, .. } => {
+            Command::Read {
+                chip,
+                file,
+                force,
+                skip_pincheck,
+                ..
+            } => {
                 assert_eq!(chip, "M27C256B@DIP28");
                 assert_eq!(file, PathBuf::from("dump.bin"));
                 assert!(force);
@@ -851,7 +935,10 @@ mod tests {
     fn global_json_flag_parses_after_subcommand() {
         let cli = parse(&["minipro", "info", "--json"]);
         assert!(cli.json);
-        assert_eq!(select_mode(cli.command.as_ref(), cli.json, None), Mode::Json);
+        assert_eq!(
+            select_mode(cli.command.as_ref(), cli.json, None),
+            Mode::Json
+        );
     }
 
     #[test]
@@ -889,13 +976,19 @@ mod tests {
                 Caps::MEMORY
             }
             fn begin(&mut self, dev: &Device) -> Result<Session> {
-                Ok(Session { device: dev.clone(), emmc_capacity: 0 })
+                Ok(Session {
+                    device: dev.clone(),
+                    emmc_capacity: 0,
+                })
             }
             fn end(&mut self, _s: Session) -> Result<()> {
                 Ok(())
             }
             fn identify(&mut self, s: &Session) -> Result<ChipId> {
-                Ok(ChipId { raw: s.device.chip_id, bytes: s.device.chip_id_bytes })
+                Ok(ChipId {
+                    raw: s.device.chip_id,
+                    bytes: s.device.chip_id_bytes,
+                })
             }
             fn reset(&mut self) -> Result<()> {
                 Ok(())
@@ -943,7 +1036,10 @@ mod tests {
             page_size: 8,
             chip_id: 0x1234,
             chip_id_bytes: 2,
-            package: Package { pin_count: 8, name: "DIP8".into() },
+            package: Package {
+                pin_count: 8,
+                name: "DIP8".into(),
+            },
             algorithm: None,
             fw_target: FwVersion(0x00_01_11),
             ..Device::default()

@@ -117,7 +117,9 @@ impl UsbTransport {
     /// Get (claiming and caching on first use) a bulk OUT endpoint.
     fn out_ep(&mut self, addr: u8) -> Result<&mut Endpoint<Bulk, Out>> {
         if addr & 0x80 != 0 {
-            return Err(Error::Usb(format!("endpoint 0x{addr:02x} is not an OUT endpoint")));
+            return Err(Error::Usb(format!(
+                "endpoint 0x{addr:02x} is not an OUT endpoint"
+            )));
         }
         match self.out_eps.entry(addr) {
             Entry::Occupied(e) => Ok(e.into_mut()),
@@ -134,7 +136,9 @@ impl UsbTransport {
     /// Get (claiming and caching on first use) a bulk IN endpoint.
     fn in_ep(&mut self, addr: u8) -> Result<&mut Endpoint<Bulk, In>> {
         if addr & 0x80 == 0 {
-            return Err(Error::Usb(format!("endpoint 0x{addr:02x} is not an IN endpoint")));
+            return Err(Error::Usb(format!(
+                "endpoint 0x{addr:02x} is not an IN endpoint"
+            )));
         }
         match self.in_eps.entry(addr) {
             Entry::Occupied(e) => Ok(e.into_mut()),
@@ -175,7 +179,11 @@ impl Transport for UsbTransport {
         }
         // Command responses (EP 0x81) may take a full chip operation to arrive;
         // payload/status endpoints answer within seconds (vendor timeouts).
-        let timeout = if ep.0 == EP_CMD_IN { CMD_READ_TIMEOUT } else { SHORT_TIMEOUT };
+        let timeout = if ep.0 == EP_CMD_IN {
+            CMD_READ_TIMEOUT
+        } else {
+            SHORT_TIMEOUT
+        };
         let endpoint = self.in_ep(ep.0)?;
         // IN transfers must request a nonzero multiple of the max packet size
         // (the libusb-overflow rule: short reads are rounded up to 64 bytes).
@@ -238,9 +246,14 @@ fn no_device_error(last: Option<Error>) -> Error {
     match last {
         Some(e) if !e.to_string().contains("no programmer found") => e,
         _ => {
-            let ids: Vec<String> =
-                KNOWN_IDS.iter().map(|(v, p)| format!("{v:04x}:{p:04x}")).collect();
-            Error::Usb(format!("no known programmer connected (tried {})", ids.join(", ")))
+            let ids: Vec<String> = KNOWN_IDS
+                .iter()
+                .map(|(v, p)| format!("{v:04x}:{p:04x}"))
+                .collect();
+            Error::Usb(format!(
+                "no known programmer connected (tried {})",
+                ids.join(", ")
+            ))
         }
     }
 }
@@ -350,8 +363,13 @@ impl Transport for MockTransport {
         self.pos += 1;
         resp.ok_or(Error::Protocol)
     }
-    fn link_speed(&self) -> LinkSpeed { LinkSpeed::High }
-    fn reset(&mut self) -> Result<()> { self.pos = 0; Ok(()) }
+    fn link_speed(&self) -> LinkSpeed {
+        LinkSpeed::High
+    }
+    fn reset(&mut self) -> Result<()> {
+        self.pos = 0;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

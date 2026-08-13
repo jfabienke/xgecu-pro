@@ -76,7 +76,11 @@ impl HttpDb {
         // Even when the version check says "no change", a catalog written by an
         // older binary (different Device schema, or no header at all) can't be
         // decoded — a bad magic/schema forces a rebuild instead of a mis-decode.
-        let cached = if rebuild { None } else { read_catalog(&catalog) };
+        let cached = if rebuild {
+            None
+        } else {
+            read_catalog(&catalog)
+        };
         let rebuild = rebuild || cached.is_none();
 
         let inner = if rebuild {
@@ -87,14 +91,20 @@ impl HttpDb {
             let inner = DllDb::from_dll_bytes(dll)?; // `dll` consumed & dropped
             persist_catalog(&catalog, inner.all())?;
             clear_alg_cache(cache_dir)?; // stale bitstreams: only the latest is kept
-            let tag = checked_tag.or_else(|| head_version(&dll_url).ok()).unwrap_or_default();
+            let tag = checked_tag
+                .or_else(|| head_version(&dll_url).ok())
+                .unwrap_or_default();
             write_meta(cache_dir, &tag, today);
             inner
         } else {
             DllDb::from_devices(cached.expect("cache present when not rebuilding"))
         };
 
-        Ok(HttpDb { inner, base_url, cache_dir: cache_dir.to_path_buf() })
+        Ok(HttpDb {
+            inner,
+            base_url,
+            cache_dir: cache_dir.to_path_buf(),
+        })
     }
 }
 
@@ -123,7 +133,10 @@ impl ChipDb for HttpDb {
         let local = self.cache_dir.join("algoT76").join(format!("{name}.alg"));
         if local.is_file() {
             let bytes = std::fs::read(&local)?;
-            return Ok(Some(Algorithm { name, bitstream: decode_alg(&bytes)? }));
+            return Ok(Some(Algorithm {
+                name,
+                bitstream: decode_alg(&bytes)?,
+            }));
         }
         // Utility bitstreams (TestLgcPull, TTL1, …) live in the same algoT76/
         // as chip bitstreams — fetched by name, cached the same way.
@@ -132,7 +145,10 @@ impl ChipDb for HttpDb {
                 let tmp = local.with_extension("alg.part");
                 std::fs::write(&tmp, &bytes)?;
                 std::fs::rename(&tmp, &local)?;
-                return Ok(Some(Algorithm { name, bitstream: decode_alg(&bytes)? }));
+                return Ok(Some(Algorithm {
+                    name,
+                    bitstream: decode_alg(&bytes)?,
+                }));
             }
         }
         Ok(None)
@@ -143,7 +159,10 @@ impl ChipDb for HttpDb {
 
 /// Days since the UNIX epoch (UTC). A cheap, dependency-free "which day is it".
 fn utc_day() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() / 86_400).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() / 86_400)
+        .unwrap_or(0)
 }
 
 fn read_meta(dir: &Path) -> Option<(String, u64)> {
@@ -192,7 +211,10 @@ fn clear_alg_cache(dir: &Path) -> Result<()> {
     let algo = dir.join("algoT76");
     if let Ok(entries) = std::fs::read_dir(&algo) {
         for e in entries.flatten() {
-            if e.path().extension().is_some_and(|x| x == "alg" || x == "part") {
+            if e.path()
+                .extension()
+                .is_some_and(|x| x == "alg" || x == "part")
+            {
                 let _ = std::fs::remove_file(e.path());
             }
         }
@@ -226,7 +248,10 @@ fn http_get(url: &str) -> Result<Vec<u8>> {
 
 fn verify_sha256(bytes: &[u8], want: &str) -> Result<()> {
     use sha2::{Digest, Sha256};
-    let got: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let got: String = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     if got.eq_ignore_ascii_case(want) {
         Ok(())
     } else {
@@ -245,7 +270,10 @@ mod tests {
         let empty = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
         assert!(verify_sha256(b"", empty).is_ok());
         assert!(verify_sha256(b"", empty.to_uppercase().as_str()).is_ok());
-        assert_eq!(verify_sha256(b"tampered", empty).unwrap_err().code(), "format");
+        assert_eq!(
+            verify_sha256(b"tampered", empty).unwrap_err().code(),
+            "format"
+        );
     }
 
     #[test]
@@ -262,8 +290,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("minipro-cat-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("catalog.postcard");
-        let devs =
-            vec![Device { name: "CHIP@DIP8".into(), blank_value: 0xFF, ..Device::default() }];
+        let devs = vec![Device {
+            name: "CHIP@DIP8".into(),
+            blank_value: 0xFF,
+            ..Device::default()
+        }];
 
         // Framed write is readable back.
         persist_catalog(&path, &devs).unwrap();
