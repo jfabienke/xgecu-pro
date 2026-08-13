@@ -139,15 +139,17 @@ impl DllDb {
     /// Load the chip catalog from `dir/InfoICT76.dll`, and locate `algoT76/` /
     /// `algorithm.xml` next to it for bitstreams (a real XGPro install has both).
     pub fn load(dir: &Path) -> Result<Self> {
-        let dll = dir.join("InfoICT76.dll");
-        let pe = Pe::parse(std::fs::read(&dll)?)?;
-        let devices = extract(&pe)?;
-        let mut index = HashMap::with_capacity(devices.len());
-        for (i, d) in devices.iter().enumerate() {
-            index.entry(d.name.to_ascii_uppercase()).or_insert(i);
-        }
+        let (devices, index) = parse_dll(std::fs::read(dir.join("InfoICT76.dll"))?)?;
         let (algo_dir, algo_path) = locate_bitstreams(dir);
         Ok(DllDb { devices, index, algo_dir, algo_path })
+    }
+
+    /// Parse the catalog from in-memory DLL bytes, with **no on-disk bitstream
+    /// source** — bitstreams are supplied externally (e.g. fetched over HTTP by
+    /// [`crate::HttpDb`]). Nothing touches disk.
+    pub fn from_dll_bytes(bytes: Vec<u8>) -> Result<Self> {
+        let (devices, index) = parse_dll(bytes)?;
+        Ok(DllDb { devices, index, algo_dir: None, algo_path: None })
     }
 
     pub fn devices(&self) -> &[Device] {
@@ -186,6 +188,17 @@ impl ChipDb for DllDb {
             None => Ok(None),
         }
     }
+}
+
+/// Parse DLL bytes into the device catalog + a case-insensitive name index.
+fn parse_dll(bytes: Vec<u8>) -> Result<(Vec<Device>, HashMap<String, usize>)> {
+    let pe = Pe::parse(bytes)?;
+    let devices = extract(&pe)?;
+    let mut index = HashMap::with_capacity(devices.len());
+    for (i, d) in devices.iter().enumerate() {
+        index.entry(d.name.to_ascii_uppercase()).or_insert(i);
+    }
+    Ok((devices, index))
 }
 
 /// Locate the manufacturer table by signature, then walk it into devices.
