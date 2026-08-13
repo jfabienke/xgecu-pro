@@ -6,10 +6,12 @@
 //! walks those tables *statically* (no DLL execution, no Wine, no decompilation).
 //! The full binary format is documented in `docs/infoict76-dll-format.md`.
 //!
-//! Every device field is derived from the 116-byte descriptor by a faithful
-//! Rust port of nmatt0's `tools/infoict76-refresh/{variant,fields}.py` (itself
-//! an RE of `Xgpro_T76.exe`'s `t76_load_chip_to_state @0x4eed10` and
-//! `sub_4b3120`): the **algorithm number** (`variant` high byte — passthrough
+//! Every device field is derived from the 116-byte descriptor by the same
+//! descriptor→field transforms XGPro applies — the descriptor offsets and the
+//! algorithm-number decision tree are functional facts (RE'd from
+//! `Xgpro_T76.exe`'s `t76_load_chip_to_state @0x4eed10` / `sub_4b3120`, also
+//! documented by nmatt0's `infoict76-refresh` scripts; see the repo `NOTICE`):
+//! the **algorithm number** (`variant` high byte — passthrough
 //! `desc[0x35]` or the per-protocol tree), **flags**, **package_details**,
 //! chip_id, sizes, buffers, voltages, chip_info, pulse_delay, etc. Bitstreams
 //! resolve from `algoT76/` (native `.alg`) or `algorithm.xml` next to the DLL.
@@ -437,8 +439,7 @@ fn package_details_field(d: &[u8]) -> u32 {
 
 /// Decode a 116-byte chip descriptor into a [`Device`], porting `fields.py` +
 /// `variant.py` (nmatt0's RE of `t76_load_chip_to_state`/`sub_4b3120`). Returns
-/// `None` when the algorithm number is undefined (the chip has no bitstream —
-/// the generator skips these too). `pin_map` isn't in the descriptor (host-side
+/// `None` when the algorithm number is undefined (the chip has no bitstream/// the generator skips these too). `pin_map` isn't in the descriptor (host-side
 /// package tables, not ported) — left 0; it affects only pin-test reporting.
 fn decode_ic(pe: &Pe, ic: usize) -> Option<Device> {
     let d = pe.data.get(ic..ic + IC_STRIDE)?;
@@ -463,7 +464,7 @@ fn decode_ic(pe: &Pe, ic: usize) -> Option<Device> {
         // chip_type is RE'd at desc[0x08] (tools/infoict76-refresh/fields.py, 100%).
         chip_type: d[0x08],
         // blank_value's DLL offset is not RE'd; default to the erased byte, as
-        // the C does when the XML attribute is absent (database.c:630).
+        // the C does when the XML attribute is absent.
         blank_value: 0xFF,
         variant,
         code_size: u64::from(u32le(d, 0x38)),
@@ -528,7 +529,7 @@ mod oracle {
 
     /// The DLL+XML oracle: derive every device from InfoICT76.dll and check each
     /// field against infoic.xml (the ground truth).
-    /// `MINIPRO_DLL_DIR=/tmp/dlldb-test MINIPRO_XML_DIR=../minipro-t76 cargo test -p minipro-db oracle -- --nocapture`
+    /// `MINIPRO_DLL_DIR=/tmp/dlldb-test MINIPRO_XML_DIR=/path/to/xgpro-db cargo test -p minipro-db oracle -- --nocapture`
     #[test]
     fn dll_vs_xml_oracle() {
         let (Ok(dll_dir), Ok(xml_dir)) =

@@ -3,12 +3,13 @@
 //!
 //! # Attribution
 //!
-//! These drivers are Rust ports of the reverse-engineered C drivers in **Matt
-//! Brown's (nmatt0)** `minipro` `t76-improvements` fork
-//! (<https://gitlab.com/nmatt0/minipro/-/tree/t76-improvements>). His RE of the
-//! T48/T56/T76 USB protocols and the T76 FPGA/bitstream lifecycle is the basis
-//! for all of this — the `t48.c`/`t56.c`/`t76.c` line citations throughout point
-//! at his work. See the repo-root `NOTICE`.
+//! These are independent Rust implementations of the T48/T56/T76 USB wire
+//! protocols. The *protocol facts* they implement — opcodes, packet layouts,
+//! and the T76's FPGA/bitstream operation sequence — were reverse-engineered by
+//! the **minipro community (nmatt0)** in the `t76-improvements` fork
+//! (<https://gitlab.com/nmatt0/minipro/-/tree/t76-improvements>). That RE is
+//! what made this possible; the code here is original expression of those
+//! facts. See the repo-root `NOTICE`.
 #![forbid(unsafe_code)]
 
 pub mod t48;
@@ -21,7 +22,7 @@ use minipro_core::transport::{command, Ep};
 
 /// Detect the attached programmer and return the matching driver. Mirrors the C
 /// `minipro_open` dispatch: read `minipro_get_system_info`, branch on the
-/// device-type byte at `msg[6]` (minipro.c:159), and bind the matching driver.
+/// device-type byte at `msg[6]`, and bind the matching driver.
 pub fn detect(
     mut transport: Box<dyn minipro_core::Transport>,
 ) -> minipro_core::Result<Box<dyn minipro_core::Programmer>> {

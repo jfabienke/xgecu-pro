@@ -1,6 +1,6 @@
 # minipro-rs
 
-A Rust redesign of the [minipro](../minipro-t76) CLI, built from the design in
+A Rust redesign of the [minipro](https://gitlab.com/nmatt0/minipro/-/tree/t76-improvements) CLI, built from the design in
 [`docs/rust-redesign.md`](../docs/rust-redesign.md),
 [`docs/rust-trait-model.md`](../docs/rust-trait-model.md), and the three-mode
 output design.

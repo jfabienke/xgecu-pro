@@ -5,9 +5,9 @@
 //! binary (postcard + `include_bytes!`) for fast startup. All content derives
 //! from XGecu's XGPro — see `docs/minipro-codebase-report.md` §5.
 //!
-//! The XML schema (mirrors the C parser in `minipro-t76/src/database.c`):
+//! The infoic.xml schema (the fields XGPro's database defines):
 //!
-//! ```xml
+//! `xml
 //! <infoic>
 //!   <database type="INFOICT76">
 //!     <manufacturer name="WINBOND">
@@ -18,19 +18,19 @@
 //!     <custom name="ATMEL"> <ic .../> </custom>
 //!   </database>
 //! </infoic>
-//! ```
+//! `
 //!
 //! `algorithm.xml` holds the per-op Anlogic FPGA bitstreams, base64-wrapped
 //! gzip, ~50 MB on disk — so bitstreams are located and inflated *lazily* by
 //! [`XmlDb::algorithm`], never at [`XmlDb::load`] time:
 //!
-//! ```xml
+//! `xml
 //! <root><database type="ALGORITHMS">
 //!   <algorithms_T76>
 //!     <algorithm name="SPI2C" description="W25Q64BV" bitstream="H4sI..."/>
 //!   </algorithms_T76>
 //! </database></root>
-//! ```
+//! `
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;
@@ -57,12 +57,13 @@ pub use net::HttpDb;
 const INFOIC_DB_TYPE: &str = "INFOICT76";
 /// The bitstream container in `algorithm.xml` for the T76.
 const ALGO_SECTION: &str = "algorithms_T76";
-/// The device firmware the vendored T76 bitstreams pair with
-/// (`T76_FIRMWARE_VERSION 0x111` / `"00.1.17"` in `minipro-t76/src/t76.h`).
+/// The T76 firmware these bitstreams pair with (`T76_FIRMWARE_VERSION` =
+/// `0x111` / `"00.1.17"`).
 pub(crate) const T76_FW_TARGET: FwVersion = FwVersion(0x0111);
 
-/// Algorithm-name prefixes, indexed by `protocol_id - 1` (ported verbatim from
-/// `minipro-t76/src/database.c:334` `algo_table`). Empty entries are unused ids.
+/// Algorithm-name prefixes XGPro uses, indexed by `protocol_id - 1`. Empty
+/// entries are unused ids. (These names are facts — what XGPro calls each
+/// algorithm — and their order is dictated by the protocol-id enumeration.)
 const ALGO_TABLE: &[&str] = &[
     "IIC24C", "MW93ALG", "SPI25F", "AT45D", "F29EE", "W29F32P", // 0x01..0x06
     "ROM28P", "ROM32P", "ROM40P", "R28TO32P", "ROM24P", "ROM44", // 0x07..0x0C
@@ -76,7 +77,7 @@ const ALGO_TABLE: &[&str] = &[
 ];
 
 /// Derive the FPGA-algorithm name for a device, matching
-/// `get_algorithm()` in `database.c:1957`: `algo_table[protocol_id-1]` +
+/// `get_algorithm` in : `algo_table[protocol_id-1]` +
 /// `hex(variant >> 8)`, with the EMMC/ATMGA/AT89C special cases. Returns `None`
 /// for logic/utility devices (`protocol_id == 0`), which use a separate table.
 ///
@@ -162,7 +163,7 @@ impl XmlDb {
         let mut devices = parse_infoic(std::io::BufReader::new(file), INFOIC_DB_TYPE)?;
 
         // Logic ICs (with their test vectors) live in a separate logicic.xml,
-        // appended when present (database.c:79, 1797).
+        // appended when present (1797).
         let logicic = dir.join("logicic.xml");
         if logicic.is_file() {
             let f = std::fs::File::open(&logicic)?;
@@ -374,7 +375,7 @@ fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
         }
     }
 
-    // XGecu SPI-NAND geometry fix-up (database.c:709-745): those descriptors
+    // XGecu SPI-NAND geometry fix-up: those descriptors
     // pack block_count into page_size, real pages-per-block into the low 24
     // bits of pages_per_block (flags in the top byte), and page+spare into
     // write_buffer_size, leaving code_memory_size = 0. Reconstruct the real
@@ -414,7 +415,7 @@ fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
             pages_per_block: pages_per_block.min(u32::from(u16::MAX)) as u16,
             raw_flags,
             packed_package: package_details,
-            // database.c:702 — the ICSP byte lives in package_details bits 8..16.
+            // the ICSP byte lives in package_details bits 8..16.
             icsp: ((package_details & 0x0000_ff00) >> 8) as u8,
             i2c_address: 0, // runtime-adjustable, not in the DB
             spi_clock: 0,   // runtime-adjustable, not in the DB
@@ -452,7 +453,7 @@ pub(crate) fn pin_count(package_details: u32) -> u8 {
 // logicic.xml — the separate logic-IC database (test vectors)
 // ---------------------------------------------------------------------------
 
-/// One logic-IC state code (database.c:1579-1608): `0 1 L H C Z X G V` -> 0..8.
+/// One logic-IC state code: `0 1 L H C Z X G V` -> 0..8.
 /// `None` for any other (non-whitespace) character.
 fn logic_state(c: u8) -> Option<u8> {
     Some(match c {
@@ -469,7 +470,7 @@ fn logic_state(c: u8) -> Option<u8> {
     })
 }
 
-/// Map a logic `voltage` attribute to the VCC code (database.c:222-226); the
+/// Map a logic `voltage` attribute to the VCC code; the
 /// default is 5 V (`0x00`, `DEFAULT_LOGIC_VOLTAGE`).
 fn logic_vcc(v: &str) -> u8 {
     match v.trim() {
@@ -491,7 +492,7 @@ struct LogicIc {
 
 impl LogicIc {
     /// Append one `<vector>` row: exactly `pin_count` state chars, whitespace
-    /// ignored (database.c:1572-1614). The C stops at `pin_count` and errors if
+    /// ignored. The C stops at `pin_count` and errors if
     /// short.
     fn push_vector(&mut self, text: &[u8]) -> Result<()> {
         let mut n = 0u8;
@@ -548,7 +549,7 @@ fn parse_logic_ic(e: &BytesStart<'_>) -> Result<LogicIc> {
 }
 
 /// Parse `logicic.xml` (the standalone logic-IC database) into logic devices
-/// carrying their test vectors. Format (database.c:1547-1615): a
+/// carrying their test vectors. Format: a
 /// `<database type="LOGIC">` of `<ic type="5" pins=N voltage=V>` elements, each
 /// holding `<vector>` children whose text is N pin-state chars.
 ///
@@ -678,7 +679,7 @@ fn inflate_bitstream(b64: &str) -> Result<Vec<u8>> {
 }
 
 /// Second-level (RLE-of-zeros) decompression of a T76 bitstream, matching
-/// `get_algorithm` in `database.c:2104-2153`. After gunzip the blob is
+/// `get_algorithm` in . After gunzip the blob is
 /// `[algo_size: u32 LE][crc: u32 LE][data…]` (offsets 0x00/0x04/0x08). The data
 /// is a stream of little-endian u16 words: a non-zero word is emitted verbatim;
 /// a zero word is a run marker whose following word gives the count of zero u16
@@ -697,8 +698,7 @@ const ALG_DATA_OFFSET: usize = 0x1000;
 /// `.alg` layout: `[0x00..0x04]` magic, `[0x04..0x08]` decompressed size,
 /// `[0x08..0x0C]` crc, `[0x10..0x1000]` ASCII description, `[0x1000..]`
 /// RLE-of-zeros data. The 8-byte size/crc header (`[0x04..0x0C]`) followed by
-/// the RLE data is exactly the two-level blob [`level2_decompress`] consumes —
-/// the same splice `dump-alg-minipro.bash` gzips into `algorithm.xml` — so we
+/// the RLE data is exactly the two-level blob [`level2_decompress`] consumes/// the same splice `dump-alg-minipro.bash` gzips into `algorithm.xml` — so we
 /// rebuild that blob and reuse the decompressor. No gzip/base64 round-trip.
 fn decode_alg(alg: &[u8]) -> Result<Vec<u8>> {
     if alg.len() < ALG_DATA_OFFSET {
@@ -908,7 +908,7 @@ mod tests {
     #[test]
     fn spi_nand_geometry_fixup_matches_c() {
         // MX35LF1GE4AB-shaped descriptor: packed geometry, code_memory_size 0,
-        // flag bits in the top byte of pages_per_block (database.c:709-745).
+        // flag bits in the top byte of pages_per_block.
         let xml = r#"<infoic><database type="INFOICT76"><manufacturer name="MACRONIX">
             <ic name="MX35LF1GE4AB" protocol_id="0x2d" code_memory_size="0"
                 page_size="0x400" pages_per_block="0x04000040"
@@ -1043,7 +1043,7 @@ mod tests {
 
     /// Opt-in: prove the native `.alg` path yields a byte-identical bitstream to
     /// the `algorithm.xml` path on the *real* files.
-    /// `MINIPRO_XML_DIR=../minipro-t76 MINIPRO_ALG_DIR=/tmp/alg-native cargo test -p minipro-db alg_matches_xml`
+    /// `MINIPRO_XML_DIR=/path/to/xgpro-db MINIPRO_ALG_DIR=/tmp/alg-native cargo test -p minipro-db alg_matches_xml`
     #[test]
     fn alg_matches_xml_real() {
         let (Ok(xdir), Ok(adir)) =
@@ -1173,7 +1173,7 @@ mod tests {
     }
 
     /// Opt-in smoke test against the real vendored XML (19 MB + 50 MB):
-    /// `MINIPRO_XML_DIR=../minipro-t76 cargo test -p minipro-db real_vendor_db`.
+    /// `MINIPRO_XML_DIR=/path/to/xgpro-db cargo test -p minipro-db real_vendor_db`.
     #[test]
     fn real_vendor_db_smoke() {
         let Ok(dir) = std::env::var("MINIPRO_XML_DIR") else {

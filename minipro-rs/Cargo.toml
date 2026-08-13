@@ -16,7 +16,7 @@ members = [
 [workspace.package]
 version = "0.0.0"
 edition = "2021"
-license = "GPL-3.0-or-later"
+license = "MIT"
 repository = "https://gitlab.com/nmatt0/minipro"
 
 # Shared dependency versions. Crates opt in with `dep = { workspace = true }`.

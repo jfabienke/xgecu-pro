@@ -93,11 +93,11 @@ pub struct Package {
 }
 
 /// A chip descriptor from the database, mirroring the C `device_t` fields the
-/// T76 transaction packers consume (`t76.c:503-848`). Plain data.
+/// T76 transaction packers consume. Plain data.
 ///
 /// Fields absent from a given `infoic.xml` entry stay 0 (the C parser's
 /// behaviour); `i2c_address`/`spi_clock`/`icsp` are runtime-adjustable knobs
-/// that default to 0 and may be overwritten by CLI options before `begin()`.
+/// that default to 0 and may be overwritten by CLI options before `begin`.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Device {

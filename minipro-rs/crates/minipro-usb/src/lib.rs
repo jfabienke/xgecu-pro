@@ -9,7 +9,7 @@
 //! hardware-free unit tests.
 //!
 //! `nusb` is async at heart, but every call site here uses its blocking
-//! surface (`MaybeFuture::wait()` and `Endpoint::transfer_blocking`), so the
+//! surface (`MaybeFuture::wait` and `Endpoint::transfer_blocking`), so the
 //! [`Transport`] trait stays synchronous and no executor leaks upward.
 #![forbid(unsafe_code)]
 
@@ -29,13 +29,13 @@ pub const T76_PID: u16 = 0x1A86;
 
 /// The TL866II+, T48, and T56 all enumerate as one USB id (`0xA466:0x0A53`);
 /// the concrete model is read from the system-info device-type byte, not the
-/// PID (usb_nix.c:28-29). Opening this id covers all three.
+/// PID. Opening this id covers all three.
 pub const TL866II_VID: u16 = 0xA466;
 /// Shared TL866II+/T48/T56 product id.
 pub const TL866II_PID: u16 = 0x0A53;
 
 /// USB ids this port can open, in probe order: the T76, then the shared
-/// TL866II+/T48/T56 id. [`UsbTransport::open_any`] tries each; `detect()`
+/// TL866II+/T48/T56 id. [`UsbTransport::open_any`] tries each; `detect`
 /// resolves the concrete driver afterward from the system-info byte.
 pub const KNOWN_IDS: &[(u16, u16)] = &[(T76_VID, T76_PID), (TL866II_VID, TL866II_PID)];
 
@@ -87,7 +87,7 @@ impl UsbTransport {
             pid,
         };
         // Claim the command pair eagerly: if 0x01/0x81 are missing or not bulk
-        // this is the wrong device, and we want to fail in open(), not on the
+        // this is the wrong device, and we want to fail in open, not on the
         // first command.
         tx.out_ep(EP_CMD_OUT)?;
         tx.in_ep(EP_CMD_IN)?;
@@ -96,7 +96,7 @@ impl UsbTransport {
 
     /// Open the first present known programmer, probing [`KNOWN_IDS`] in order.
     /// The concrete model (T56/T48/T76, or an unsupported TL866II+) is resolved
-    /// later by `detect()` from the system-info byte — all of T48/T56/TL866II+
+    /// later by `detect` from the system-info byte — all of T48/T56/TL866II+
     /// share one USB id, so there is nothing to choose between here.
     pub fn open_any() -> Result<Self> {
         let mut last: Option<Error> = None;
@@ -266,8 +266,8 @@ fn open_device(vid: u16, pid: u16) -> Result<(nusb::Device, nusb::Interface, Lin
     // even though control transfers and interface-claim succeed. Cycling the
     // configuration (0 -> 1) re-arms the endpoints. Harmless on other OSes and
     // guarded to the T76 so it can't disturb the TL866/T48/T56 devices.
-    // (Ported from minipro-t76/src/usb_nix.c; errors deliberately ignored,
-    // exactly as the C code ignores libusb_set_configuration's return.)
+    // The set_configuration return is ignored — it's advisory, and the re-arm
+    // is a best-effort workaround.
     if vid == T76_VID && pid == T76_PID {
         let _ = device.set_configuration(0).wait();
         let _ = device.set_configuration(1).wait();
@@ -397,7 +397,7 @@ mod tests {
         assert!(tx.send(Ep(0x01), &[0x99]).is_err()); // desync -> Protocol error
     }
 
-    // check_link() delegates to superspeed_diagnostic(cfg!(macos), link); the
+    // check_link delegates to superspeed_diagnostic(cfg!(macos), link); the
     // helper is what makes the macOS+Super rejection testable on every host
     // without a live device.
     #[test]
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn open_fails_cleanly_with_no_device() {
-        // No T76 is attached in CI; open() must fail with a typed USB error
+        // No T76 is attached in CI; open must fail with a typed USB error
         // (enumeration succeeding but finding no match), never panic.
         // TODO(hw): a live-device open/claim/transfer test needs real hardware.
         match UsbTransport::open(T76_VID, T76_PID) {

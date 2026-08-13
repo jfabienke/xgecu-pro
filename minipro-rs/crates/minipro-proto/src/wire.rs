@@ -2,8 +2,8 @@
 //! TL866II+, T48, T56, and T76 all speak the same command generation: the same
 //! opcode space (BEGIN_TRANS `0x03`, END `0x04`, READID `0x05`, WRITE/READ CODE
 //! `0x0c`/`0x0d`, ERASE `0x0e`, REQUEST_STATUS `0x39`), and a **byte-identical
-//! 64-byte BEGIN_TRANS header** (`t48.c:254-298`, `t56.c:181-222`,
-//! `t76.c:517-565`). The T76 additionally appends a chip-class extension block
+//! 64-byte BEGIN_TRANS header**. The T76 additionally appends a chip-class
+//! extension block
 //! in bytes `0x40..0x7f`; that stays in the driver, on top of [`pack_begin64`].
 //!
 //! Extracted from the T76 driver so the T56/T48/TL866II+ ports reuse it rather
@@ -15,7 +15,7 @@ use minipro_core::error::{Error, Result};
 use minipro_core::transport::{command, Ep, Transport};
 
 // ---------------------------------------------------------------------------
-// II+-family opcodes shared across T48/T56/T76 (t76.c:34-93 and siblings).
+// II+-family opcodes shared across T48/T56/T76.
 // ---------------------------------------------------------------------------
 /// BEGIN_TRANS — load the chip profile / open a transaction.
 pub const CMD_BEGIN_TRANS: u8 = 0x03;
@@ -53,9 +53,9 @@ pub(crate) fn ascii_field(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[..end]).trim().to_string()
 }
 
-/// The `device_t` fields consumed by the II+-family packet packers
-/// (`t76.c:503-848` and the T48/T56 equivalents). `from_device` copies them 1:1
-/// from the core [`Device`], with sizes clamped to the wire widths.
+/// The device fields consumed by the II+-family packet packers.
+/// `from_device` copies them 1:1 from the core [`Device`], with sizes clamped
+/// to the wire widths.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ChipParams {
     pub protocol_id: u8,
@@ -115,49 +115,49 @@ impl ChipParams {
     }
 }
 
-/// Pack the shared 64-byte BEGIN_TRANS header (`t76.c:516-565`, byte-identical
+/// Pack the shared 64-byte BEGIN_TRANS header (byte-identical
 /// on T48/T56). The T76 driver copies this into a 128-byte buffer and appends
 /// its chip-class extension in `0x40..0x7f`; a fixed-silicon sibling (T48,
 /// TL866II+) sends exactly these 64 bytes.
 pub(crate) fn pack_begin64(p: &ChipParams) -> [u8; 64] {
     let mut msg = [0u8; 64];
 
-    msg[0] = CMD_BEGIN_TRANS; // t76.c:517
-    msg[1] = p.protocol_id; // t76.c:518
-    msg[2] = p.variant as u8; // t76.c:519
-    msg[3] = p.icsp; // t76.c:520
-    le16(&mut msg, 4, p.raw_voltages as u16); // t76.c:522
-    msg[6] = p.chip_info; // t76.c:524
-    msg[7] = p.pin_map; // t76.c:525
-    le16(&mut msg, 8, p.data_memory_size); // t76.c:526
-    le16(&mut msg, 10, p.page_size); // t76.c:528
-    le16(&mut msg, 12, p.pulse_delay); // t76.c:529
-    le16(&mut msg, 14, p.data_memory2_size); // t76.c:531
-    le32(&mut msg, 16, p.code_memory_size); // t76.c:533
+    msg[0] = CMD_BEGIN_TRANS;
+    msg[1] = p.protocol_id;
+    msg[2] = p.variant as u8;
+    msg[3] = p.icsp;
+    le16(&mut msg, 4, p.raw_voltages as u16);
+    msg[6] = p.chip_info;
+    msg[7] = p.pin_map;
+    le16(&mut msg, 8, p.data_memory_size);
+    le16(&mut msg, 10, p.page_size);
+    le16(&mut msg, 12, p.pulse_delay);
+    le16(&mut msg, 14, p.data_memory2_size);
+    le32(&mut msg, 16, p.code_memory_size);
 
-    msg[20] = (p.raw_voltages >> 16) as u8; // t76.c:536
+    msg[20] = (p.raw_voltages >> 16) as u8;
     if (p.raw_voltages & 0xf0) == 0xf0 {
-        msg[22] = p.raw_voltages as u8; // t76.c:539
+        msg[22] = p.raw_voltages as u8;
     } else {
-        msg[21] = p.raw_voltages as u8 & 0x0f; // t76.c:541
-        msg[22] = p.raw_voltages as u8 & 0xf0; // t76.c:542
+        msg[21] = p.raw_voltages as u8 & 0x0f;
+        msg[22] = p.raw_voltages as u8 & 0xf0;
     }
     if p.raw_voltages & 0x8000_0000 != 0 {
-        msg[22] = ((p.raw_voltages >> 16) & 0x0f) as u8; // t76.c:545
+        msg[22] = ((p.raw_voltages >> 16) & 0x0f) as u8;
     }
 
-    // SPI clock (t76.c:551-555 / t56.c:211-214). The C guards this behind
-    // `can_adjust_clock`; a device without the capability carries 0 in the
-    // field, so writing it unconditionally is equivalent and shared.
+    // SPI clock. The write is guarded by `can_adjust_clock` in the family;
+    // a device without the capability carries 0 in the field, so writing it
+    // unconditionally is equivalent and shared.
     msg[28] = p.spi_clock;
 
-    le32(&mut msg, 40, p.packed_package); // t76.c:557 / t56.c:216
-    le16(&mut msg, 44, p.read_buffer_size); // t76.c:559 / t56.c:219
-    le32(&mut msg, 56, p.raw_flags); // t76.c:561 / t56.c:221
+    le32(&mut msg, 40, p.packed_package);
+    le16(&mut msg, 44, p.read_buffer_size);
+    le32(&mut msg, 56, p.raw_flags);
 
-    // Deliberately NOT written here (verified T76-only against t56.c:181-224):
-    //   msg[24] = i2c_address     — T76 sets it (t76.c:549); T56 never does.
-    //   msg[63] = variant >> 8    — T76's algorithm number (t76.c:565); on the
+    // Deliberately NOT written here (verified T76-only, not on T48/T56):
+    //   msg[24] = i2c_address     — T76 sets it; T56 never does.
+    //   msg[63] = variant >> 8    — T76's algorithm number; on the
     //                               T56 the algorithm is selected purely by the
     //                               uploaded bitstream, so msg[63] stays 0.
     // Each driver layers those on top of this shared subset.
@@ -168,7 +168,7 @@ pub(crate) fn pack_begin64(p: &ChipParams) -> [u8; 64] {
 // Shared firmware-mediated ops (fuses, JEDEC rows, protect, calibration).
 //
 // These are byte-identical across T48/T56/T76 and all run on the command
-// endpoints EP01 OUT / EP81 IN (usb_nix.c:442-459) — no bulk plane, no FPGA
+// endpoints EP01 OUT / EP81 IN — no bulk plane, no FPGA
 // bitstream. Implemented once here; each driver delegates. (Logic test and SPI
 // autodetect are *not* here: on the FPGA drivers they require a utility-algorithm
 // bitstream upload, so they stay per-driver.)
@@ -319,8 +319,8 @@ pub(crate) fn calibration_read(tx: &mut dyn Transport, len: usize) -> Result<Vec
 }
 
 // ---------------------------------------------------------------------------
-// Logic-IC test — the vector protocol is byte-identical across T48/T56/T76
-// (t48.c:587-642 / t56.c:561-616 / t76.c:1626-…). Only the FPGA bitstream
+// Logic-IC test — the vector protocol is byte-identical across T48/T56/T76.
+// Only the FPGA bitstream
 // upload around it differs per driver, so that stays in each driver; the
 // per-pass vector loop and the comparison live here.
 // ---------------------------------------------------------------------------
