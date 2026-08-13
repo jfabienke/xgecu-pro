@@ -406,6 +406,9 @@ fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
             spi_clock: 0,   // runtime-adjustable, not in the DB
             algorithm: None, // located lazily via XmlDb::algorithm
             fw_target: T76_FW_TARGET,
+            vectors: Vec::new(),
+            vector_count: 0,
+            logic_vcc: 0,
         });
     }
     Ok(())

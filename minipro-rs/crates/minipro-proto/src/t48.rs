@@ -23,8 +23,8 @@
 //! logic test, fuses, JEDEC rows, TSOP48 unlock, and firmware update are
 //! deferred.
 
-use minipro_core::caps::MemoryOps;
-use minipro_core::device::{BlockReq, ChipId, Device, EraseKind, MemoryKind, Region};
+use minipro_core::caps::{FuseOps, JedecOps, LogicTest, MemoryOps, Protect, SpiAutodetect};
+use minipro_core::device::{BlockReq, ChipId, Device, EraseKind, FuseKind, MemoryKind, Region};
 use minipro_core::error::{Error, FwVersion, Result};
 use minipro_core::programmer::{Caps, Programmer, ProgrammerInfo, Session};
 use minipro_core::transport::{command, Ep, LinkSpeed, Transport};
@@ -44,10 +44,28 @@ const EP_DAT_OUT: Ep = Ep(0x02);
 // T48-specific opcodes (t48.c:34-65); shared II+-family opcodes come from
 // `crate::wire`.
 const MP_T48: u8 = 0x07; // device-type byte in the system-info report (minipro.h:28)
+const CMD_READ_USER: u8 = 0x06; // t48.c:38 — fuse spaces
+const CMD_WRITE_USER: u8 = 0x07; // t48.c:39
+const CMD_READ_CFG: u8 = 0x08; // t48.c:40
+const CMD_WRITE_CFG: u8 = 0x09; // t48.c:41
 const CMD_WRITE_USER_DATA: u8 = 0x0a; // t48.c:42
 const CMD_READ_USER_DATA: u8 = 0x0b; // t48.c:43
 const CMD_READ_DATA: u8 = 0x10; // t48.c:48
 const CMD_WRITE_DATA: u8 = 0x11; // t48.c:49
+const CMD_WRITE_LOCK: u8 = 0x14; // t48.c:50
+const CMD_READ_LOCK: u8 = 0x15; // t48.c:51
+const CMD_PROTECT_OFF: u8 = 0x18; // t48.c:53
+const CMD_PROTECT_ON: u8 = 0x19; // t48.c:54
+const CMD_READ_JEDEC: u8 = 0x1d; // t48.c:55
+const CMD_WRITE_JEDEC: u8 = 0x1e; // t48.c:56
+const CMD_LOGIC_IC_TEST_VECTOR: u8 = 0x28; // t48.c:57
+const CMD_AUTODETECT: u8 = 0x37; // t48.c:58
+
+// Logic-vector state codes (database.h; pst string "01LHCZXGV"). Only L/H/Z are
+// checked against the two test passes.
+const LOGIC_L: u8 = 2;
+const LOGIC_H: u8 = 3;
+const LOGIC_Z: u8 = 5;
 
 /// The T48 command channel + cached identity.
 pub struct T48 {
@@ -120,9 +138,14 @@ impl Programmer for T48 {
     }
 
     fn caps(&self) -> Caps {
-        // Fixed-silicon core: memory ops only this increment. The pin-driver /
-        // bit-bang subsystem, logic test, fuses, and JEDEC rows are deferred.
+        // All firmware-mediated ops. The pin-driver / bit-bang subsystem, the
+        // hardware self-test, and firmware update are deferred (see module docs).
         Caps::MEMORY
+            .with(Caps::FUSES)
+            .with(Caps::JEDEC)
+            .with(Caps::PROTECT)
+            .with(Caps::AUTODETECT)
+            .with(Caps::LOGIC)
     }
 
     /// `t48_begin_transaction` (t48.c:246-314): the shared 64-byte header (no
@@ -185,6 +208,223 @@ impl Programmer for T48 {
 
     fn memory(&mut self) -> Option<&mut dyn MemoryOps> {
         Some(self)
+    }
+    fn fuses(&mut self) -> Option<&mut dyn FuseOps> {
+        Some(self)
+    }
+    fn jedec(&mut self) -> Option<&mut dyn JedecOps> {
+        Some(self)
+    }
+    fn protect(&mut self) -> Option<&mut dyn Protect> {
+        Some(self)
+    }
+    fn autodetect(&mut self) -> Option<&mut dyn SpiAutodetect> {
+        Some(self)
+    }
+    fn logic(&mut self) -> Option<&mut dyn LogicTest> {
+        Some(self)
+    }
+}
+
+impl FuseOps for T48 {
+    /// `t48_read_fuses` (t48.c:384-415): `[0]`=space opcode, `[1]`=protocol_id,
+    /// `[2]`=items_count, `[4..8]`=code_memory_size; send 8, recv 64, return
+    /// `length` bytes from `[8]`.
+    fn read_fuses(
+        &mut self,
+        s: &Session,
+        kind: FuseKind,
+        length: usize,
+        items_count: u8,
+    ) -> Result<Vec<u8>> {
+        let op = match kind {
+            FuseKind::User => CMD_READ_USER,
+            FuseKind::Config => CMD_READ_CFG,
+            FuseKind::Lock => CMD_READ_LOCK,
+        };
+        let mut msg = [0u8; 8];
+        msg[0] = op;
+        msg[1] = s.device.protocol_id;
+        msg[2] = items_count;
+        le32(&mut msg, 4, s.device.code_size.min(u64::from(u32::MAX)) as u32);
+        let resp = self.cmd(&msg, 64)?;
+        if resp.len() < 8 + length {
+            return Err(Error::Protocol);
+        }
+        Ok(resp[8..8 + length].to_vec())
+    }
+
+    /// `t48_write_fuses` (t48.c:417-446): as above but the address field is
+    /// `code_memory_size - 0x38` (a preserved firmware-bug workaround) and the
+    /// payload follows at `[8]`; a single 64-byte send, no reply.
+    fn write_fuses(
+        &mut self,
+        s: &Session,
+        kind: FuseKind,
+        items_count: u8,
+        data: &[u8],
+    ) -> Result<()> {
+        let op = match kind {
+            FuseKind::User => CMD_WRITE_USER,
+            FuseKind::Config => CMD_WRITE_CFG,
+            FuseKind::Lock => CMD_WRITE_LOCK,
+        };
+        if data.len() > 56 {
+            return Err(Error::Format("fuse payload exceeds 56 bytes".into()));
+        }
+        let mut msg = [0u8; 64];
+        msg[0] = op;
+        msg[1] = s.device.protocol_id;
+        msg[2] = items_count;
+        // 0x38 firmware-bug offset (t48.c:441); wraps like the C uint math.
+        let addr = (s.device.code_size.min(u64::from(u32::MAX)) as u32).wrapping_sub(0x38);
+        le32(&mut msg, 4, addr);
+        msg[8..8 + data.len()].copy_from_slice(data);
+        self.send(&msg)
+    }
+}
+
+impl JedecOps for T48 {
+    /// `t48_read_jedec_row` (t48.c:565-584): `[0]`=0x1d, `[1]`=protocol_id,
+    /// `[2]`=size, `[4]`=row, `[5]`=flags; send 8, recv 32, return the first
+    /// `(size + 7) / 8` bytes (from `[0]`, not `[8]`).
+    fn read_row(&mut self, s: &Session, row: u8, flags: u8, size: u16) -> Result<Vec<u8>> {
+        let mut msg = [0u8; 8];
+        msg[0] = CMD_READ_JEDEC;
+        msg[1] = s.device.protocol_id;
+        msg[2] = size as u8;
+        msg[4] = row;
+        msg[5] = flags;
+        let resp = self.cmd(&msg, 32)?;
+        let nbytes = usize::from(size.div_ceil(8));
+        if resp.len() < nbytes {
+            return Err(Error::Protocol);
+        }
+        Ok(resp[..nbytes].to_vec())
+    }
+
+    /// `t48_write_jedec_row` (t48.c:548-563): the row payload at `[8]`, a
+    /// single 64-byte send.
+    fn write_row(
+        &mut self,
+        s: &Session,
+        row: u8,
+        flags: u8,
+        size: u16,
+        data: &[u8],
+    ) -> Result<()> {
+        let nbytes = usize::from(size.div_ceil(8));
+        if data.len() < nbytes || nbytes > 56 {
+            return Err(Error::Format(format!(
+                "JEDEC row needs {nbytes} bytes (size {size} bits), got {}",
+                data.len()
+            )));
+        }
+        let mut msg = [0u8; 64];
+        msg[0] = CMD_WRITE_JEDEC;
+        msg[1] = s.device.protocol_id;
+        msg[2] = size as u8;
+        msg[4] = row;
+        msg[5] = flags;
+        msg[8..8 + nbytes].copy_from_slice(&data[..nbytes]);
+        self.send(&msg)
+    }
+}
+
+impl Protect for T48 {
+    /// `t48_protect_on` (t48.c:519-525): a bare 0x19, no reply.
+    fn protect_on(&mut self, _s: &Session) -> Result<()> {
+        let mut msg = [0u8; 8];
+        msg[0] = CMD_PROTECT_ON;
+        self.send(&msg)
+    }
+    /// `t48_protect_off` (t48.c:511-517): a bare 0x18, no reply.
+    fn protect_off(&mut self, _s: &Session) -> Result<()> {
+        let mut msg = [0u8; 8];
+        msg[0] = CMD_PROTECT_OFF;
+        self.send(&msg)
+    }
+}
+
+impl SpiAutodetect for T48 {
+    /// `t48_spi_autodetect` (t48.c:476-492): `[0]`=0x37, `[8]`=package flag;
+    /// send 10, recv 32, id = 3 bytes big-endian from `[2]`.
+    fn spi_autodetect(&mut self, wide: bool) -> Result<u32> {
+        let mut msg = [0u8; 10];
+        msg[0] = CMD_AUTODETECT;
+        msg[8] = u8::from(wide);
+        let resp = self.cmd(&msg, 32)?;
+        if resp.len() < 5 {
+            return Err(Error::Protocol);
+        }
+        Ok((u32::from(resp[2]) << 16) | (u32::from(resp[3]) << 8) | u32::from(resp[4]))
+    }
+}
+
+impl T48 {
+    /// One logic-test pass (`do_ic_test`, t48.c:587-642). `pull` = 0 pull-up,
+    /// 1 pull-down. Returns `pin_count * vector_count` unpacked pin states.
+    fn do_ic_test(&mut self, s: &Session, pull: u8) -> Result<Vec<u8>> {
+        let pin_count = usize::from(s.device.package.pin_count);
+        let vector_count = usize::from(s.device.vector_count);
+        if pin_count == 0 || vector_count == 0 || s.device.vectors.len() < pin_count * vector_count
+        {
+            return Err(Error::Unsupported("device has no logic-test vectors"));
+        }
+        let mut result = Vec::with_capacity(pin_count * vector_count);
+        for n in 0..vector_count {
+            let mut msg = [0xffu8; 32];
+            msg[0] = CMD_LOGIC_IC_TEST_VECTOR;
+            msg[1] = s.device.logic_vcc | (pull << 7);
+            le16(&mut msg, 2, pin_count.min(usize::from(u16::MAX)) as u16);
+            le32(&mut msg, 4, n.min(u32::MAX as usize) as u32);
+            // Pack the vector row two pins per byte (t48.c:610-618).
+            let row = &s.device.vectors[n * pin_count..(n + 1) * pin_count];
+            for (i, &v) in row.iter().enumerate() {
+                if i & 1 == 1 {
+                    msg[8 + i / 2] |= v << 4;
+                } else {
+                    msg[8 + i / 2] = v;
+                }
+            }
+            let resp = self.cmd(&msg, 32)?;
+            if resp.len() < 8 + pin_count.div_ceil(2) {
+                return Err(Error::Protocol);
+            }
+            if resp[1] != 0 {
+                return Err(Error::Overcurrent);
+            }
+            // Unpack two-pins-per-byte back to one pin per byte (t48.c:636-638).
+            for i in 0..pin_count {
+                result.push((resp[8 + i / 2] >> (4 * (i as u8 & 1))) & 0x0f);
+            }
+        }
+        Ok(result)
+    }
+}
+
+impl LogicTest for T48 {
+    /// `t48_logic_ic_test` (t48.c:662-736): two passes (pull-up then
+    /// pull-down), then compare each L/H/Z vector element against both. Returns
+    /// `true` when every element matches. (The SRAM path and the on-screen
+    /// dump are the CLI's concern, not the driver's.)
+    fn run(&mut self, s: &Session) -> Result<bool> {
+        let first = self.do_ic_test(s, 0)?;
+        let second = self.do_ic_test(s, 1)?;
+        let vectors = &s.device.vectors;
+        for (n, &state) in vectors.iter().enumerate() {
+            let (a, b) = (first[n] != 0, second[n] != 0);
+            let ok = match state {
+                LOGIC_L => !a && !b,      // 0 in both passes
+                LOGIC_H => a && b,        // 1 in both passes
+                LOGIC_Z => a && !b,       // 1 up, 0 down
+                _ => true,                // inputs / don't-care / power pins
+            };
+            if !ok {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 }
 
@@ -336,11 +576,129 @@ mod tests {
     }
 
     #[test]
-    fn caps_memory_only() {
+    fn caps_agree_with_accessors() {
         let (mut t48, _tx) = t48_with(vec![]);
-        assert_eq!(t48.caps().contains(Caps::MEMORY), t48.memory().is_some());
-        assert!(t48.calibration().is_none()); // T48 has no calibration op
-        assert!(t48.fuses().is_none());
+        let c = t48.caps();
+        assert_eq!(c.contains(Caps::MEMORY), t48.memory().is_some());
+        assert_eq!(c.contains(Caps::FUSES), t48.fuses().is_some());
+        assert_eq!(c.contains(Caps::JEDEC), t48.jedec().is_some());
+        assert_eq!(c.contains(Caps::PROTECT), t48.protect().is_some());
+        assert_eq!(c.contains(Caps::AUTODETECT), t48.autodetect().is_some());
+        assert_eq!(c.contains(Caps::LOGIC), t48.logic().is_some());
+        // T48 has no calibration op.
+        assert_eq!(c.contains(Caps::CALIBRATION), t48.calibration().is_some());
+        assert!(!c.contains(Caps::CALIBRATION));
+    }
+
+    #[test]
+    fn read_fuses_packet_and_data() {
+        // recv 64: bytes [8..12] are the fuse data.
+        let mut reply = vec![0u8; 64];
+        reply[8..12].copy_from_slice(&[0xc0, 0xde, 0xba, 0xbe]);
+        let (mut t48, tx) = t48_with(vec![reply]);
+        let mut dev = device(0x04);
+        dev.protocol_id = 0x11;
+        dev.code_size = 0x4000;
+        let s = Session { device: dev, emmc_capacity: 0 };
+        let out = t48.fuses().unwrap().read_fuses(&s, FuseKind::Config, 4, 3).unwrap();
+        assert_eq!(out, vec![0xc0, 0xde, 0xba, 0xbe]);
+        // 8-byte cmd: 0x08 (READ_CFG), protocol 0x11, items 3, code_size LE at [4].
+        assert_eq!(tx.sent()[0].1, vec![0x08, 0x11, 0x03, 0, 0x00, 0x40, 0, 0]);
+    }
+
+    #[test]
+    fn write_fuses_uses_minus_0x38_address() {
+        let (mut t48, tx) = t48_with(vec![]);
+        let mut dev = device(0x04);
+        dev.protocol_id = 0x11;
+        dev.code_size = 0x100;
+        let s = Session { device: dev, emmc_capacity: 0 };
+        t48.fuses().unwrap().write_fuses(&s, FuseKind::User, 2, &[0xaa, 0xbb]).unwrap();
+        let msg = &tx.sent()[0].1;
+        assert_eq!(msg.len(), 64);
+        assert_eq!(msg[0], 0x07); // WRITE_USER
+        assert_eq!(&msg[4..8], &(0x100u32 - 0x38).to_le_bytes()); // firmware-bug offset
+        assert_eq!(&msg[8..10], &[0xaa, 0xbb]);
+    }
+
+    #[test]
+    fn jedec_row_roundtrip_packets() {
+        // Write: 20-bit row -> ceil(20/8) = 3 payload bytes.
+        let (mut t48, tx) = t48_with(vec![]);
+        let mut dev = device(0x04);
+        dev.protocol_id = 0x2a;
+        let s = Session { device: dev, emmc_capacity: 0 };
+        t48.jedec().unwrap().write_row(&s, 5, 1, 20, &[0x11, 0x22, 0x33]).unwrap();
+        let msg = &tx.sent()[0].1;
+        assert_eq!(msg[0], 0x1e); // WRITE_JEDEC
+        assert_eq!(msg[1], 0x2a); // protocol
+        assert_eq!(msg[2], 20); // size
+        assert_eq!(msg[4], 5); // row
+        assert_eq!(msg[5], 1); // flags
+        assert_eq!(&msg[8..11], &[0x11, 0x22, 0x33]);
+    }
+
+    #[test]
+    fn read_jedec_returns_row_from_offset_zero() {
+        // The C copies (size+7)/8 bytes from msg[0], not msg[8].
+        let mut reply = vec![0u8; 32];
+        reply[0..3].copy_from_slice(&[0xde, 0xad, 0xbe]);
+        let (mut t48, _tx) = t48_with(vec![reply]);
+        let mut dev = device(0x04);
+        dev.protocol_id = 0x2a;
+        let s = Session { device: dev, emmc_capacity: 0 };
+        let row = t48.jedec().unwrap().read_row(&s, 0, 0, 20).unwrap();
+        assert_eq!(row, vec![0xde, 0xad, 0xbe]);
+    }
+
+    #[test]
+    fn protect_on_off_packets() {
+        let (mut t48, tx) = t48_with(vec![]);
+        let s = Session { device: device(0x04), emmc_capacity: 0 };
+        t48.protect().unwrap().protect_on(&s).unwrap();
+        t48.protect().unwrap().protect_off(&s).unwrap();
+        assert_eq!(tx.sent()[0].1[0], 0x19);
+        assert_eq!(tx.sent()[1].1[0], 0x18);
+    }
+
+    #[test]
+    fn spi_autodetect_packet_and_id() {
+        let mut reply = vec![0u8; 32];
+        reply[2..5].copy_from_slice(&[0xef, 0x40, 0x18]); // big-endian id
+        let (mut t48, tx) = t48_with(vec![reply]);
+        let id = t48.autodetect().unwrap().spi_autodetect(true).unwrap();
+        assert_eq!(id, 0x00ef_4018);
+        let msg = &tx.sent()[0].1;
+        assert_eq!(msg.len(), 10);
+        assert_eq!(msg[0], 0x37);
+        assert_eq!(msg[8], 1); // wide -> 16-pin flag
+    }
+
+    #[test]
+    fn logic_test_two_pass_pass_and_fail() {
+        // 2 pins, 1 vector: pin0 = H (must be 1 in both), pin1 = L (0 in both).
+        let mut dev = device(0x04);
+        dev.package.pin_count = 2;
+        dev.vector_count = 1;
+        dev.logic_vcc = 5;
+        dev.vectors = vec![LOGIC_H, LOGIC_L];
+
+        // Passing: pass1 and pass2 both report pin0=1, pin1=0. Packed 2/byte:
+        // pins {1,0} -> low nibble 1, high nibble 0 -> resp[8] = 0x01.
+        let good = || {
+            let mut r = vec![0u8; 32];
+            r[8] = 0x01;
+            r
+        };
+        let (mut t48, _tx) = t48_with(vec![good(), good()]);
+        let s = Session { device: dev.clone(), emmc_capacity: 0 };
+        assert!(t48.logic().unwrap().run(&s).unwrap());
+
+        // Failing: pin0 reads 0 (should be H). resp[8] = 0x00.
+        let bad = || vec![0u8; 32];
+        let (mut t48, _tx) = t48_with(vec![bad(), bad()]);
+        let s = Session { device: dev, emmc_capacity: 0 };
+        assert!(!t48.logic().unwrap().run(&s).unwrap());
     }
 
     /// begin() sends only the 64-byte header (no bitstream) then the 0x39

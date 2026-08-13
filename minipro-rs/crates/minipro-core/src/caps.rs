@@ -4,7 +4,7 @@
 //! by-value `Self`), block-granular like the C `*_block` functions — the
 //! loop/progress/verification live in [`crate::ops`], written once.
 
-use crate::device::{BlockReq, EraseKind, Partition, Region};
+use crate::device::{BlockReq, EraseKind, FuseKind, Partition, Region};
 use crate::error::Result;
 use crate::programmer::Session;
 
@@ -16,16 +16,44 @@ pub trait MemoryOps {
     fn blank_check(&mut self, s: &Session, region: Region) -> Result<bool>;
 }
 
-/// MCU fuse/config/lock bits.
+/// MCU fuse/config/lock bits. `length` is how many bytes to read back;
+/// `items_count` is the fuse-item count the firmware needs (both come from the
+/// device's fuse-config profile, not the chip DB entry).
 pub trait FuseOps {
-    fn read_fuses(&mut self, s: &Session, kind: u8) -> Result<Vec<u8>>;
-    fn write_fuses(&mut self, s: &Session, kind: u8, data: &[u8]) -> Result<()>;
+    fn read_fuses(
+        &mut self,
+        s: &Session,
+        kind: FuseKind,
+        length: usize,
+        items_count: u8,
+    ) -> Result<Vec<u8>>;
+    fn write_fuses(
+        &mut self,
+        s: &Session,
+        kind: FuseKind,
+        items_count: u8,
+        data: &[u8],
+    ) -> Result<()>;
 }
 
-/// PLD/GAL JEDEC fuse rows.
+/// PLD/GAL JEDEC fuse rows. `size` is the row width in bits (the payload is
+/// `(size + 7) / 8` bytes); `flags` selects the row bank (C `jedec_set_t`).
 pub trait JedecOps {
-    fn read_row(&mut self, s: &Session, row: u8) -> Result<Vec<u8>>;
-    fn write_row(&mut self, s: &Session, row: u8, data: &[u8]) -> Result<()>;
+    fn read_row(&mut self, s: &Session, row: u8, flags: u8, size: u16) -> Result<Vec<u8>>;
+    fn write_row(&mut self, s: &Session, row: u8, flags: u8, size: u16, data: &[u8])
+        -> Result<()>;
+}
+
+/// Software write-protect toggle (PROTECT_ON/OFF).
+pub trait Protect {
+    fn protect_on(&mut self, s: &Session) -> Result<()>;
+    fn protect_off(&mut self, s: &Session) -> Result<()>;
+}
+
+/// SPI 25-series autodetect: probe the socket and return the raw JEDEC id.
+/// `wide` selects the 16-pin (vs 8-pin) package profile.
+pub trait SpiAutodetect {
+    fn spi_autodetect(&mut self, wide: bool) -> Result<u32>;
 }
 
 /// eMMC-specific operations (T76).

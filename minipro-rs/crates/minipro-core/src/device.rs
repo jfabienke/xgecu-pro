@@ -37,6 +37,10 @@ pub struct BlockReq {
 #[derive(Clone, Copy, Debug)]
 pub enum EraseKind { Chip, Sector { address: u64 }, Fuses }
 
+/// Which fuse/config space a fuse op targets (C `MP_FUSE_USER/CFG/LOCK`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FuseKind { User, Config, Lock }
+
 /// eMMC hardware partition (T76 `--partition`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Partition { User, Boot1, Boot2, Rpmb }
@@ -126,6 +130,14 @@ pub struct Device {
     pub algorithm: Option<Algorithm>,
     /// The device firmware these bitstreams pair with (see [`FwVersion`]).
     pub fw_target: FwVersion,
+    /// Logic-IC test vectors: `vector_count` rows of `package.pin_count` bytes,
+    /// each a state code (C `LOGIC_*`: 0/1/L/H/C/Z/X/G/V). Empty for non-logic
+    /// devices.
+    pub vectors: Vec<u8>,
+    /// Number of logic-test vector rows (C `vector_count`).
+    pub vector_count: u16,
+    /// VCC selector for the logic test (C `voltages.vcc`).
+    pub logic_vcc: u8,
 }
 
 /// An in-memory dump/image plus the metadata the JSON `Outcome` reports.

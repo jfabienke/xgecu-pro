@@ -5,6 +5,7 @@
 
 use crate::caps::{
     Calibration, EmmcOps, FirmwareUpdate, FuseOps, JedecOps, LogicTest, MemoryOps, PinTest,
+    Protect, SpiAutodetect,
 };
 use crate::device::{ChipId, Device};
 use crate::error::{FwVersion, Result};
@@ -24,6 +25,8 @@ impl Caps {
     pub const PINTEST: Caps = Caps(1 << 5);
     pub const FWUPDATE: Caps = Caps(1 << 6);
     pub const CALIBRATION: Caps = Caps(1 << 7);
+    pub const PROTECT: Caps = Caps(1 << 8);
+    pub const AUTODETECT: Caps = Caps(1 << 9);
 
     pub fn contains(self, c: Caps) -> bool { self.0 & c.0 == c.0 }
     pub fn with(self, c: Caps) -> Caps { Caps(self.0 | c.0) }
@@ -79,6 +82,8 @@ pub trait Programmer: Send {
     fn pins(&mut self) -> Option<&mut dyn PinTest> { None }
     fn firmware(&mut self) -> Option<&mut dyn FirmwareUpdate> { None }
     fn calibration(&mut self) -> Option<&mut dyn Calibration> { None }
+    fn protect(&mut self) -> Option<&mut dyn Protect> { None }
+    fn autodetect(&mut self) -> Option<&mut dyn SpiAutodetect> { None }
 }
 
 /// RAII transaction guard: ends the transaction on drop (best-effort), so a

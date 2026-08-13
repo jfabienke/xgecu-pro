@@ -477,6 +477,9 @@ fn decode_ic(pe: &Pe, ic: usize) -> Option<Device> {
         spi_clock: 0,
         algorithm: None,
         fw_target: T76_FW_TARGET,
+        vectors: Vec::new(),
+        vector_count: 0,
+        logic_vcc: 0,
     })
 }
 
