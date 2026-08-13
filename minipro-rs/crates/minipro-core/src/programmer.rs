@@ -39,6 +39,7 @@ pub struct ProgrammerInfo {
 /// Per-transaction state returned by [`Programmer::begin`]: the selected
 /// algorithm handle, eMMC capacity, current partition, etc. An opaque token the
 /// capability ops borrow; consumed by [`Programmer::end`].
+#[derive(Debug)]
 pub struct Session {
     pub device: Device,
     pub emmc_capacity: u64,

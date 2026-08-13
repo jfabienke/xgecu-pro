@@ -145,16 +145,20 @@ pub(crate) fn pack_begin64(p: &ChipParams) -> [u8; 64] {
         msg[22] = ((p.raw_voltages >> 16) & 0x0f) as u8; // t76.c:545
     }
 
-    // I2C address / SPI clock (t76.c:548-555). The C guards these behind
-    // `can_adjust_address` / `can_adjust_clock` flags; a device without the
-    // capability carries 0 in the field, so copying is equivalent.
-    msg[24] = p.i2c_address;
+    // SPI clock (t76.c:551-555 / t56.c:211-214). The C guards this behind
+    // `can_adjust_clock`; a device without the capability carries 0 in the
+    // field, so writing it unconditionally is equivalent and shared.
     msg[28] = p.spi_clock;
 
-    le32(&mut msg, 40, p.packed_package); // t76.c:557
-    le16(&mut msg, 44, p.read_buffer_size); // t76.c:559
-    le32(&mut msg, 56, p.raw_flags); // t76.c:561
-    msg[63] = (p.variant >> 8) as u8; // t76.c:565 — algorithm number
+    le32(&mut msg, 40, p.packed_package); // t76.c:557 / t56.c:216
+    le16(&mut msg, 44, p.read_buffer_size); // t76.c:559 / t56.c:219
+    le32(&mut msg, 56, p.raw_flags); // t76.c:561 / t56.c:221
 
+    // Deliberately NOT written here (verified T76-only against t56.c:181-224):
+    //   msg[24] = i2c_address     — T76 sets it (t76.c:549); T56 never does.
+    //   msg[63] = variant >> 8    — T76's algorithm number (t76.c:565); on the
+    //                               T56 the algorithm is selected purely by the
+    //                               uploaded bitstream, so msg[63] stays 0.
+    // Each driver layers those on top of this shared subset.
     msg
 }

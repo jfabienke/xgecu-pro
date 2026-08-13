@@ -107,7 +107,10 @@ const ID_TYPE4: u8 = 0x04;
 /// `0x40..0x7f` chip-class extensions below are T76-specific.
 pub(crate) fn pack_begin_trans(p: &ChipParams) -> ([u8; 128], usize) {
     let mut msg = [0u8; 128];
-    msg[..64].copy_from_slice(&pack_begin64(p)); // shared header, t76.c:517-565
+    msg[..64].copy_from_slice(&pack_begin64(p)); // shared header, t76.c:517-561
+    // T76-only header bytes on top of the shared subset (see wire::pack_begin64).
+    msg[24] = p.i2c_address; // t76.c:549 — I2C address (T56 does not send this)
+    msg[63] = (p.variant >> 8) as u8; // t76.c:565 — algorithm number
     let mut msglen = 64usize;
 
     // SPI 25-series NOR read-setup extension (t76.c:584-600). All four values

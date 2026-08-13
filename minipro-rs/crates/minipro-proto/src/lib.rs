@@ -2,6 +2,7 @@
 //! `Box<dyn Transport>`; the T76 is the reference driver (see [`t76`]).
 #![forbid(unsafe_code)]
 
+pub mod t56;
 pub mod t76;
 pub mod wire;
 
