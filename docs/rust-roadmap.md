@@ -1,4 +1,4 @@
-# minipro-rs — port roadmap
+# minipro-rs — roadmap
 
 *As of 2026-08-13. Companion to [`minipro-vs-rust.md`](minipro-vs-rust.md) and
 the [README](../minipro-rs/README.md) capability matrix.*
@@ -7,8 +7,8 @@ the [README](../minipro-rs/README.md) capability matrix.*
 
 - **Drivers:** T48 / T56 / T76 behind one `Programmer` trait; `detect()`
   dispatches on the system-info byte. T76 reads are **hardware-proven**
-  (byte-identical); T56/T48 are **reference-only** (verified against the C
-  source + golden packets — no T48/T56 silicon on hand).
+  (byte-identical); T56/T48 are **reference-only** (verified against byte-exact
+  golden packets — no T48/T56 silicon on hand).
 - **Ops implemented (all three):** memory read/write/erase/blank/identify,
   fuses, JEDEC rows, protect, calibration (T56/T76), logic test, SPI autodetect.
   T76 adds eMMC/NAND, pin-test, firmware-update (transport only).
@@ -17,6 +17,10 @@ the [README](../minipro-rs/README.md) capability matrix.*
   (`TestLgcPull`, `TTL1`, `SPI25F*`) fetch by name from `algoT76/`.
 - **CLI:** read/write (raw/ihex/srec), erase, info, search, detect, logic,
   autodetect, TUI. **164 tests, clippy-clean.**
+- **License:** MIT. The protocol subsystems a review flagged as C-shaped were
+  reimplemented as independent expression of the wire facts (byte-exact vs the
+  goldens); the reverse-engineering credit for those facts is in the repo
+  [`NOTICE`](../NOTICE).
 
 Legend: **S/M/L** effort · 🔌 needs hardware to complete or validate · ⛓️ has a
 dependency.

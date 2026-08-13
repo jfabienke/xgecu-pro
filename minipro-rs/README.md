@@ -1,6 +1,6 @@
 # minipro-rs
 
-A Rust redesign of the [minipro](https://gitlab.com/nmatt0/minipro/-/tree/t76-improvements) CLI, built from the design in
+A Rust redesign and reimplementation of the [minipro](https://gitlab.com/nmatt0/minipro/-/tree/t76-improvements) CLI, built from the design in
 [`docs/rust-redesign.md`](../docs/rust-redesign.md),
 [`docs/rust-trait-model.md`](../docs/rust-trait-model.md), and the three-mode
 output design.
@@ -55,8 +55,8 @@ Every non-✅ cell is principled, not an oversight:
   pin-driver subsystem is a T48/TL866 feature; the T48 has no calibration op.
 - **⬜** is deferred with reason: firmware update is per-device obfuscation-table
   transcription, unverifiable without hardware and a real `updateT*.dat` (the
-  T76 port is the template); the T48 pin-driver/bit-bang/self-test cluster is
-  the shared `bitbang.c` subsystem with no standalone caller in the port yet.
+  T76 implementation is the template); the T48 pin-driver/bit-bang/self-test
+  cluster is the shared `bitbang.c` subsystem with no standalone caller yet.
 
 **Not started:** the TL866II+ and TL866A/CS drivers.
 
@@ -133,14 +133,14 @@ Help wanted — especially from anyone with the **hardware we don't have**.
   turns "reference-only" into "proven." The write-buffer-size `TODO(hw)` in
   `t48.rs`/`t56.rs` can only be settled this way too.
 - **🔌 T76 op coverage on hardware.** T76 *reads* are byte-verified; **write,
-  erase, NAND, eMMC, and firmware-update** are ported but not yet exercised on a
+  erase, NAND, eMMC, and firmware-update** are implemented but not yet exercised on a
   device. Confirmations (or bug reports) welcome.
-- **Port the TL866II+ and TL866A/CS drivers.** The TL866II+ is II+-class and
+- **Implement the TL866II+ and TL866A/CS drivers.** The TL866II+ is II+-class and
   close to the existing T48 (EP02 bulk, fixed-silicon), so it reuses most of the
   shared `wire` layer. The TL866A/CS is the outlier (24-bit addressing, an
   alternate opcode space, a latch-based ZIF model). Both are well-specified in
   the C fork.
-- **The roadmap** ([`docs/rust-port-roadmap.md`](../docs/rust-port-roadmap.md))
+- **The roadmap** ([`docs/rust-roadmap.md`](../docs/rust-roadmap.md))
   lists the rest — CLI verbs for fuses/JEDEC/firmware, GAL/PLD `config`, extra
   memory regions — each scoped with effort and dependencies.
 

@@ -62,7 +62,7 @@ GetIcStru(m, k, out): base = *(mfcTable[m] + 0x44)        ; per-mfc IC-array poi
   independent extraction. (`infoic.xml` carries a filtered subset, ~32,519.)
 - Spot check: `WINBOND` → 1013 chips, IC[0] = `W19B320AB @TSOP48` (proto 0x12);
   `W25Q64BV` → proto 0x03, `chip_id ef 40 17` (Winbond JEDEC), 3 bytes — matches
-  the value the port's DB tests assert.
+  the value minipro-rs's DB tests assert.
 
 ## Static extraction recipe
 
@@ -107,7 +107,7 @@ and nmatt0 already RE'd that computation (`Xgpro_T76.exe` `t76_load_chip_to_stat
 - `flags` = `desc[0x70]` + per-protocol post-load ORs; `package_details` =
   `desc[0x6c]` + family signature.
 
-`minipro-rs`'s `DllDb` ports these, and **reads a real chip end-to-end with no
+`minipro-rs`'s `DllDb` decodes these, and **reads a real chip end-to-end with no
 XML** (hardware-verified: `M27C256B@DIP28` byte-identical to a known-good dump).
 An oracle test cross-checks every field against `infoic.xml`: variant ~92%
 (remainder = stale-XML / microwire splits, 0 genuine bugs), chip_id 99.6%,

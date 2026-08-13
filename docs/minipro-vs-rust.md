@@ -1,8 +1,8 @@
 # minipro (C) vs. minipro-rs (Rust) — comparison
 
 *As of 2026-08-13. C = nmatt0's `t76-improvements` fork; Rust = the `minipro-rs/`
-port in this repo. The Rust port now covers **T48 / T56 / T76** (the TL866II+ and
-TL866A/CS drivers are not yet ported).*
+redesign and reimplementation in this repo. It now covers **T48 / T56 / T76**
+(the TL866II+ and TL866A/CS drivers are not yet done).*
 
 ## At a glance
 
@@ -34,18 +34,18 @@ TL866A/CS drivers are not yet ported).*
 | **Read** (EPROM) | ✅ (produced the reference dumps) | ✅ **byte-identical**, stable over 10× |
 | SPI autodetect (`autodetect`) | ✅ | ✅ path exercised live (uploads SPI25F, probes; matches `detect`) |
 | Overcurrent detection / abort | ✅ | ✅ (read OVC status, aborts with a typed error) |
-| Write / erase | ✅ | **not yet exercised on hardware** (ported, untested) |
-| NAND / eMMC | ✅ | ported (byte-tested vs captures), not hardware-run |
-| Logic test / firmware update | ✅ | ported (logic wired end-to-end; both un-hardware-run) |
+| Write / erase | ✅ | **not yet exercised on hardware** (implemented, untested) |
+| NAND / eMMC | ✅ | implemented (byte-tested vs captures), not hardware-run |
+| Logic test / firmware update | ✅ | implemented (logic wired end-to-end; both un-hardware-run) |
 
 Only a T76 is available in this repo; the T48/T56 drivers are reference-only
-(verified against the C source + golden packets, not live silicon).
+(verified against byte-exact golden packets, not live silicon).
 
 ## Where each wins
 
-**C is ahead on:** breadth (5 programmer families vs 1), maturity (years of use,
+**C is ahead on:** breadth (5 programmer families vs 3), maturity (years of use,
 broad chip coverage exercised), and completeness (write/erase/NAND/eMMC all
-field-proven). It is the reference the Rust port is checked against.
+field-proven). It remains the field-proven reference for the protocol's behavior.
 
 **Rust is ahead on:** memory safety (no manual frees, no fixed-buffer overruns),
 build/deploy (no libusb/zlib, single static binary — fixes the macOS pkg-config
@@ -56,10 +56,10 @@ byte-exact on hardware.
 
 ## Honest bottom line
 
-The Rust port is **not a replacement** for the C tool today — it covers three of
+minipro-rs is **not a replacement** for the C tool today — it covers three of
 the five programmer families (T48/T56/T76), and only T76 reads are
 hardware-proven. It is a **safer, more ergonomic, better-tested reimplementation**
 whose value is the
 architecture (traits + typed transport), the agent/human/TUI output story, and
-built-in verified reads. Reaching parity means porting write/erase to hardware
+built-in verified reads. Reaching parity means exercising write/erase on hardware
 validation and the other programmer families behind the same traits.

@@ -230,5 +230,5 @@ Incremental, not a rewrite-in-one-shot:
 - Not async-first in the public API — a programmer CLI is inherently sequential;
   keep a blocking surface (`nusb` async under the hood via `block_on`).
 - Not a new data-file format — XML compatibility keeps the whole DB ecosystem.
-- Not a ground-up protocol rewrite — the C T76 RE is hard-won; port it
-  faithfully, with the captures as tests, before improving it.
+- Not a ground-up protocol rewrite — the T76 RE is hard-won; reimplement its
+  wire behavior from those facts, with the captures as tests, before improving it.

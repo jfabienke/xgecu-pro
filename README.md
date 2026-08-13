@@ -54,7 +54,7 @@ curl -s "https://api.github.com/repos/Kreeblah/XGecu_Software/git/trees/master?r
 ## License
 
 The **original work in this repository is licensed [MIT](LICENSE)** — the
-`minipro-rs/` Rust port and the analysis/notes under `docs/`.
+`minipro-rs/` Rust redesign and reimplementation, and the analysis/notes under `docs/`.
 
 MIT does **not** cover the third-party material redistributed here for reference
 and interoperability, which remains the property of its respective owners:
@@ -63,6 +63,6 @@ and interoperability, which remains the property of its respective owners:
 - `docs/hardware/` vendor datasheets / PDFs, and `chip-support/` device lists.
 - Any firmware images or vendor `.alg` bitstreams.
 
-The protocol facts the Rust port implements were reverse-engineered by the
+The protocol facts the Rust reimplementation depends on were reverse-engineered by the
 minipro community (nmatt0 / Matt Brown); see [`NOTICE`](NOTICE) for full
 attribution.
