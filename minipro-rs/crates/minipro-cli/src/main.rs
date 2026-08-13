@@ -165,6 +165,17 @@ enum Command {
         #[arg(long, default_value = "M27C256B@DIP28")]
         like: String,
     },
+    /// Functionally test a logic IC (74xx/40xx) against its vector table
+    Logic {
+        /// Logic-IC name, e.g. "7400@DIP14" (from the logic database)
+        chip: String,
+    },
+    /// Autodetect a seated SPI 25-series flash by its JEDEC id
+    Autodetect {
+        /// Probe a 16-pin (SOIC16) package instead of the 8-pin default
+        #[arg(long)]
+        wide: bool,
+    },
 }
 
 impl Command {
@@ -178,6 +189,8 @@ impl Command {
             Command::Search { .. } => "search",
             Command::Tui => "tui",
             Command::Detect { .. } => "detect",
+            Command::Logic { .. } => "logic",
+            Command::Autodetect { .. } => "autodetect",
         }
     }
 }
@@ -284,6 +297,8 @@ fn main() -> ExitCode {
         Command::Erase { chip } => run_erase(db_dir, chip, &mut *reporter_for(mode)),
         Command::Info => run_info(db_dir, &mut *reporter_for(mode)),
         Command::Detect { like } => run_detect(db_dir, like, mode),
+        Command::Logic { chip } => run_logic(db_dir, chip, mode),
+        Command::Autodetect { wide } => run_autodetect(db_dir, *wide, mode),
     };
 
     match result {
@@ -599,6 +614,73 @@ fn run_detect(db_dir: Option<&Path>, like: &str, mode: Mode) -> Result<()> {
     Ok(())
 }
 
+/// A bitstream loader over a `ChipDb`: fetch a utility algorithm's decoded
+/// bytes by name (the FPGA logic-test / autodetect ops call this per pass).
+fn bitstream_loader(db: &dyn ChipDb) -> impl FnMut(&str) -> Result<Vec<u8>> + '_ {
+    move |name: &str| {
+        db.load_algorithm_named(name)?
+            .map(|a| a.bitstream)
+            .ok_or(Error::Unsupported("utility bitstream not found in the database"))
+    }
+}
+
+/// Functionally test a logic IC. Logic devices (from `logicic.xml`) carry their
+/// vector table; the driver uploads the FPGA logic bitstreams itself (T56/T76)
+/// or bit-bangs the vectors (T48), so there is no `begin`/algorithm here.
+fn run_logic(db_dir: Option<&Path>, chip: &str, mode: Mode) -> Result<()> {
+    use minipro_core::device::chip_type;
+    let db = load_db(db_dir)?;
+    let dev = lookup_device(&*db, chip)?;
+    if dev.chip_type != chip_type::LOGIC || dev.vectors.is_empty() {
+        return Err(Error::Unsupported(
+            "not a logic IC with a vector table (is logicic.xml present?)",
+        ));
+    }
+    let mut prog = open_programmer()?;
+    let session = minipro_core::Session { device: dev.clone(), emmc_capacity: 0 };
+    let pass = {
+        let mut load = bitstream_loader(&*db);
+        let logic =
+            prog.logic().ok_or(Error::Unsupported("this programmer has no logic test"))?;
+        logic.run(&session, &mut load)?
+    };
+    prog.end(session)?; // de-energize the socket (the C's end_transaction)
+
+    match mode {
+        Mode::Json => {
+            println!("{{\"op\":\"logic\",\"ok\":true,\"device\":{:?},\"pass\":{pass}}}", dev.name)
+        }
+        _ => anstream::println!(
+            "Logic test {}: {}",
+            dev.name,
+            if pass { "PASS" } else { "FAIL" }
+        ),
+    }
+    Ok(())
+}
+
+/// Autodetect a seated SPI 25-series flash. No device is known up front — the
+/// driver uploads the SPI25F probe bitstream and returns the JEDEC id.
+fn run_autodetect(db_dir: Option<&Path>, wide: bool, mode: Mode) -> Result<()> {
+    let db = load_db(db_dir)?;
+    let mut prog = open_programmer()?;
+    let id = {
+        let mut load = bitstream_loader(&*db);
+        let ad = prog
+            .autodetect()
+            .ok_or(Error::Unsupported("this programmer has no SPI autodetect"))?;
+        ad.spi_autodetect(wide, &mut load)?
+    };
+    let mfr = manufacturer_name((id >> 16) as u8);
+    match mode {
+        Mode::Json => {
+            println!("{{\"op\":\"autodetect\",\"ok\":true,\"id\":\"{id:06x}\",\"manufacturer\":\"{mfr}\"}}")
+        }
+        _ => anstream::println!("SPI autodetect: 0x{id:06X} — {mfr}"),
+    }
+    Ok(())
+}
+
 fn run_search(db_dir: Option<&Path>, query: &str, limit: usize, mode: Mode) -> Result<()> {
     let db = load_db(db_dir)?;
     let found = db.search(query, limit);
@@ -652,6 +734,22 @@ mod tests {
         assert_eq!(load_image(&path, Fmt::Raw, 2, PAD).unwrap_err().code(), "format");
 
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn logic_and_autodetect_parse() {
+        match parse(&["minipro", "logic", "7400@DIP14"]).command.unwrap() {
+            Command::Logic { chip } => assert_eq!(chip, "7400@DIP14"),
+            _ => panic!("expected logic"),
+        }
+        match parse(&["minipro", "autodetect", "--wide"]).command.unwrap() {
+            Command::Autodetect { wide } => assert!(wide),
+            _ => panic!("expected autodetect"),
+        }
+        match parse(&["minipro", "autodetect"]).command.unwrap() {
+            Command::Autodetect { wide } => assert!(!wide, "8-pin is the default"),
+            _ => panic!("expected autodetect"),
+        }
     }
 
     #[test]
