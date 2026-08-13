@@ -117,11 +117,15 @@ struct AlgorithmSet { firmware: FwVersion, algos: HashMap<AlgoName, Lazy<Bitstre
 
 ## Chip database
 
-- Parse `infoic.xml` with `quick-xml` + `serde` for drop-in compatibility.
-- **Add a compiled DB path:** a `build.rs` (or `minipro-db build`) that bakes the
-  48 MB XML into a `postcard`/`bincode` blob `include_bytes!`'d into the binary —
-  startup goes from "parse 48 MB XML" to "mmap + zero-copy." Keep XML as the
-  editable source of truth.
+- Parse `infoic.xml` (+ `logicic.xml` for logic-IC vectors) with `quick-xml` +
+  `serde` for drop-in compatibility (`XmlDb`).
+- **Direct-to-source, not a baked blob.** `DllDb` parses the vendor
+  `InfoICT76.dll` directly, and `HttpDb` provisions + caches the DLL-derived
+  catalog from a mirror with a daily version check. A compiled/`include_bytes!`
+  DB was considered and dropped: it would be a frozen, rebuild-to-update
+  snapshot that can't carry the ~48 MB of bitstreams anyway, so it solves
+  nothing the source-backed backends don't already cover. The mirror catalog is
+  persisted as a versioned `postcard` blob (`MPDB` magic + schema `u16`).
 
 ## Error handling, CLI, ergonomics
 

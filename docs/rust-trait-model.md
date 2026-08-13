@@ -145,7 +145,7 @@ pub trait ChipDb {
     fn search(&self, query: &str, limit: usize) -> Search<'_>;  // capped + counted (34k devices)
     fn firmware_target(&self) -> FwVersion;                 // the fw these bitstreams pair with
 }
-// impls: XmlDb (quick-xml + serde, editable source) · CompiledDb (postcard blob, include_bytes!)
+// impls: XmlDb (quick-xml + serde) · DllDb (parses InfoICT76.dll) · HttpDb (mirror-provisioned catalog)
 
 pub trait Format {
     fn parse(&self, bytes: &[u8]) -> Result<Image>;

@@ -271,25 +271,13 @@ impl ChipDb for XmlDb {
     }
 }
 
-/// Compiled database baked into the binary via `include_bytes!` (postcard).
-#[derive(Debug)]
-pub struct CompiledDb;
-
-impl CompiledDb {
-    /// Deserialize the embedded blob (zero XML parsing at startup).
-    ///
-    /// TODO: not yet baked in. The plan (docs/rust-redesign.md "Chip database")
-    /// is a build step that serializes `XmlDb::devices()` with postcard and
-    /// `include_bytes!`s the blob here. The core types now derive
-    /// `serde::Deserialize` (feature `serde`), so only the bake step remains.
-    /// Until then this reports `Error::Unsupported` instead of faking an
-    /// empty database.
-    pub fn embedded() -> Result<Self> {
-        Err(Error::Unsupported(
-            "compiled chip DB is not baked into this build; use XmlDb::load",
-        ))
-    }
-}
+// A compiled/baked-in database was considered and deliberately dropped: the
+// direct-to-source path is better. `DllDb` parses the vendor `InfoICT76.dll`
+// directly and `HttpDb` provisions + caches it from a mirror with a daily
+// version check, so the catalog is always the vendor's real data and updates
+// live. A baked blob would be a frozen, rebuild-to-update snapshot that can't
+// carry the ~48 MB of bitstreams anyway (only the metadata), so it would solve
+// nothing the source-backed backends don't already cover.
 
 // ---------------------------------------------------------------------------
 // infoic.xml parsing
@@ -1154,11 +1142,6 @@ mod tests {
             Err(e) => assert_eq!(e.code(), "format"),
             Ok(_) => panic!("non-gzip payload must be a format error"),
         }
-    }
-
-    #[test]
-    fn compiled_db_reports_unsupported() {
-        assert_eq!(CompiledDb::embedded().unwrap_err().code(), "unsupported");
     }
 
     #[test]
