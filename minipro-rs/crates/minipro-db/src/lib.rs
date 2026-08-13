@@ -42,7 +42,7 @@ use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
-use minipro_core::device::{Algorithm, Device, Package};
+use minipro_core::device::{chip_type, Algorithm, Device, Package};
 use minipro_core::error::{Error, FwVersion, Result};
 
 mod dll;
@@ -150,7 +150,15 @@ impl XmlDb {
     pub fn load(dir: &Path) -> Result<Self> {
         let infoic = dir.join("infoic.xml");
         let file = std::fs::File::open(&infoic)?;
-        let devices = parse_infoic(std::io::BufReader::new(file), INFOIC_DB_TYPE)?;
+        let mut devices = parse_infoic(std::io::BufReader::new(file), INFOIC_DB_TYPE)?;
+
+        // Logic ICs (with their test vectors) live in a separate logicic.xml,
+        // appended when present (database.c:79, 1797).
+        let logicic = dir.join("logicic.xml");
+        if logicic.is_file() {
+            let f = std::fs::File::open(&logicic)?;
+            devices.extend(parse_logicic(std::io::BufReader::new(f))?);
+        }
 
         let mut index = HashMap::with_capacity(devices.len());
         for (i, dev) in devices.iter().enumerate() {
@@ -440,6 +448,158 @@ pub(crate) fn pin_count(package_details: u32) -> u8 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// logicic.xml — the separate logic-IC database (test vectors)
+// ---------------------------------------------------------------------------
+
+/// One logic-IC state code (database.c:1579-1608): `0 1 L H C Z X G V` -> 0..8.
+/// `None` for any other (non-whitespace) character.
+fn logic_state(c: u8) -> Option<u8> {
+    Some(match c {
+        b'0' => 0,
+        b'1' => 1,
+        b'L' => 2,
+        b'H' => 3,
+        b'C' => 4,
+        b'Z' => 5,
+        b'X' => 6,
+        b'G' => 7,
+        b'V' => 8,
+        _ => return None,
+    })
+}
+
+/// Map a logic `voltage` attribute to the VCC code (database.c:222-226); the
+/// default is 5 V (`0x00`, `DEFAULT_LOGIC_VOLTAGE`).
+fn logic_vcc(v: &str) -> u8 {
+    match v.trim() {
+        "1.8" => 0x03,
+        "2.5" => 0x02,
+        "3.3" => 0x01,
+        _ => 0x00, // "5" and the default
+    }
+}
+
+/// A logic IC accumulated across its `<vector>` children.
+struct LogicIc {
+    names: String,
+    pin_count: u8,
+    vcc: u8,
+    vectors: Vec<u8>,
+    vector_count: u16,
+}
+
+impl LogicIc {
+    /// Append one `<vector>` row: exactly `pin_count` state chars, whitespace
+    /// ignored (database.c:1572-1614). The C stops at `pin_count` and errors if
+    /// short.
+    fn push_vector(&mut self, text: &[u8]) -> Result<()> {
+        let mut n = 0u8;
+        for &c in text {
+            if c.is_ascii_whitespace() {
+                continue;
+            }
+            let s = logic_state(c)
+                .ok_or_else(|| Error::Format(format!("logicic.xml: bad vector char {:?}", c as char)))?;
+            self.vectors.push(s);
+            n += 1;
+            if n >= self.pin_count {
+                break;
+            }
+        }
+        if n != self.pin_count {
+            return Err(Error::Format(format!(
+                "logicic.xml: vector has {n} states, expected {}",
+                self.pin_count
+            )));
+        }
+        self.vector_count += 1;
+        Ok(())
+    }
+
+    /// Expand to one [`Device`] per comma-separated alias.
+    fn into_devices(self) -> Vec<Device> {
+        self.names
+            .split(',')
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .map(|name| Device {
+                name: name.to_string(),
+                chip_type: chip_type::LOGIC,
+                blank_value: 0xFF,
+                package: Package { pin_count: self.pin_count, name: package_name(name, self.pin_count) },
+                vectors: self.vectors.clone(),
+                vector_count: self.vector_count,
+                logic_vcc: self.vcc,
+                ..Device::default()
+            })
+            .collect()
+    }
+}
+
+fn parse_logic_ic(e: &BytesStart<'_>) -> Result<LogicIc> {
+    Ok(LogicIc {
+        names: attr(e, b"name")?.unwrap_or_default(),
+        pin_count: attr(e, b"pins")?.map(|s| parse_num(&s)).transpose()?.unwrap_or(0) as u8,
+        vcc: attr(e, b"voltage")?.map(|s| logic_vcc(&s)).unwrap_or(0),
+        vectors: Vec::new(),
+        vector_count: 0,
+    })
+}
+
+/// Parse `logicic.xml` (the standalone logic-IC database) into logic devices
+/// carrying their test vectors. Format (database.c:1547-1615): a
+/// `<database type="LOGIC">` of `<ic type="5" pins=N voltage=V>` elements, each
+/// holding `<vector>` children whose text is N pin-state chars.
+///
+/// NOTE: validated against the C parser's documented format, not a real
+/// `logicic.xml` (which is absent from this tree). See the tests.
+fn parse_logicic<R: BufRead>(reader: R) -> Result<Vec<Device>> {
+    let mut xml = Reader::from_reader(reader);
+    let mut buf = Vec::new();
+    let mut out = Vec::new();
+    let mut in_logic_db = false;
+    let mut cur: Option<LogicIc> = None;
+    let mut in_vector = false;
+
+    loop {
+        match xml.read_event_into(&mut buf).map_err(xml_err)? {
+            Event::Eof => break,
+            Event::Start(e) => match e.name().as_ref() {
+                b"database" => {
+                    in_logic_db = attr(&e, b"type")?.is_some_and(|t| t.eq_ignore_ascii_case("LOGIC"))
+                }
+                b"ic" if in_logic_db => cur = Some(parse_logic_ic(&e)?),
+                b"vector" if cur.is_some() => in_vector = true,
+                _ => {}
+            },
+            // A logic <ic .../> with no vectors (self-closing) still records.
+            Event::Empty(e) if in_logic_db && e.name().as_ref() == b"ic" => {
+                out.extend(parse_logic_ic(&e)?.into_devices());
+            }
+            Event::Text(t) if in_vector => {
+                let text = t.into_inner();
+                if let Some(ic) = cur.as_mut() {
+                    ic.push_vector(&text)?;
+                }
+            }
+            Event::End(e) => match e.name().as_ref() {
+                b"database" => in_logic_db = false,
+                b"vector" => in_vector = false,
+                b"ic" => {
+                    if let Some(ic) = cur.take() {
+                        out.extend(ic.into_devices());
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(out)
+}
+
 /// Package label: the `@SOIC8`-style suffix of the chip name when present,
 /// otherwise the default DIP/ZIF socket for the pin count.
 pub(crate) fn package_name(chip_name: &str, pin_count: u8) -> String {
@@ -715,6 +875,34 @@ mod tests {
         // Decimal attribute values parse too.
         let d = db.get("W25X20").unwrap();
         assert_eq!(d.page_size, 256);
+    }
+
+    #[test]
+    fn parse_logicic_loads_vectors() {
+        let xml = r#"<infoic><database type="LOGIC"><manufacturer name="TI">
+          <ic name="7400,SN7400" type="5" pins="14" voltage="5">
+            <vector>V 1 1 H 1 1 H X X L X L X G</vector>
+            <vector>V00L00LXXHXHXG</vector>
+          </ic></manufacturer></database></infoic>"#;
+        let devs = parse_logicic(Cursor::new(xml)).unwrap();
+        assert_eq!(devs.len(), 2, "both name aliases expand");
+        let d = &devs[0];
+        assert_eq!(d.name, "7400");
+        assert_eq!(d.chip_type, chip_type::LOGIC);
+        assert_eq!(d.package.pin_count, 14);
+        assert_eq!(d.logic_vcc, 0x00, "5V default code");
+        assert_eq!(d.vector_count, 2);
+        assert_eq!(d.vectors.len(), 14 * 2);
+        // First row: pin0 'V'->8, pin3 'H'->3, pin9 'L'->2 (whitespace ignored).
+        assert_eq!((d.vectors[0], d.vectors[3], d.vectors[9]), (8, 3, 2));
+    }
+
+    #[test]
+    fn parse_logicic_rejects_short_vector() {
+        let xml = r#"<infoic><database type="LOGIC">
+          <ic name="X" type="5" pins="14" voltage="5"><vector>V1H</vector></ic>
+          </database></infoic>"#;
+        assert_eq!(parse_logicic(Cursor::new(xml)).unwrap_err().code(), "format");
     }
 
     #[test]
