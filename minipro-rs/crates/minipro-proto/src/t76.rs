@@ -133,12 +133,46 @@ const NOR_ADAPTER: &[(u8, u32)] = &[
 ];
 const NOR_ADAPTER_DEFAULT: u32 = 0x0800;
 
-/// Apply a family's extension fields plus the shared `0x65` read-setup marker.
+// Byte offsets within the BEGIN_TRANS packet (`msg`). The shared 64-byte header
+// is packed by `pack_begin64`; the names below cover the T76-only bytes and the
+// chip-class extension area (`0x40..0x7f`) written by the `ext_*` builders.
+const BEGIN_I2C_ADDR_OFF: usize = 0x18; // T76-only: I2C address
+const BEGIN_ALGO_NUM_OFF: usize = 0x3f; // T76-only: algorithm number (variant hi byte)
+const BEGIN_EXT_READ_SETUP_OFF: usize = 0x60; // read-setup dword (SPI/NOR); NAND reuses it for clock
+const BEGIN_EXT_MARKER_OFF: usize = 0x65; // 0x03 extension marker
+
+// SPI 25-series NOR read-mode dword pair.
+const BEGIN_SPI_MODE0_OFF: usize = 0x40;
+const BEGIN_SPI_MODE1_OFF: usize = 0x50;
+
+// Parallel-NOR x16 config dwords + the socket-adapter data-line selector.
+const BEGIN_NOR_CFG0_OFF: usize = 0x40;
+const BEGIN_NOR_CFG1_OFF: usize = 0x44;
+const BEGIN_NOR_ADAPTER_OFF: usize = 0x48;
+const BEGIN_NOR_CFG2_OFF: usize = 0x50;
+const BEGIN_NOR_CFG3_OFF: usize = 0x54;
+
+// NAND BEGIN adjustments.
+const BEGIN_NAND_BLOCK_SIZE_OFF: usize = 0x10; // per-block transfer size
+const BEGIN_NAND_FLAGS_OFF: usize = 0x38; // raw_flags | NAND bit
+const BEGIN_NAND_PIN_FAMILY_OFF: usize = 0x28; // parallel-NAND pin/family dword
+const BEGIN_NAND_VHI_CLEAR_OFF: usize = 0x14; // clears the shared header's voltage-high byte
+
+// Fixed bytes the FPGA requires to select/clock a NAND part (opaque semantics).
+const BEGIN_NAND_FIXED_0E_OFF: usize = 0x0e;
+const BEGIN_NAND_FIXED_18_OFF: usize = 0x18; // same byte as the I2C-address slot
+const BEGIN_NAND_FIXED_1C_OFF: usize = 0x1c;
+const BEGIN_NAND_FIXED_30_OFF: usize = 0x30;
+
+// eMMC.
+const BEGIN_EMMC_BUS_MODE_OFF: usize = 0x0c; // bus-mode / CSD byte
+
+/// Apply a family's extension fields plus the shared read-setup marker.
 fn write_ext(msg: &mut [u8; 128], fields: &[Field]) {
     for f in fields {
         le32(msg, f.off, f.val);
     }
-    msg[0x65] = 0x03;
+    msg[BEGIN_EXT_MARKER_OFF] = 0x03;
 }
 
 /// Pack the BEGIN_TRANS packet: the shared 64-byte II+-family header
@@ -149,8 +183,8 @@ pub(crate) fn pack_begin_trans(p: &ChipParams) -> ([u8; 128], usize) {
     let mut msg = [0u8; 128];
     msg[..64].copy_from_slice(&pack_begin64(p));
     // Two T76-only bytes layered on the shared subset (T56 leaves both zero).
-    msg[24] = p.i2c_address;
-    msg[63] = (p.variant >> 8) as u8; // algorithm number
+    msg[BEGIN_I2C_ADDR_OFF] = p.i2c_address;
+    msg[BEGIN_ALGO_NUM_OFF] = (p.variant >> 8) as u8; // algorithm number
 
     let extended = match p.protocol_id {
         ALG_SPI25F_1 | ALG_SPI25F_2 => ext_spi_nor(&mut msg, p),
@@ -174,15 +208,15 @@ fn ext_spi_nor(msg: &mut [u8; 128], p: &ChipParams) -> bool {
         msg,
         &[
             Field {
-                off: 0x40,
+                off: BEGIN_SPI_MODE0_OFF,
                 val: f40,
             },
             Field {
-                off: 0x50,
+                off: BEGIN_SPI_MODE1_OFF,
                 val: f50,
             },
             Field {
-                off: 0x60,
+                off: BEGIN_EXT_READ_SETUP_OFF,
                 val: EXT_READ_SETUP,
             },
         ],
@@ -208,27 +242,27 @@ fn ext_parallel_nor(msg: &mut [u8; 128], p: &ChipParams) -> bool {
         msg,
         &[
             Field {
-                off: 0x40,
+                off: BEGIN_NOR_CFG0_OFF,
                 val: 0x0100_0000,
             },
             Field {
-                off: 0x44,
+                off: BEGIN_NOR_CFG1_OFF,
                 val: 0x0000_0040,
             },
             Field {
-                off: 0x48,
+                off: BEGIN_NOR_ADAPTER_OFF,
                 val: b48,
             },
             Field {
-                off: 0x50,
+                off: BEGIN_NOR_CFG2_OFF,
                 val: 0x1000_0000,
             },
             Field {
-                off: 0x54,
+                off: BEGIN_NOR_CFG3_OFF,
                 val: 0x0000_8000,
             },
             Field {
-                off: 0x60,
+                off: BEGIN_EXT_READ_SETUP_OFF,
                 val: EXT_READ_SETUP,
             },
         ],
@@ -245,28 +279,28 @@ fn ext_nand(msg: &mut [u8; 128], p: &ChipParams) -> bool {
         // One block (data + spare) per 0x0d transfer, not the whole-chip size.
         le32(
             msg,
-            16,
+            BEGIN_NAND_BLOCK_SIZE_OFF,
             u32::from(p.write_buffer_size) * u32::from(p.pages_per_block),
         );
     }
-    le32(msg, 56, p.raw_flags | 0x800); // NAND flag bit
-    le32(msg, 0x60, 0x0b09_272f); // lower clock tier than NOR
-    msg[0x65] = 0x03;
-    msg[0x0e] = 0x20;
-    msg[0x14] = 0x00; // clear the voltage-high byte the shared header set
-    msg[0x18] = 0x03;
-    msg[0x1c] = 0x03;
+    le32(msg, BEGIN_NAND_FLAGS_OFF, p.raw_flags | 0x800); // NAND flag bit
+    le32(msg, BEGIN_EXT_READ_SETUP_OFF, 0x0b09_272f); // lower clock tier than NOR
+    msg[BEGIN_EXT_MARKER_OFF] = 0x03;
+    msg[BEGIN_NAND_FIXED_0E_OFF] = 0x20;
+    msg[BEGIN_NAND_VHI_CLEAR_OFF] = 0x00; // clear the voltage-high byte the shared header set
+    msg[BEGIN_NAND_FIXED_18_OFF] = 0x03;
+    msg[BEGIN_NAND_FIXED_1C_OFF] = 0x03;
     if p.variant & 0x70 == 0 {
-        le32(msg, 0x28, 0xe200_0000); // parallel-NAND pin/family dword
+        le32(msg, BEGIN_NAND_PIN_FAMILY_OFF, 0xe200_0000); // parallel-NAND pin/family dword
     }
-    msg[0x30] = 0x40;
+    msg[BEGIN_NAND_FIXED_30_OFF] = 0x40;
     true
 }
 
 /// eMMC: a 128-byte BEGIN with no `0x40..0x7f` extension; `msg[0x0c]` carries
 /// the bus-mode / CSD byte from the variant high byte.
 fn ext_emmc(msg: &mut [u8; 128], p: &ChipParams) -> bool {
-    msg[0x0c] = (p.variant >> 8) as u8;
+    msg[BEGIN_EMMC_BUS_MODE_OFF] = (p.variant >> 8) as u8;
     true
 }
 
