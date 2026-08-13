@@ -198,6 +198,27 @@ impl App {
         }
     }
 
+    /// Resolve the selected chip and load its FPGA algorithm/bitstream — the
+    /// same lookup the CLI's `lookup_device` performs (main.rs:306). Returns the
+    /// ready-to-`begin` device plus the DB's firmware target for the mismatch
+    /// advisory. Borrows `self` immutably only, so the caller can then take the
+    /// programmer mutably. On any miss, returns a user-facing message.
+    fn resolve_selected_device(
+        &self,
+    ) -> std::result::Result<(minipro_core::device::Device, minipro_core::error::FwVersion), String>
+    {
+        let db = self.db.as_ref().ok_or("no chip database loaded")?;
+        let selected = self.list_state.selected().ok_or("select a chip first")?;
+        let name = self.hits.get(selected).ok_or("selection out of range")?;
+        let mut dev =
+            db.get(name).cloned().ok_or("selected chip vanished from the database")?;
+        // Without this the FPGA drivers' `begin()` fails with "no bitstream
+        // loaded" — the exact gap the TUI had.
+        dev.algorithm =
+            db.load_algorithm(&dev).map_err(|e| format!("algorithm load failed: {e}"))?;
+        Ok((dev, db.firmware_target()))
+    }
+
     /// Read the selected chip on a worker thread, streaming progress /
     /// warnings / the outcome through the same `Reporter` pipeline the CLI
     /// commands use, plus the dump bytes for the hex view.
@@ -205,22 +226,23 @@ impl App {
     /// TODO(hw): validated only against the trait surface — needs a real T76
     /// (sibling crates' `open`/`begin`/`read_block`) to exercise end to end.
     fn start_read(&mut self) {
-        let Some(db) = &self.db else {
-            self.push_log("no chip database loaded".into());
-            return;
-        };
-        let Some(selected) = self.list_state.selected() else {
-            self.push_log("select a chip first".into());
-            return;
-        };
-        let Some(dev) = db.get(&self.hits[selected]).cloned() else {
-            self.push_log("selected chip vanished from the database".into());
-            return;
+        let (dev, fw_target) = match self.resolve_selected_device() {
+            Ok(v) => v,
+            Err(msg) => {
+                self.push_log(msg);
+                return;
+            }
         };
         let Some(mut prog) = self.programmer.take() else {
             self.push_log("no programmer — press [c] to connect".into());
             return;
         };
+        // Firmware-mismatch advisory, matching the CLI (main.rs `warn_firmware`).
+        if prog.info().firmware != fw_target {
+            self.push_log(
+                "warning: programmer firmware differs from the database bitstream target".into(),
+            );
+        }
         // The worker owns the programmer for the duration of the op (both
         // `Programmer` and the reporter are `Send`, per the core's design).
         self.status.push_str(" · busy (reading)");
@@ -544,5 +566,50 @@ mod tests {
         assert_eq!(app.search, "wq");
         app.on_key(KeyCode::Esc);
         assert!(app.quit);
+    }
+
+    /// The TUI read path must load the FPGA algorithm before `begin()` (the F7
+    /// gap). `resolve_selected_device` returns a device with `algorithm` set.
+    #[test]
+    fn resolve_selected_device_loads_algorithm() {
+        use minipro_core::device::{Algorithm, Device};
+        use minipro_core::error::{FwVersion, Result};
+        use minipro_db::Search;
+
+        struct MockDb {
+            dev: Device,
+        }
+        impl ChipDb for MockDb {
+            fn get(&self, name: &str) -> Option<&Device> {
+                (name == self.dev.name).then_some(&self.dev)
+            }
+            fn search(&self, _q: &str, _l: usize) -> Search<'_> {
+                Search { total: 0, hits: Vec::new(), truncated: false }
+            }
+            fn firmware_target(&self) -> FwVersion {
+                FwVersion(0x0111)
+            }
+            fn load_algorithm(&self, _dev: &Device) -> Result<Option<Algorithm>> {
+                Ok(Some(Algorithm { name: "ALG".into(), bitstream: vec![1, 2, 3] }))
+            }
+        }
+
+        let dev = Device { name: "CHIP@DIP8".into(), ..Device::default() };
+        let mut app = App::new(None);
+        app.db = Some(Box::new(MockDb { dev }));
+        app.hits = vec!["CHIP@DIP8".into()];
+        app.list_state.select(Some(0));
+
+        let (resolved, fw) = app.resolve_selected_device().expect("resolve");
+        assert_eq!(fw, FwVersion(0x0111));
+        assert_eq!(
+            resolved.algorithm.expect("algorithm loaded").bitstream,
+            vec![1, 2, 3],
+            "TUI must load the bitstream so begin() works on FPGA devices",
+        );
+
+        // No selection is a graceful user-facing error, not a panic.
+        app.list_state.select(None);
+        assert!(app.resolve_selected_device().is_err());
     }
 }
