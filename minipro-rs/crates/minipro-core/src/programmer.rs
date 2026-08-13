@@ -1,7 +1,7 @@
 //! The central [`Programmer`] trait — a thin always-present core plus
 //! object-safe accessor upcasts to the optional capability traits in
-//! [`crate::caps`]. This is the Rust form of the C `minipro_handle_t` vtable,
-//! but a driver implements only the capabilities its hardware supports.
+//! [`crate::caps`]. It is a capability-based vtable: a driver implements only
+//! the capabilities its hardware supports.
 
 use crate::caps::{
     Calibration, EmmcOps, FirmwareUpdate, FuseOps, JedecOps, LogicTest, MemoryOps, PinTest,
@@ -32,7 +32,7 @@ impl Caps {
     pub fn with(self, c: Caps) -> Caps { Caps(self.0 | c.0) }
 }
 
-/// Identity/status of the attached programmer (the queryable part of the C handle).
+/// Identity/status of the attached programmer (the queryable identity fields).
 #[derive(Clone, Debug)]
 pub struct ProgrammerInfo {
     pub model: String,

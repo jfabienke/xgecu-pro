@@ -647,7 +647,7 @@ fn run_logic(db_dir: Option<&Path>, chip: &str, mode: Mode) -> Result<()> {
             prog.logic().ok_or(Error::Unsupported("this programmer has no logic test"))?;
         logic.run(&session, &mut load)?
     };
-    prog.end(session)?; // de-energize the socket (the C's end_transaction)
+    prog.end(session)?; // de-energize the socket (end the transaction)
 
     match mode {
         Mode::Json => {

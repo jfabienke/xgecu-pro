@@ -1,7 +1,7 @@
 //! Optional capability traits. A driver implements the subset its hardware
 //! supports and exposes each via the accessor upcasts on
 //! [`crate::programmer::Programmer`]. All are object-safe (no generics, no
-//! by-value `Self`), block-granular like the C `*_block` functions — the
+//! by-value `Self`), block-granular — the
 //! loop/progress/verification live in [`crate::ops`], written once.
 
 use crate::device::{BlockReq, EraseKind, FuseKind, MemoryKind, Partition, Region};
@@ -91,8 +91,8 @@ pub trait PinTest {
 /// with the chip DB ([`crate`]-external `ChipDb::load_algorithm_named`). The FPGA
 /// logic-test and autodetect ops call it for their *utility* algorithms
 /// (`TestLgcPull`, `TTL1`, `SPI25F11`, …), which are chosen at op time rather
-/// than tied to a chip — the way the C's `do_ic_test` calls `get_algorithm` per
-/// pass. Fixed-silicon drivers (T48) ignore it.
+/// than tied to a chip — loaded per op/pass rather than per chip.
+/// Fixed-silicon drivers (T48) ignore it.
 pub type LoadBitstream<'a> = &'a mut dyn FnMut(&str) -> Result<Vec<u8>>;
 
 /// Logic-IC (74xx/40xx) functional test. On the FPGA programmers each pass needs

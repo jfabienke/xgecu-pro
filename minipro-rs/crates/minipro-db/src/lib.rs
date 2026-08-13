@@ -82,7 +82,7 @@ const ALGO_TABLE: &[&str] = &[
 /// for logic/utility devices (`protocol_id == 0`), which use a separate table.
 ///
 /// Example: an `M27C256B@DIP28` (protocol 0x07 `ROM28P`, `variant>>8 == 0x32`)
-/// resolves to `"ROM28P32"` — the same name the C tool logs for it.
+/// resolves to `"ROM28P32"`.
 pub fn algorithm_name(dev: &Device) -> Option<String> {
     let pid = dev.protocol_id;
     let idx = (pid as usize).checked_sub(1)?;
@@ -172,7 +172,7 @@ impl XmlDb {
 
         let mut index = HashMap::with_capacity(devices.len());
         for (i, dev) in devices.iter().enumerate() {
-            // First entry wins on (rare) duplicate names, like the C linear scan.
+            // First entry wins on (rare) duplicate names.
             index.entry(dev.name.to_ascii_uppercase()).or_insert(i);
         }
 
@@ -327,7 +327,7 @@ fn parse_infoic<R: BufRead>(reader: R, db_type: &str) -> Result<Vec<Device>> {
 }
 
 /// Expand one `<ic …/>` element into devices — one per comma-separated alias
-/// in its `name` attribute (the C `search_chip_name` contract).
+/// in its `name` attribute.
 fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
     let mut name = None;
     let mut protocol_id: u8 = 0;
@@ -382,7 +382,7 @@ fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
     // chip size; the signature is deliberately tight so parallel NAND and
     // everything else is untouched. page_size is left in place — the T76
     // BEGIN prelude needs it verbatim.
-    const ALG_NAND: u8 = 0x2d; // database.h IC2_ALG_NAND
+    const ALG_NAND: u8 = 0x2d; // NAND algorithm id
     if protocol_id == ALG_NAND && code_size == 0 && pages_per_block & 0xff00_0000 != 0 {
         let ppb = pages_per_block & 0x00ff_ffff;
         code_size = u64::from(page_size) * u64::from(ppb) * u64::from(write_buffer_size);
@@ -429,7 +429,7 @@ fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
     Ok(())
 }
 
-/// Significant bytes in a chip id — the C `get_id_bytes_count`.
+/// Significant bytes in a chip id.
 pub(crate) fn id_bytes_count(chip_id: u32) -> u8 {
     match chip_id {
         0 => 0,
@@ -437,8 +437,8 @@ pub(crate) fn id_bytes_count(chip_id: u32) -> u8 {
     }
 }
 
-/// Pin count packed into bits 24..30 of `package_details`, with the C parser's
-/// PLCC-adapter special values (`database.c: get_pin_count`).
+/// Pin count packed into bits 24..30 of `package_details`, with the
+/// PLCC-adapter special values.
 pub(crate) fn pin_count(package_details: u32) -> u8 {
     match (package_details >> 24) & 0x3f {
         0x38 => 20, // PLCC20 adapter
@@ -492,7 +492,7 @@ struct LogicIc {
 
 impl LogicIc {
     /// Append one `<vector>` row: exactly `pin_count` state chars, whitespace
-    /// ignored. The C stops at `pin_count` and errors if
+    /// ignored. Stops at `pin_count` and errors if
     /// short.
     fn push_vector(&mut self, text: &[u8]) -> Result<()> {
         let mut n = 0u8;
@@ -553,7 +553,7 @@ fn parse_logic_ic(e: &BytesStart<'_>) -> Result<LogicIc> {
 /// `<database type="LOGIC">` of `<ic type="5" pins=N voltage=V>` elements, each
 /// holding `<vector>` children whose text is N pin-state chars.
 ///
-/// NOTE: validated against the C parser's documented format, not a real
+/// NOTE: validated against the documented format, not a real
 /// `logicic.xml` (which is absent from this tree). See the tests.
 fn parse_logicic<R: BufRead>(reader: R) -> Result<Vec<Device>> {
     let mut xml = Reader::from_reader(reader);
@@ -684,9 +684,9 @@ fn inflate_bitstream(b64: &str) -> Result<Vec<u8>> {
 /// is a stream of little-endian u16 words: a non-zero word is emitted verbatim;
 /// a zero word is a run marker whose following word gives the count of zero u16
 /// words to emit. The expanded result is the actual Anlogic bitstream, exactly
-/// `algo_size` bytes (the C output buffer is `calloc(1, algo_size)`).
+/// `algo_size` bytes.
 ///
-/// The embedded CRC is not re-verified here (the C does, for integrity, but a
+/// The embedded CRC is not re-verified here (a
 /// wrong bitstream is rejected by the device anyway, and matching minipro's
 /// exact CRC seed is unnecessary for correctness).
 /// Offset of the RLE bitstream data inside a native `.alg` file
@@ -906,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn spi_nand_geometry_fixup_matches_c() {
+    fn spi_nand_geometry_fixup_derives_size_from_packed_geometry() {
         // MX35LF1GE4AB-shaped descriptor: packed geometry, code_memory_size 0,
         // flag bits in the top byte of pages_per_block.
         let xml = r#"<infoic><database type="INFOICT76"><manufacturer name="MACRONIX">
@@ -968,8 +968,8 @@ mod tests {
     }
 
     #[test]
-    fn id_bytes_count_matches_c() {
-        // C get_id_bytes_count: index of highest non-zero byte.
+    fn id_bytes_count_is_highest_nonzero_byte() {
+        // index of the highest non-zero byte.
         for (id, n) in [(0u32, 0u8), (0x1e, 1), (0x1e51, 2), (0xef4017, 3), (0x89014012, 4)] {
             assert_eq!(id_bytes_count(id), n, "chip_id {id:#x}");
         }

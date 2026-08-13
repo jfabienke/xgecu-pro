@@ -1,4 +1,4 @@
-//! Chip and image data types — the C `device_t`, plus the value types the
+//! Chip and image data types, plus the value types the
 //! capability traits pass around. These are plain data, never traits; with the
 //! default-on `serde` feature they derive `Serialize` for the JSON mode.
 
@@ -92,11 +92,11 @@ pub struct Package {
     pub name: String,
 }
 
-/// A chip descriptor from the database, mirroring the C `device_t` fields the
-/// T76 transaction packers consume. Plain data.
+/// A chip descriptor from the database — the fields the T76 transaction
+/// packers consume. Plain data.
 ///
-/// Fields absent from a given `infoic.xml` entry stay 0 (the C parser's
-/// behaviour); `i2c_address`/`spi_clock`/`icsp` are runtime-adjustable knobs
+/// Fields absent from a given `infoic.xml` entry stay 0;
+/// `i2c_address`/`spi_clock`/`icsp` are runtime-adjustable knobs
 /// that default to 0 and may be overwritten by CLI options before `begin`.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

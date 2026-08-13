@@ -8,9 +8,8 @@
 //!
 //! Every device field is derived from the 116-byte descriptor by the same
 //! descriptor→field transforms XGPro applies — the descriptor offsets and the
-//! algorithm-number decision tree are functional facts (RE'd from
-//! `Xgpro_T76.exe`'s `t76_load_chip_to_state @0x4eed10` / `sub_4b3120`, also
-//! documented by nmatt0's `infoict76-refresh` scripts; see the repo `NOTICE`):
+//! algorithm-number decision tree are functional facts of XGPro's on-disk
+//! format (reverse-engineered by the minipro community; see the repo `NOTICE`):
 //! the **algorithm number** (`variant` high byte — passthrough
 //! `desc[0x35]` or the per-protocol tree), **flags**, **package_details**,
 //! chip_id, sizes, buffers, voltages, chip_info, pulse_delay, etc. Bitstreams
@@ -20,7 +19,7 @@
 //! hardware (the `M27C256B@DIP28` → `ROM28P32` path read a real EPROM
 //! byte-identical to the known-good dump). Field accuracy is validated against
 //! `infoic.xml` by the `oracle` test below (variant ~92% — the rest are
-//! stale-XML / microwire splits, *0 genuine bugs* per variant.py; most other
+//! stale-XML / microwire splits, *0 genuine bugs*; most other
 //! fields 92–100%).
 //!
 //! Not derived (host-side, not in the descriptor): **`pin_map`** (package pin
@@ -46,7 +45,7 @@ const MFC_IC_PTR: usize = 0x44; // u32 VA -> this vendor's Ic array
 const MFC_NUM_ICS: usize = 0x48; // u32
 const IC_NAME: usize = 0x0c; // char[40]
 // Remaining descriptor field offsets are used directly in `decode_ic`
-// (the fields.py / variant.py port), documented in docs/infoict76-dll-format.md.
+// (used by `decode_ic`), documented in docs/infoict76-dll-format.md.
 
 /// A minimally-parsed PE image: just enough to map virtual addresses to file
 /// offsets and read the data sections.
@@ -311,9 +310,9 @@ fn u16le(d: &[u8], o: usize) -> u16 {
     u16::from_le_bytes([d[o], d[o + 1]])
 }
 
-/// Port of `variant.py::_sub_4b3120` — the exe's per-protocol algorithm-suffix
-/// decision tree (`Xgpro_T76.exe sub_4b3120`, RE'd by nmatt0). Returns the
-/// 2-hex-char algo suffix, or `None` for undefined field combinations.
+/// The per-protocol algorithm-suffix decision tree over the descriptor
+/// fields. Returns the 2-hex-char algo suffix, or `None` for undefined field
+/// combinations.
 fn algo_tree(proto: u8, d34: u8, size: u32, fam: u32, d50: u8) -> Option<u8> {
     let fm = fam & 0xffff_00ff;
     match proto.wrapping_sub(1) {
@@ -396,7 +395,7 @@ fn algo_tree(proto: u8, d34: u8, size: u32, fam: u32, d50: u8) -> Option<u8> {
     }
 }
 
-/// `variant.py::algo_number`: passthrough `desc[0x35]` or the tree.
+/// Algorithm number: passthrough `desc[0x35]`, else the decision tree.
 fn algo_number(d: &[u8]) -> Option<u8> {
     if d[0x35] != 0 {
         Some(d[0x35])
@@ -405,12 +404,12 @@ fn algo_number(d: &[u8]) -> Option<u8> {
     }
 }
 
-/// `variant.py::variant`: `(algo << 8) | desc[0x34]`.
+/// Variant field: `(algo << 8) | desc[0x34]`.
 fn variant_field(d: &[u8]) -> Option<u16> {
     algo_number(d).map(|a| (u16::from(a) << 8) | u16::from(d[0x34]))
 }
 
-/// `fields.py::flags`: `desc[0x70]` + per-protocol post-load adjustments (T76).
+/// Flags field: `desc[0x70]` + per-protocol post-load adjustments (T76).
 fn flags_field(d: &[u8]) -> u32 {
     let v = u32le(d, 0x70);
     match d[0x00] {
@@ -430,17 +429,17 @@ fn flags_field(d: &[u8]) -> u32 {
     }
 }
 
-/// `fields.py::package_details`: `desc[0x6c]` + the family-signature OR.
+/// Package-details field: `desc[0x6c]` + the family-signature OR.
 fn package_details_field(d: &[u8]) -> u32 {
     let v = u32le(d, 0x6c);
     let fam_or = match d[0x00] { 1 => 0xb00, 2 => 0xa00, 3 => 0x900, _ => 0 };
     if fam_or != 0 && (v & 0xff00) != 0x500 { v | fam_or } else { v }
 }
 
-/// Decode a 116-byte chip descriptor into a [`Device`], porting `fields.py` +
-/// `variant.py` (nmatt0's RE of `t76_load_chip_to_state`/`sub_4b3120`). Returns
-/// `None` when the algorithm number is undefined (the chip has no bitstream/// the generator skips these too). `pin_map` isn't in the descriptor (host-side
-/// package tables, not ported) — left 0; it affects only pin-test reporting.
+/// Decode a 116-byte chip descriptor into a [`Device`]. Returns
+/// `None` when the algorithm number is undefined (the chip has no bitstream;
+/// the generator skips these too). `pin_map` isn't in the descriptor (host-side
+/// package tables, not decoded) — left 0; it affects only pin-test reporting.
 fn decode_ic(pe: &Pe, ic: usize) -> Option<Device> {
     let d = pe.data.get(ic..ic + IC_STRIDE)?;
     let raw_name = ascii(&d[IC_NAME..IC_NAME + 40])?;
@@ -461,10 +460,10 @@ fn decode_ic(pe: &Pe, ic: usize) -> Option<Device> {
         chip_id_bytes: id_bytes_count(chip_id),
         name,
         protocol_id: d[0x00],
-        // chip_type is RE'd at desc[0x08] (tools/infoict76-refresh/fields.py, 100%).
+        // chip_type lives at desc[0x08].
         chip_type: d[0x08],
-        // blank_value's DLL offset is not RE'd; default to the erased byte, as
-        // the C does when the XML attribute is absent.
+        // blank_value's DLL offset is not decoded; default to the erased byte
+        // (0xFF), as when the XML attribute is absent.
         blank_value: 0xFF,
         variant,
         code_size: u64::from(u32le(d, 0x38)),

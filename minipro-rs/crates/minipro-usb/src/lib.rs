@@ -178,8 +178,7 @@ impl Transport for UsbTransport {
         let timeout = if ep.0 == EP_CMD_IN { CMD_READ_TIMEOUT } else { SHORT_TIMEOUT };
         let endpoint = self.in_ep(ep.0)?;
         // IN transfers must request a nonzero multiple of the max packet size
-        // (the same libusb-overflow rule the C code worked around by rounding
-        // short reads up to 64 bytes).
+        // (the libusb-overflow rule: short reads are rounded up to 64 bytes).
         let mps = endpoint.max_packet_size();
         let request = len.div_ceil(mps) * mps;
         let completion = endpoint.transfer_blocking(Buffer::new(request), timeout);
