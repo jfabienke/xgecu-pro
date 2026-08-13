@@ -38,15 +38,15 @@ use crate::wire::{
     CMD_READ_CODE, CMD_REQUEST_STATUS, CMD_WRITE_CODE,
 };
 
-// Command + bulk endpoints — the T56 multiplexes everything over EP01/EP81
-// (; there is no bulk EP for the T56).
+// Command endpoints — the T56 multiplexes everything over EP01/EP81;
+// there is no separate bulk EP.
 const EP_MSG_OUT: Ep = Ep(0x01);
 const EP_MSG_IN: Ep = Ep(0x81);
 
 // T56-specific opcodes. The shared II+-family opcodes
 // (BEGIN/END/READID/WRITE_CODE/READ_CODE/ERASE/REQUEST_STATUS) come from
 // `crate::wire`.
-const MP_T56: u8 = 0x06; // device-type byte in the system-info report (minipro.h:27)
+const MP_T56: u8 = 0x06; // device-type byte in the system-info report
 const CMD_WRITE_USER_DATA: u8 = 0x0a;
 const CMD_READ_USER_DATA: u8 = 0x0b;
 const CMD_READ_DATA: u8 = 0x10;
@@ -62,8 +62,7 @@ pub struct T56 {
     tx: Box<dyn Transport>,
     info: ProgrammerInfo,
     /// Name of the FPGA algorithm currently loaded, so `begin` skips the
-    /// re-upload within a session. The C uses a plain `static` bool
-    ///; keying by name is the T76's fix — switching devices
+    /// re-upload within a session — keyed by name, so switching devices
     /// re-uploads correctly.
     uploaded_algo: Option<String>,
 }
@@ -82,8 +81,8 @@ impl T56 {
         T56 { tx, info, uploaded_algo: None }
     }
 
-    /// Query programmer identity (`minipro_get_system_info`,
-    /// T56 case): send a 5-byte zero request, read the report. `[4]`=fw minor,
+    /// Query programmer identity from the T56 system-info report: send a
+    /// 5-byte zero request, read the report. `[4]`=fw minor,
     /// `[5]`=fw major, `[6]`=device type (6 = T56), `[32..56]`=serial,
     /// `[56..60]`=voltage (u32 LE, scaled by the T48/T56 formula). Also verifies
     /// this really is a T56.
@@ -97,7 +96,7 @@ impl T56 {
         }
         let (minor, major) = (msg[4], msg[5]);
         // T48/T56 voltage: (raw * 0xccf6 / 0x27000) / 100.0.
-        // Integer math first (as in the C), then the float divide.
+        // Integer math first, then the float divide.
         let raw = u32::from_le_bytes([msg[56], msg[57], msg[58], msg[59]]);
         let voltage = (u64::from(raw) * 0xccf6 / 0x27000) as f32 / 100.0;
         self.info = ProgrammerInfo {
@@ -122,7 +121,7 @@ impl T56 {
         self.tx.send(EP_MSG_OUT, pkt)
     }
 
-    /// Upload the FPGA bitstream, single-shot (`t56_send_bitstream` normal
+    /// Upload the FPGA bitstream, single-shot (normal
     /// path): an 8-byte `0x26` header carrying the length, then
     /// the whole bitstream in one transfer. Neither transfer has a reply.
     fn upload_bitstream(&mut self, dev: &Device) -> Result<()> {
@@ -150,14 +149,14 @@ impl T56 {
     }
 
     /// Upload the two logic-test bitstreams via the multipart `0x2A` protocol
-    /// (`t56_send_bitstream` MP_LOGIC path): each is prefixed by
+    /// (the logic-test path): each is prefixed by
     /// an 8-byte header (`[0]=0x2A`, `[1]`=1 for the first / 0 for the second,
     /// length at `[4]`) and sent in one transfer.
     fn upload_logic_ttl(&mut self, ttl1: &[u8], ttl2: &[u8]) -> Result<()> {
         for (i, bits) in [ttl1, ttl2].into_iter().enumerate() {
             let mut buf = vec![0u8; 8 + bits.len()];
             buf[0] = CMD_WRITE_BITSTREAM2;
-            buf[1] = if i == 0 { 1 } else { 0 }; //: `i ? 0 : 1`
+            buf[1] = if i == 0 { 1 } else { 0 }; // first pass = 1, second = 0
             le32(&mut buf, 4, bits.len().min(u32::MAX as usize) as u32);
             buf[8..].copy_from_slice(bits);
             self.send(&buf)?;
@@ -166,8 +165,8 @@ impl T56 {
         Ok(())
     }
 
-    /// `0x39` REQUEST_STATUS; returns the overcurrent byte at `resp[12]`
-    /// (`t56_get_ovc_status`). The T56 never repacks the chip
+    /// `0x39` REQUEST_STATUS; returns the overcurrent byte at `resp[12]`.
+    /// The T56 never repacks the chip
     /// header into this command (unlike the T76's NAND/eMMC path).
     fn ovc_status(&mut self) -> Result<u8> {
         let mut msg = [0u8; 8];
@@ -195,7 +194,7 @@ impl Programmer for T56 {
             .with(Caps::AUTODETECT)
     }
 
-    /// `t56_begin_transaction`: upload the bitstream, send the
+    /// Begin a transaction: upload the bitstream, send the
     /// shared 64-byte BEGIN_TRANS header, then the overcurrent check.
     fn begin(&mut self, dev: &Device) -> Result<Session> {
         self.upload_bitstream(dev)?;
@@ -214,14 +213,14 @@ impl Programmer for T56 {
         Ok(Session { device: dev.clone(), emmc_capacity: 0 })
     }
 
-    /// `t56_end_transaction`: a bare END_TRANS, no reply.
+    /// End the transaction: a bare END_TRANS, no reply.
     fn end(&mut self, _session: Session) -> Result<()> {
         let mut msg = [0u8; 8];
         msg[0] = CMD_END_TRANS;
         self.send(&msg)
     }
 
-    /// `t56_get_chip_id`: READID, then decode per the reported
+    /// Read the chip ID: READID, then decode per the reported
     /// id type — types 3/4 little-endian, others big-endian.
     fn identify(&mut self, s: &Session) -> Result<ChipId> {
         let mut msg = [0u8; 8];
@@ -233,7 +232,7 @@ impl Programmer for T56 {
         let id_type = resp[0];
         let id_length = s.device.chip_id_bytes.min(4);
         let bytes = &resp[2..2 + usize::from(id_length)];
-        // MP_ID_TYPE3 = 3, MP_ID_TYPE4 = 4 (minipro.h) -> little-endian.
+        // id types 3 and 4 are little-endian.
         let raw = if id_length == 0 {
             0
         } else if id_type == 0x03 || id_type == 0x04 {
@@ -273,7 +272,7 @@ impl Programmer for T56 {
 }
 
 impl LogicTest for T56 {
-    /// `t56_logic_ic_test` (-…): upload the two TTL bitstreams, then the
+    /// Logic-IC test: upload the two TTL bitstreams, then the
     /// shared two-pass vector loop + L/H/Z comparison. The caller's `load`
     /// fetches `TTL1`/`TTL2` from the same `algoT76/` source as chip bitstreams.
     fn run(&mut self, s: &Session, load: LoadBitstream<'_>) -> Result<bool> {
@@ -288,7 +287,7 @@ impl LogicTest for T56 {
 }
 
 impl SpiAutodetect for T56 {
-    /// `t56_spi_autodetect`: upload the SPI25F autodetect
+    /// SPI autodetect: upload the SPI25F autodetect
     /// bitstream, then `0x37` (`[8]`=package flag), send 10, recv 16, id = 3
     /// bytes big-endian from `[2]`.
     fn spi_autodetect(&mut self, wide: bool, load: LoadBitstream<'_>) -> Result<u32> {
@@ -307,14 +306,14 @@ impl SpiAutodetect for T56 {
 }
 
 impl Calibration for T56 {
-    /// `t56_read_calibration` — the shared implementation.
+    /// Read calibration data via the shared wire helper.
     fn read_calibration(&mut self, len: usize) -> Result<Vec<u8>> {
         wire::calibration_read(self.tx.as_mut(), len)
     }
 }
 
 impl FuseOps for T56 {
-    /// `t56_read_fuses` — the shared implementation.
+    /// Read a fuse block via the shared wire helper.
     fn read_fuses(
         &mut self,
         s: &Session,
@@ -325,7 +324,7 @@ impl FuseOps for T56 {
         let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
         wire::fuse_read(self.tx.as_mut(), s.device.protocol_id, code, kind, length, items_count)
     }
-    /// `t56_write_fuses` — the shared implementation.
+    /// Write a fuse block via the shared wire helper.
     fn write_fuses(
         &mut self,
         s: &Session,
@@ -339,11 +338,11 @@ impl FuseOps for T56 {
 }
 
 impl JedecOps for T56 {
-    /// `t56_read_jedec_row` — the shared implementation.
+    /// Read a JEDEC row via the shared wire helper.
     fn read_row(&mut self, s: &Session, row: u8, flags: u8, size: u16) -> Result<Vec<u8>> {
         wire::jedec_read(self.tx.as_mut(), s.device.protocol_id, row, flags, size)
     }
-    /// `t56_write_jedec_row` — the shared implementation.
+    /// Write a JEDEC row via the shared wire helper.
     fn write_row(
         &mut self,
         s: &Session,
@@ -366,8 +365,8 @@ impl Protect for T56 {
 }
 
 impl MemoryOps for T56 {
-    /// `t56_read_block`: 8-byte command, then the data on EP81.
-    /// The T56 firmware returns `size + 16` bytes (an off-by-one bug the C works
+    /// Read a block: 8-byte command, then the data on EP81.
+    /// The T56 firmware returns `size + 16` bytes (an off-by-one quirk worked
     /// around by over-reading); we request that many and keep the
     /// first `size`.
     fn read_block(&mut self, _s: &Session, req: &BlockReq) -> Result<Vec<u8>> {
@@ -391,7 +390,7 @@ impl MemoryOps for T56 {
         Ok(data)
     }
 
-    /// `t56_write_block`: 8-byte command, then the payload on
+    /// Write a block: 8-byte command, then the payload on
     /// EP01.
     fn write_block(&mut self, _s: &Session, req: &BlockReq, data: &[u8]) -> Result<()> {
         if data.len() != req.len as usize {
@@ -414,16 +413,16 @@ impl MemoryOps for T56 {
         le16(&mut msg, 2, req.len.min(u32::from(u16::MAX)) as u16);
         le32(&mut msg, 4, req.address.min(u64::from(u32::MAX)) as u32);
         self.send(&msg)?;
-        // TODO(hw): the C sends exactly `device->write_buffer_size` bytes
+        // TODO(hw): send exactly `device->write_buffer_size` bytes
         //; the block loop drives page-sized blocks, so this
         // matches when write_buffer_size == page_size. Reconcile the two
         // granularities when validating writes on hardware.
         self.send(data)
     }
 
-    /// `t56_erase`: a 15-byte 0x0e (num_fuses at [2], pld at
+    /// Erase the chip: a 15-byte 0x0e (num_fuses at [2], pld at
     /// [4]), then drain the 64-byte reply. A plain chip/fuse erase passes zero
-    /// for both (the C caller derives them from the fuse-config profile, not the
+    /// for both (the caller derives them from the fuse-config profile, not the
     /// chip DB entry).
     fn erase(&mut self, _s: &Session, kind: EraseKind) -> Result<()> {
         if let EraseKind::Sector { .. } = kind {

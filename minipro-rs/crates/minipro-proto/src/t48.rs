@@ -24,9 +24,9 @@
 //!
 //! The large host-side bit-bang / pin-driver subsystem (`set_zif_*`,
 //! `set_pin_drivers`, `set_voltages`, `hardware_check` — for `custom_protocol`
-//! chips and the manufacturing self-test) is **intentionally not ported**. Its
-//! only real payoff is reading vintage parallel PROMs (the fork's `CP_PROM`
-//! path, read-only), which the FPGA programmers (T56/T76) already cover
+//! chips and the manufacturing self-test) is **intentionally not implemented**. Its
+//! only real payoff is reading vintage parallel PROMs (the `CP_PROM`
+//! device class, read-only), which the FPGA programmers (T56/T76) already cover
 //! natively by uploading a ROM-class algorithm (`ROM24P`/`ROM28P`/…) — so on
 //! fixed-silicon it just re-does in software, over USB pin-by-pin, what the
 //! FPGA does with a bitstream. Not worth ~1200 lines of hardware-unverifiable
@@ -54,7 +54,7 @@ const EP_DAT_OUT: Ep = Ep(0x02);
 
 // T48-specific opcodes; shared II+-family opcodes come from
 // `crate::wire`.
-const MP_T48: u8 = 0x07; // device-type byte in the system-info report (minipro.h:28)
+const MP_T48: u8 = 0x07; // device-type byte in the system-info report
 const CMD_WRITE_USER_DATA: u8 = 0x0a;
 const CMD_READ_USER_DATA: u8 = 0x0b;
 const CMD_READ_DATA: u8 = 0x10;
@@ -83,8 +83,8 @@ impl T48 {
         T48 { tx, info }
     }
 
-    /// Query programmer identity (`minipro_get_system_info`,
-    /// T48 case): `[4]`=fw minor, `[5]`=fw major, `[6]`=device type (7 = T48),
+    /// Query programmer identity from the T48 system-info report:
+    /// `[4]`=fw minor, `[5]`=fw major, `[6]`=device type (7 = T48),
     /// `[32..56]`=serial, `[56..60]`=voltage (u32 LE, T48/T56 formula).
     pub fn query_info(&mut self) -> Result<()> {
         let msg = self.cmd(&[0u8; 5], 64)?;
@@ -119,8 +119,7 @@ impl T48 {
         self.tx.send(EP_MSG_OUT, pkt)
     }
 
-    /// `0x39` REQUEST_STATUS; overcurrent byte at `resp[12]`
-    /// (`t48_get_ovc_status`).
+    /// `0x39` REQUEST_STATUS; overcurrent byte at `resp[12]`.
     fn ovc_status(&mut self) -> Result<u8> {
         let mut msg = [0u8; 8];
         msg[0] = CMD_REQUEST_STATUS;
@@ -148,7 +147,7 @@ impl Programmer for T48 {
             .with(Caps::LOGIC)
     }
 
-    /// `t48_begin_transaction`: the shared 64-byte header (no
+    /// Begin a transaction: the shared 64-byte header (no
     /// FPGA, no bitstream), the `msg[24]=1` clock-enable quirk, then the
     /// overcurrent check.
     fn begin(&mut self, dev: &Device) -> Result<Session> {
@@ -158,7 +157,7 @@ impl Programmer for T48 {
         // clock the T48 needs msg[24]=1 for the msg[28] clock byte to take
         // effect. ChipParams doesn't yet carry the decoded `can_adjust_clock`
         // flag; under the DB invariant `spi_clock != 0` iff `can_adjust_clock`,
-        // so gating on spi_clock reproduces the C output exactly.
+        // so gating on spi_clock yields the same output.
         // TODO(db): key this on a decoded can_adjust_clock flag once Device
         // carries the decoded flag set.
         if params.spi_clock != 0 {
@@ -173,14 +172,14 @@ impl Programmer for T48 {
         Ok(Session { device: dev.clone(), emmc_capacity: 0 })
     }
 
-    /// `t48_end_transaction`: a bare END_TRANS, no reply.
+    /// End the transaction: a bare END_TRANS, no reply.
     fn end(&mut self, _session: Session) -> Result<()> {
         let mut msg = [0u8; 8];
         msg[0] = CMD_END_TRANS;
         self.send(&msg)
     }
 
-    /// `t48_get_chip_id`: READID, decode per id type (3/4 little-endian, else
+    /// Read the chip ID: READID, decode per id type (3/4 little-endian, else
     /// big-endian).
     fn identify(&mut self, s: &Session) -> Result<ChipId> {
         let mut msg = [0u8; 8];
@@ -227,7 +226,7 @@ impl Programmer for T48 {
 }
 
 impl FuseOps for T48 {
-    /// `t48_read_fuses` — the shared implementation.
+    /// Read a fuse block via the shared wire helper.
     fn read_fuses(
         &mut self,
         s: &Session,
@@ -238,7 +237,7 @@ impl FuseOps for T48 {
         let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
         wire::fuse_read(self.tx.as_mut(), s.device.protocol_id, code, kind, length, items_count)
     }
-    /// `t48_write_fuses` — the shared implementation.
+    /// Write a fuse block via the shared wire helper.
     fn write_fuses(
         &mut self,
         s: &Session,
@@ -252,11 +251,11 @@ impl FuseOps for T48 {
 }
 
 impl JedecOps for T48 {
-    /// `t48_read_jedec_row` — the shared implementation.
+    /// Read a JEDEC row via the shared wire helper.
     fn read_row(&mut self, s: &Session, row: u8, flags: u8, size: u16) -> Result<Vec<u8>> {
         wire::jedec_read(self.tx.as_mut(), s.device.protocol_id, row, flags, size)
     }
-    /// `t48_write_jedec_row` — the shared implementation.
+    /// Write a JEDEC row via the shared wire helper.
     fn write_row(
         &mut self,
         s: &Session,
@@ -279,7 +278,7 @@ impl Protect for T48 {
 }
 
 impl SpiAutodetect for T48 {
-    /// `t48_spi_autodetect`: `[0]`=0x37, `[8]`=package flag;
+    /// SPI autodetect: `[0]`=0x37, `[8]`=package flag;
     /// send 10, recv 32, id = 3 bytes big-endian from `[2]`. Fixed-silicon: no
     /// bitstream, so the loader is unused.
     fn spi_autodetect(&mut self, wide: bool, _load: LoadBitstream<'_>) -> Result<u32> {
@@ -295,7 +294,7 @@ impl SpiAutodetect for T48 {
 }
 
 impl LogicTest for T48 {
-    /// `t48_logic_ic_test`: two passes (pull-up then pull-down)
+    /// Logic-IC test: two passes (pull-up then pull-down)
     /// via the shared vector loop, then the L/H/Z comparison. Fixed-silicon: no
     /// FPGA bitstream, so the loader is unused.
     fn run(&mut self, s: &Session, _load: LoadBitstream<'_>) -> Result<bool> {
@@ -307,7 +306,7 @@ impl LogicTest for T48 {
 }
 
 impl MemoryOps for T48 {
-    /// `t48_read_block`: 8-byte command on EP01, then the data
+    /// Read a block: 8-byte command on EP01, then the data
     /// on EP82. A read shorter than 64 bytes is padded to a 64-byte transfer
     /// and truncated.
     fn read_block(&mut self, _s: &Session, req: &BlockReq) -> Result<Vec<u8>> {
@@ -332,7 +331,7 @@ impl MemoryOps for T48 {
         Ok(data)
     }
 
-    /// `t48_write_block`: 8-byte command on EP01, then the
+    /// Write a block: 8-byte command on EP01, then the
     /// payload on EP02.
     fn write_block(&mut self, _s: &Session, req: &BlockReq, data: &[u8]) -> Result<()> {
         if data.len() != req.len as usize {
@@ -355,12 +354,12 @@ impl MemoryOps for T48 {
         le16(&mut msg, 2, req.len.min(u32::from(u16::MAX)) as u16);
         le32(&mut msg, 4, req.address.min(u64::from(u32::MAX)) as u32);
         self.send(&msg)?;
-        // TODO(hw): the C sends exactly `device->write_buffer_size` bytes over
+        // TODO(hw): send exactly `device->write_buffer_size` bytes over
         // EP02; matches when write_buffer_size == page_size.
         self.tx.send(EP_DAT_OUT, data)
     }
 
-    /// `t48_erase` (t48.c): a 15-byte 0x0e (num_fuses/pld zero for a plain
+    /// Erase the chip: a 15-byte 0x0e (num_fuses/pld zero for a plain
     /// chip/fuse erase), then drain the 64-byte reply.
     fn erase(&mut self, _s: &Session, kind: EraseKind) -> Result<()> {
         if let EraseKind::Sector { .. } = kind {
@@ -518,7 +517,7 @@ mod tests {
 
     #[test]
     fn read_jedec_returns_row_from_offset_zero() {
-        // The C copies (size+7)/8 bytes from msg[0], not msg[8].
+        // The reply carries (size+7)/8 bytes from msg[0], not msg[8].
         let mut reply = vec![0u8; 32];
         reply[0..3].copy_from_slice(&[0xde, 0xad, 0xbe]);
         let (mut t48, _tx) = t48_with(vec![reply]);

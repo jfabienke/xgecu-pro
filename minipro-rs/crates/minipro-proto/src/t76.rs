@@ -10,7 +10,7 @@
 //!
 //! Every command that produces a response goes through
 //! [`minipro_core::transport::command`], whose `#[must_use]` [`Pending`] guard
-//! preserves the C code's load-bearing invariant: *an undrained EP81/EP82
+//! encodes a load-bearing hardware invariant: *an undrained EP81/EP82
 //! response wedges the device until a USB replug*.
 //!
 //! Endpoint map (341-346, 385-390):
@@ -52,7 +52,7 @@ const EP_DAT_OUT: Ep = Ep(0x05);
 // REQUEST_STATUS) are imported from `crate::wire`. The constants below are the
 // T76-specific opcodes.
 const CMD_BEGIN_TRANS_LOGIC: u8 = 0x02; // 64-byte NAND FPGA-setup prelude
-const MP_T76: u8 = 0x08; // device-type byte in the system-info report (minipro.h MP_T76)
+const MP_T76: u8 = 0x08; // device-type byte in the system-info report
 const CMD_READ_CFG: u8 = 0x08; // doubles as the eMMC EXT_CSD read
 const CMD_WRITE_USER_DATA: u8 = 0x0a;
 const CMD_READ_USER_DATA: u8 = 0x0b;
@@ -70,7 +70,7 @@ const CMD_SWITCH: u8 = 0x3d;
 const CMD_PIN_DETECTION: u8 = 0x3e;
 const CMD_RESET: u8 = 0x3f; // XGECU_RESET
 
-// Protocol ids this driver special-cases (database.h:29-75).
+// Protocol ids this driver special-cases.
 const ALG_SPI25F_1: u8 = 0x03;
 const ALG_SPI25F_2: u8 = 0x0f;
 const ALG_T48: u8 = 0x12;
@@ -104,101 +104,187 @@ const BTLDR_MAGIC: u32 = 0x0004_9000;
 const LAST_BLOCK_ADDR: u32 = 0x0004_9f00;
 const LAST_BLOCK_CRC: u32 = 0xcdef_8668;
 
-// Chip-id byte-order types (minipro.h:52-56).
+// Chip-id byte-order types.
 const ID_TYPE3: u8 = 0x03;
 const ID_TYPE4: u8 = 0x04;
 
-/// Pack the BEGIN_TRANS packet. Returns the 128-byte buffer
-/// and the number of bytes actually sent (64, or 128 when a chip-class
-/// extension block applies).
-///
-/// Bytes `0x00..0x40` are the shared II+-family header ([`pack_begin64`]); the
-/// `0x40..0x7f` chip-class extensions below are T76-specific.
+/// One little-endian 32-bit write into the T76 chip-class extension area
+/// (bytes `0x40..0x7f`). Expressing each family's extension as a list of these
+/// keeps the field map as data rather than control flow.
+struct Field {
+    off: usize,
+    val: u32,
+}
+
+/// Read-setup dword shared by the SPI-NOR and parallel-NOR extensions at
+/// `msg[0x60]`; always accompanied by the `0x03` marker at `msg[0x65]`.
+const EXT_READ_SETUP: u32 = 0x0f05_172f;
+
+/// Parallel-NOR x16 socket adapter (variant nibble `& 0xf0`) → the `msg[0x48]`
+/// data-line selector. Adapters not listed use [`NOR_ADAPTER_DEFAULT`].
+const NOR_ADAPTER: &[(u8, u32)] = &[
+    (0x10, 0x0200),
+    (0x20, 0x1200),
+    (0x30, 0x0a00),
+    (0x40, 0x1000),
+    (0x50, 0x0800),
+    (0x60, 0x1800),
+    (0x70, 0x0400),
+];
+const NOR_ADAPTER_DEFAULT: u32 = 0x0800;
+
+/// Apply a family's extension fields plus the shared `0x65` read-setup marker.
+fn write_ext(msg: &mut [u8; 128], fields: &[Field]) {
+    for f in fields {
+        le32(msg, f.off, f.val);
+    }
+    msg[0x65] = 0x03;
+}
+
+/// Pack the BEGIN_TRANS packet: the shared 64-byte II+-family header
+/// ([`pack_begin64`]) plus, for the families that need it, a T76-specific
+/// chip-class extension in bytes `0x40..0x7f`. Returns the 128-byte buffer and
+/// the byte count actually sent — 64, or 128 when an extension applies.
 pub(crate) fn pack_begin_trans(p: &ChipParams) -> ([u8; 128], usize) {
     let mut msg = [0u8; 128];
-    msg[..64].copy_from_slice(&pack_begin64(p)); // shared header
-    // T76-only header bytes on top of the shared subset (see wire::pack_begin64).
-    msg[24] = p.i2c_address; // I2C address (T56 does not send this)
+    msg[..64].copy_from_slice(&pack_begin64(p));
+    // Two T76-only bytes layered on the shared subset (T56 leaves both zero).
+    msg[24] = p.i2c_address;
     msg[63] = (p.variant >> 8) as u8; // algorithm number
-    let mut msglen = 64usize;
 
-    // SPI 25-series NOR read-setup extension. All four values
-    // are individually load-bearing; dropping any one reads all zeros.
-    if p.protocol_id == ALG_SPI25F_1 || p.protocol_id == ALG_SPI25F_2 {
-        if (p.variant >> 8) as u8 == SPI_DEVICE_16P {
-            le32(&mut msg, 0x40, 0x0002_0000);
-            le32(&mut msg, 0x50, 0x0200_0000);
-        } else {
-            le32(&mut msg, 0x40, 0x0800_0000);
-            le32(&mut msg, 0x50, 0x0080_0000);
-        }
-        le32(&mut msg, 0x60, 0x0f05_172f);
-        msg[0x65] = 0x03;
-        msglen = 128;
+    let extended = match p.protocol_id {
+        ALG_SPI25F_1 | ALG_SPI25F_2 => ext_spi_nor(&mut msg, p),
+        ALG_T48 | ALG_T40B => ext_parallel_nor(&mut msg, p),
+        ALG_NAND => ext_nand(&mut msg, p),
+        ALG_EMMC => ext_emmc(&mut msg, p),
+        _ => false,
+    };
+    (msg, if extended { 128 } else { 64 })
+}
+
+/// SPI 25-series NOR read setup. The `0x40`/`0x50` pair differs for 16-pin
+/// parts; all four dwords are load-bearing — drop one and the chip reads zero.
+fn ext_spi_nor(msg: &mut [u8; 128], p: &ChipParams) -> bool {
+    let (f40, f50) = if (p.variant >> 8) as u8 == SPI_DEVICE_16P {
+        (0x0002_0000, 0x0200_0000)
+    } else {
+        (0x0800_0000, 0x0080_0000)
+    };
+    write_ext(
+        msg,
+        &[
+            Field { off: 0x40, val: f40 },
+            Field { off: 0x50, val: f50 },
+            Field { off: 0x60, val: EXT_READ_SETUP },
+        ],
+    );
+    true
+}
+
+/// Parallel NOR x16 (T48/T40B families). Only the `0x0b` package family in a
+/// x16 geometry (`>= 8`) carries the extension; `0x48` selects the socket
+/// adapter's data-line mapping.
+fn ext_parallel_nor(msg: &mut [u8; 128], p: &ChipParams) -> bool {
+    let family = p.packed_package as u8;
+    let geom = (p.variant & 0x0f) as u8;
+    if family != 0x0b || geom < 8 {
+        return false;
     }
+    let adapter = (p.variant & 0xf0) as u8;
+    let b48 = NOR_ADAPTER
+        .iter()
+        .find_map(|&(a, v)| (a == adapter).then_some(v))
+        .unwrap_or(NOR_ADAPTER_DEFAULT);
+    write_ext(
+        msg,
+        &[
+            Field { off: 0x40, val: 0x0100_0000 },
+            Field { off: 0x44, val: 0x0000_0040 },
+            Field { off: 0x48, val: b48 },
+            Field { off: 0x50, val: 0x1000_0000 },
+            Field { off: 0x54, val: 0x0000_8000 },
+            Field { off: 0x60, val: EXT_READ_SETUP },
+        ],
+    );
+    true
+}
 
-    // Parallel NOR x16 family extension.
-    if p.protocol_id == ALG_T48 || p.protocol_id == ALG_T40B {
-        let family = p.packed_package as u8;
-        let adapter = (p.variant & 0xf0) as u8;
-        let geom = (p.variant & 0x0f) as u8;
-        if family == 0x0b && geom >= 8 {
-            le32(&mut msg, 0x40, 0x0100_0000);
-            le32(&mut msg, 0x44, 0x0000_0040);
-            le32(&mut msg, 0x50, 0x1000_0000);
-            le32(&mut msg, 0x54, 0x0000_8000);
-            let b48: u32 = match adapter {
-                0x10 => 0x0200,
-                0x20 => 0x1200,
-                0x30 => 0x0a00,
-                0x40 => 0x1000,
-                0x50 => 0x0800,
-                0x60 => 0x1800,
-                0x70 => 0x0400,
-                _ => 0x0800,
-            };
-            le32(&mut msg, 0x48, b48);
-            le32(&mut msg, 0x60, 0x0f05_172f);
-            msg[0x65] = 0x03;
-            msglen = 128;
-        }
+/// NAND BEGIN adjustments. The `0x02` FPGA-setup prelude that precedes this
+/// packet is built separately by [`pack_nand_prelude`]. NAND runs a lower clock
+/// tier at `0x60` than the NOR families and forces the fixed bytes below that
+/// the FPGA needs to select and clock a NAND part.
+fn ext_nand(msg: &mut [u8; 128], p: &ChipParams) -> bool {
+    if p.pages_per_block != 0 {
+        // One block (data + spare) per 0x0d transfer, not the whole-chip size.
+        le32(msg, 16, u32::from(p.write_buffer_size) * u32::from(p.pages_per_block));
     }
-
-    // NAND BEGIN adjustments. The 0x02 prelude that precedes
-    // this packet is packed separately in `pack_nand_prelude`.
-    if p.protocol_id == ALG_NAND {
-        if p.pages_per_block != 0 {
-            // Per-block transfer size (data + spare), NOT the chip size, at
-            // msg[0x10] so the FPGA streams exactly one block per 0x0d.
-            le32(
-                &mut msg,
-                16,
-                u32::from(p.write_buffer_size) * u32::from(p.pages_per_block),
-            );
-        }
-        le32(&mut msg, 56, p.raw_flags | 0x800); // NAND flag bit
-        le32(&mut msg, 0x60, 0x0b09_272f); // lower clock tier
-        msg[0x65] = 0x03;
-        // Forced bytes matching the vendor read5 capture.
-        msg[0x0e] = 0x20;
-        msg[0x14] = 0x00;
-        msg[0x18] = 0x03;
-        msg[0x1c] = 0x03;
-        if (p.variant & 0x70) == 0 {
-            le32(&mut msg, 0x28, 0xe200_0000); // parallel NAND pin/family dword
-        }
-        msg[0x30] = 0x40;
-        msglen = 128;
+    le32(msg, 56, p.raw_flags | 0x800); // NAND flag bit
+    le32(msg, 0x60, 0x0b09_272f); // lower clock tier than NOR
+    msg[0x65] = 0x03;
+    msg[0x0e] = 0x20;
+    msg[0x14] = 0x00; // clear the voltage-high byte the shared header set
+    msg[0x18] = 0x03;
+    msg[0x1c] = 0x03;
+    if p.variant & 0x70 == 0 {
+        le32(msg, 0x28, 0xe200_0000); // parallel-NAND pin/family dword
     }
+    msg[0x30] = 0x40;
+    true
+}
 
-    // eMMC: 128-byte BEGIN, no 0x40..0x7f packer; msg[0x0c] carries the
-    // bus-mode/CSD byte.
-    if p.protocol_id == ALG_EMMC {
-        msg[0x0c] = (p.variant >> 8) as u8;
-        msglen = 128;
+/// eMMC: a 128-byte BEGIN with no `0x40..0x7f` extension; `msg[0x0c]` carries
+/// the bus-mode / CSD byte from the variant high byte.
+fn ext_emmc(msg: &mut [u8; 128], p: &ChipParams) -> bool {
+    msg[0x0c] = (p.variant >> 8) as u8;
+    true
+}
+
+// --- FPGA bitstream framing (opcode 0x26) --------------------------------
+// The upload is three stages: a BEGIN stating the total size, a run of fixed
+// 512-byte BLOCK packets, and an END. Each packet leads with an 8-byte header;
+// BLOCK carries its real payload length at bytes 2..3 and up to 504 payload
+// bytes after the header.
+
+/// Length of the final BLOCK. A whole-multiple bitstream ends on a full 504-byte
+/// block, not a zero-length one.
+fn last_block_len(total: usize) -> usize {
+    match total % BS_PAYLOAD {
+        0 => BS_PAYLOAD,
+        n => n,
     }
+}
 
-    (msg, msglen)
+fn bs_begin(total: usize) -> [u8; 8] {
+    let mut m = [0u8; 8];
+    m[0] = CMD_WRITE_BITSTREAM;
+    m[1] = BS_BEGIN;
+    le16(&mut m, 2, BS_PACKET_SIZE as u16);
+    le32(&mut m, 4, total.min(u32::MAX as usize) as u32);
+    m
+}
+
+/// One 512-byte BLOCK packet. `chunk` is ≤ 504 bytes; the remainder of the
+/// fixed-size packet stays zero — the FPGA reads only `chunk.len()` payload
+/// bytes, so the padding is inert.
+fn bs_block(chunk: &[u8]) -> [u8; BS_PACKET_SIZE] {
+    let mut pkt = [0u8; BS_PACKET_SIZE];
+    pkt[0] = CMD_WRITE_BITSTREAM;
+    pkt[1] = BS_BLOCK;
+    le16(&mut pkt, 2, chunk.len() as u16);
+    pkt[8..8 + chunk.len()].copy_from_slice(chunk);
+    pkt
+}
+
+/// The END packet. When `last_block` is `Some`, its length goes at bytes 2..3
+/// so the FPGA commits the final config word (see [`T76::write_bitstream_named`]).
+fn bs_end(last_block: Option<usize>) -> [u8; 8] {
+    let mut m = [0u8; 8];
+    m[0] = CMD_WRITE_BITSTREAM;
+    m[1] = BS_END;
+    if let Some(n) = last_block {
+        le16(&mut m, 2, n as u16);
+    }
+    m
 }
 
 /// Pack the 64-byte opcode-0x02 NAND FPGA-setup prelude sent immediately
@@ -235,9 +321,9 @@ pub(crate) fn pack_nand_prelude(p: &ChipParams) -> Result<[u8; 64]> {
         0
     };
     let serial = (p.variant & 0x70) != 0;
-    // Conservative low-speed bus clock entries (serial table[0], parallel
-    // table[3]); the C honors a T76_NAND_CLOCK env override, which the Rust
-    // driver deliberately drops (config belongs to the caller, not getenv).
+    // Conservative low-speed bus clock entries (serial vs parallel table).
+    // XGPro exposes a clock override via env; this driver deliberately drops
+    // it (config belongs to the caller, not getenv).
     let clock: u32 = if serial { 0x0808_230e } else { 0x2715_4f3b };
     let adapter: u32 = if serial { 0x0001_0001 } else { 0x0001_0000 };
     let spare = wbuf - real_page;
@@ -331,8 +417,8 @@ pub struct T76 {
     tx: Box<dyn Transport>,
     info: ProgrammerInfo,
     /// Name of the FPGA algorithm currently loaded, so `begin` skips the
-    /// re-upload within a session (the C `bitstream_uploaded`,
-    /// keyed by name so switching devices re-uploads).
+    /// re-upload within a session — keyed by name, so switching devices
+    /// re-uploads.
     uploaded_algo: Option<String>,
     emmc_geom: EmmcGeometry,
     emmc_capacity: u64,
@@ -359,15 +445,15 @@ impl T76 {
     /// `[8..24]`=mfg date, `[24..32]`=device code, `[32..56]`=serial,
     /// `[56..60]`=voltage (u32 LE mV). Also verifies this really is a T76.
     pub fn query_info(&mut self) -> Result<()> {
-        // The device replies with a single 64-byte packet (the C reads into an
-        // 80-byte buffer but tolerates the short read); every T76 field lives in
+        // The device replies with a single 64-byte packet (a longer read is
+        // tolerated); every T76 field lives in
         // the first 64 bytes (voltage @56, ext-power @62).
         let msg = self.cmd(&[0u8; 5], 64)?;
         if msg.len() < 63 {
             return Err(Error::Protocol);
         }
         if msg[6] != MP_T76 {
-            // Only the T76 is supported by this driver (minipro.c dispatch).
+            // Only the T76 is supported by this driver.
             return Err(Error::Unsupported("attached programmer is not a T76"));
         }
         let (minor, major) = (msg[4], msg[5]);
@@ -378,7 +464,7 @@ impl T76 {
             // low two bytes carry major/minor (0x0107 -> "00.1.07").
             firmware: FwVersion(((major as u32) << 8) | minor as u32),
             serial: ascii_field(&msg[32..56]),
-            mfg_date: ascii_field(&msg[8..24]),      // minipro.c: mfg date @8, 16 B
+            mfg_date: ascii_field(&msg[8..24]),      // mfg date @8, 16 B
             device_code: ascii_field(&msg[24..32]),  // device code @24, 8 B
             link: self.tx.link_speed(),
             voltage: voltage_mv as f32 / 1000.0,
@@ -402,6 +488,18 @@ impl T76 {
     /// commands: BEGIN/END_TRANS, bitstream blocks, timing writes).
     fn send(&mut self, pkt: &[u8]) -> Result<()> {
         self.tx.send(EP_MSG_OUT, pkt)
+    }
+
+    /// Send an 8-byte command and require an 8-byte status reply whose
+    /// `[1]` byte is 0 (OK). Any short reply or non-zero status is a protocol
+    /// error. Used by the acknowledged control commands (bitstream framing,
+    /// bootloader steps, FPGA reset).
+    fn cmd_ok(&mut self, pkt: &[u8]) -> Result<()> {
+        let resp = self.cmd(pkt, 8)?;
+        if resp.len() < 2 || resp[1] != 0 {
+            return Err(Error::Protocol);
+        }
+        Ok(())
     }
 
     /// One 0x24 FPGA-register-I/O command. The command word carries the
@@ -428,8 +526,8 @@ impl T76 {
         self.cmd(&pd, 32)
     }
 
-    /// One-time NAND socket-adapter power/init at session start
-    /// (t76_adapter_init): 0x24 power-down (drains 8),
+    /// One-time NAND socket-adapter power/init at session start:
+    /// 0x24 power-down (drains 8),
     /// read-adapter-ID (drains 0x30), power-up, then pin detection run twice.
     fn adapter_init(&mut self) -> Result<()> {
         let pwr_down: [u8; 8] = [CMD_FPGA_REG_IO, 0xf0, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00];
@@ -445,7 +543,7 @@ impl T76 {
         Ok(())
     }
 
-    /// eMMC socket-adapter power/init (t76_emmc_adapter_init),
+    /// eMMC socket-adapter power/init,
     /// byte-exact from the XGPro eMMC READ capture: 0x24 f0 power-down,
     /// 12-byte 0x24 e0 init (recv 0x28), 0x24 f1 power-up, ONE pin-detect.
     fn emmc_adapter_init(&mut self) -> Result<()> {
@@ -459,8 +557,9 @@ impl T76 {
         Ok(())
     }
 
-    /// Upload the FPGA bitstream for a device (chip algorithm), reading it from
-    /// `dev.algorithm` (t76_write_bitstream).
+    /// Upload the FPGA bitstream for a device (chip algorithm) from
+    /// `dev.algorithm`. NAND parts need the final-block finalize (see
+    /// [`Self::write_bitstream_named`]).
     fn write_bitstream(&mut self, dev: &Device) -> Result<()> {
         let algorithm = dev
             .algorithm
@@ -474,63 +573,36 @@ impl T76 {
         )
     }
 
-    /// Upload a named FPGA bitstream (chip or utility): BEGIN_BS, 512-byte chunks
-    /// (8-byte header + 504-byte payload), END_BS — including the NAND
-    /// last-block-size fix. `nand` selects that fix.
-    fn write_bitstream_named(&mut self, name: &str, bits: &[u8], nand: bool) -> Result<()> {
+    /// Upload a named FPGA bitstream (chip or utility) in three framed stages —
+    /// [`bs_begin`], a run of [`bs_block`] packets, [`bs_end`] — skipping the
+    /// upload if the same algorithm is already resident this session.
+    ///
+    /// `finalize_last_block` states the true length of the final (partial)
+    /// block in the END packet. Some FPGA configurations (NAND) commit their
+    /// last config word only when END carries that length; a zero there leaves
+    /// the word uncommitted, observable as READID / reads returning all-0xFF.
+    fn write_bitstream_named(
+        &mut self,
+        name: &str,
+        bits: &[u8],
+        finalize_last_block: bool,
+    ) -> Result<()> {
         if self.uploaded_algo.as_deref() == Some(name) {
-            return Ok(()); // same session, same algorithm
-        }
-        let len = bits.len();
-
-        // BEGIN_BS: packet size + total bitstream size.
-        let mut msg = [0u8; 8];
-        msg[0] = CMD_WRITE_BITSTREAM;
-        msg[1] = BS_BEGIN;
-        le16(&mut msg, 2, BS_PACKET_SIZE as u16);
-        le32(&mut msg, 4, len.min(u32::MAX as usize) as u32);
-        let resp = self.cmd(&msg, 8)?;
-        if resp.len() < 2 || resp[1] != 0 {
-            return Err(Error::Protocol);
+            return Ok(()); // already resident this session
         }
 
-        // 512-byte packets: an 8-byte header (block sub-op + the real payload
-        // length in bytes 2..3) followed by up to 504 payload bytes. A short
-        // final packet is zero-padded to 512 — bytes past the declared length
-        // are not part of the bitstream and are ignored by the FPGA.
+        self.cmd_ok(&bs_begin(bits.len()))?;
         for chunk in bits.chunks(BS_PAYLOAD) {
-            let mut pkt = [0u8; BS_PACKET_SIZE];
-            pkt[0] = CMD_WRITE_BITSTREAM;
-            pkt[1] = BS_BLOCK;
-            le16(&mut pkt, 2, chunk.len() as u16);
-            pkt[8..8 + chunk.len()].copy_from_slice(chunk);
-            self.send(&pkt)?; // block sub-op has no reply
+            self.send(&bs_block(chunk))?; // BLOCK has no reply
         }
-
-        // END_BS. The vendor puts the final (partial) block size in msg[2..3]
-        // so the FPGA finalizes the last config word; minipro sent 0, which
-        // left a NAND FPGA mis-finalized (READID/read 0xFF). Carried for NAND
-        //.
-        let mut end = [0u8; 8];
-        end[0] = CMD_WRITE_BITSTREAM;
-        end[1] = BS_END;
-        if nand {
-            let mut last_block = len % BS_PAYLOAD;
-            if last_block == 0 {
-                last_block = BS_PAYLOAD;
-            }
-            le16(&mut end, 2, last_block as u16);
-        }
-        let resp = self.cmd(&end, 8)?;
-        if resp.len() < 2 || resp[1] != 0 {
-            return Err(Error::Protocol);
-        }
+        let last = finalize_last_block.then(|| last_block_len(bits.len()));
+        self.cmd_ok(&bs_end(last))?;
 
         self.uploaded_algo = Some(name.to_string());
         Ok(())
     }
 
-    /// Reset the FPGA (t76_reset_fpga).
+    /// Reset the FPGA.
     pub fn reset_fpga(&mut self) -> Result<()> {
         let mut msg = [0u8; 8];
         msg[0] = CMD_WRITE_BITSTREAM;
@@ -543,8 +615,8 @@ impl T76 {
         Ok(())
     }
 
-    /// 0x39 REQUEST_STATUS; returns the OVC byte (t76_get_ovc_status,
-    ///). For NAND/eMMC the chip-parameter header is repacked
+    /// 0x39 REQUEST_STATUS; returns the OVC byte. For NAND/eMMC the
+    /// chip-parameter header is repacked
     /// into msg[1..8] — a zeroed 0x39 leaves the NAND deselected.
     fn ovc_status(&mut self, p: &ChipParams) -> Result<u8> {
         let mut msg = [0u8; 8];
@@ -565,7 +637,7 @@ impl T76 {
     }
 
     /// 0x27 Form A: simple eMMC command, no payload; send 8 / recv 8;
-    /// resp[1] != 0 is an error (t76_emmc_cmd27).
+    /// resp[1] != 0 is an error.
     fn emmc_cmd27(&mut self, op: u8, arg: u32) -> Result<Vec<u8>> {
         let mut msg = [0u8; 8];
         msg[0] = CMD_EMMC_SEND_CMD;
@@ -578,7 +650,7 @@ impl T76 {
         Ok(resp)
     }
 
-    /// eMMC session bring-up (t76_emmc_bring_up): ID queries,
+    /// eMMC session bring-up: ID queries,
     /// EXT_CSD capacity read, then CMD6 SWITCH to the USER partition.
     /// Returns the USER-partition capacity.
     fn emmc_bring_up(&mut self) -> Result<u64> {
@@ -712,8 +784,8 @@ impl T76 {
         Ok(())
     }
 
-    /// NAND full-chip erase with factory-bad-block skip (t76_nand_erase,
-    ///): per block, 0x3a probes the bad-block marker (skip so
+    /// NAND full-chip erase with factory-bad-block skip: per block,
+    /// 0x3a probes the bad-block marker (skip so
     /// the marker survives), then 0x0e erases by 16-bit block index.
     fn nand_erase(&mut self, p: &ChipParams, code_size: u64) -> Result<()> {
         let (wbuf, ppb) = p.nand_geometry()?;
@@ -721,7 +793,7 @@ impl T76 {
         let block_count = code_size / block_size;
         for blk in 0..block_count {
             if self.nand_erase_block(blk as u32)?.is_none() {
-                // Factory-marked bad block skipped; marker preserved.
+                // Factory-marked bad block skipped; marker left intact.
                 continue;
             }
         }
@@ -729,7 +801,7 @@ impl T76 {
     }
 
     /// Erase one NAND block. Returns `Ok(None)` when the block is factory-
-    /// marked bad and was skipped (the C counts and preserves these).
+    /// marked bad and was skipped, leaving its bad-block marker intact.
     fn nand_erase_block(&mut self, blk: u32) -> Result<Option<()>> {
         // 0x3a bad-block check: send 8 / recv 8; resp[1] != 0 => bad
         //.
@@ -746,12 +818,12 @@ impl T76 {
         le16(&mut msg, 2, blk.min(u32::from(u16::MAX)) as u16);
         let resp = command(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, &msg, 8)?.read()?;
         if resp.len() < 2 || resp[1] != 0 {
-            return Ok(None); // erase-failed block, counted as bad in the C
+            return Ok(None); // erase-failed block, treated as bad
         }
         Ok(Some(()))
     }
 
-    /// eMMC erase (t76_emmc_erase): per 0x20000-sector
+    /// eMMC erase: per 0x20000-sector
     /// group, a 16-byte 0x0e with start/end LBA, then poll 0x27 op 0x4d until
     /// the card returns to ready (resp[5] != 0x0e busy).
     fn emmc_erase(&mut self, code_size: u64) -> Result<()> {
@@ -773,8 +845,8 @@ impl T76 {
             le32(&mut cmd, 8, end.min(u64::from(u32::MAX)) as u32);
             command(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, &cmd, 8)?.read()?;
 
-            // Poll until complete (resp[5] back from 0x0e busy), same bound
-            // as the C.
+            // Poll until complete (resp[5] back from 0x0e busy), with a
+            // fixed iteration bound.
             let mut done = false;
             for _ in 0..2_000_000 {
                 let resp = self.cmd(&POLL, 8)?;
@@ -824,14 +896,13 @@ impl Programmer for T76 {
             .with(Caps::AUTODETECT)
     }
 
-    /// `t76_begin_transaction`: adapter init (NAND/eMMC),
+    /// Begin a transaction: adapter init (NAND/eMMC),
     /// bitstream upload, NAND 0x02 prelude, the 64/128-byte BEGIN_TRANS, the
     /// 0x39 overcurrent check, and the eMMC bring-up.
     fn begin(&mut self, dev: &Device) -> Result<Session> {
         let params = ChipParams::from_device(dev);
 
-        // Socket-adapter energize/init before the first bitstream
-        // (t76_send_bitstream).
+        // Socket-adapter energize/init before the first bitstream.
         match dev.protocol_id {
             ALG_NAND => self.adapter_init()?,
             ALG_EMMC => self.emmc_adapter_init()?,
@@ -867,14 +938,14 @@ impl Programmer for T76 {
         Ok(Session { device: dev.clone(), emmc_capacity })
     }
 
-    /// `t76_end_transaction`: a bare END_TRANS, no reply.
+    /// End the transaction: a bare END_TRANS, no reply.
     fn end(&mut self, _session: Session) -> Result<()> {
         let mut msg = [0u8; 8];
         msg[0] = CMD_END_TRANS;
         self.send(&msg)
     }
 
-    /// `t76_get_chip_id`: READID, then decode per the
+    /// Read the chip ID: READID, then decode per the
     /// reported id type — types 3/4 little-endian, others big-endian.
     fn identify(&mut self, s: &Session) -> Result<ChipId> {
         let mut msg = [0u8; 8];
@@ -935,7 +1006,7 @@ impl Programmer for T76 {
 }
 
 impl LogicTest for T76 {
-    /// `t76_logic_ic_test` / `do_ic_test` (-…): the T76 uploads a
+    /// Logic-IC test: the T76 uploads a
     /// *different* FPGA bitstream per pass — `TestLgcPull` for pull-up,
     /// `TestLgcDown` for pull-down — then runs the shared vector loop. The
     /// caller's `load` fetches them from `algoT76/` by name.
@@ -952,7 +1023,7 @@ impl LogicTest for T76 {
 }
 
 impl SpiAutodetect for T76 {
-    /// `t76_spi_autodetect`: upload the `SPI25F*` bitstream,
+    /// SPI autodetect: upload the `SPI25F*` bitstream,
     /// then `0x37` (`[8]`=package flag), send 10, recv 16, id = 3 bytes
     /// big-endian from `[2]`.
     fn spi_autodetect(&mut self, wide: bool, load: LoadBitstream<'_>) -> Result<u32> {
@@ -971,7 +1042,7 @@ impl SpiAutodetect for T76 {
 }
 
 impl FuseOps for T76 {
-    /// `t76_read_fuses` — the shared implementation.
+    /// Read a fuse block via the shared wire helper.
     fn read_fuses(
         &mut self,
         s: &Session,
@@ -982,7 +1053,7 @@ impl FuseOps for T76 {
         let code = s.device.code_size.min(u64::from(u32::MAX)) as u32;
         wire::fuse_read(self.tx.as_mut(), s.device.protocol_id, code, kind, length, items_count)
     }
-    /// `t76_write_fuses` — the shared implementation.
+    /// Write a fuse block via the shared wire helper.
     fn write_fuses(
         &mut self,
         s: &Session,
@@ -996,12 +1067,12 @@ impl FuseOps for T76 {
 }
 
 impl JedecOps for T76 {
-    /// `t76_read_jedec_row` — the shared implementation. (The
-    /// C uses `js->type` for `msg[1]`; `protocol_id` is the value it carries.)
+    /// Read a JEDEC row via the shared wire helper. The header's type byte
+    /// (`msg[1]`) carries `protocol_id`.
     fn read_row(&mut self, s: &Session, row: u8, flags: u8, size: u16) -> Result<Vec<u8>> {
         wire::jedec_read(self.tx.as_mut(), s.device.protocol_id, row, flags, size)
     }
-    /// `t76_write_jedec_row` — the shared implementation.
+    /// Write a JEDEC row via the shared wire helper.
     fn write_row(
         &mut self,
         s: &Session,
@@ -1024,16 +1095,15 @@ impl Protect for T76 {
 }
 
 impl Calibration for T76 {
-    /// `t76_read_calibration` — the shared implementation.
+    /// Read calibration data via the shared wire helper.
     fn read_calibration(&mut self, len: usize) -> Result<Vec<u8>> {
         wire::calibration_read(self.tx.as_mut(), len)
     }
 }
 
 impl Drop for T76 {
-    /// Match `minipro_close`: reset the FPGA at the end of
-    /// the session, but only if a bitstream was actually uploaded (the C gates
-    /// on `bitstream_uploaded`). Best-effort — the device may already be gone,
+    /// At session end, reset the FPGA — but only if a bitstream was actually
+    /// uploaded. Best-effort — the device may already be gone,
     /// and the transport (USB) closes when `self.tx` drops right after this.
     fn drop(&mut self) {
         if self.uploaded_algo.is_some() {
@@ -1043,7 +1113,7 @@ impl Drop for T76 {
 }
 
 impl MemoryOps for T76 {
-    /// `t76_read_block`.
+    /// Read a block of chip memory.
     fn read_block(&mut self, s: &Session, req: &BlockReq) -> Result<Vec<u8>> {
         let params = ChipParams::from_device(&s.device);
         match (s.device.protocol_id, req.kind) {
@@ -1054,8 +1124,8 @@ impl MemoryOps for T76 {
 
         match req.kind {
             // MP_CODE: 16-byte 0x0d init, data on EP82.
-            // TODO(hw): the C sends the init once per region with the total
-            // block count and then drains one block per call; BlockReq is
+            // TODO(hw): the init should be sent once per region with the total
+            // block count, then one block drained per call; BlockReq is
             // per-block, so each call opens a one-block stream (same layout,
             // block_count = 1).
             MemoryKind::Code => {
@@ -1105,7 +1175,7 @@ impl MemoryOps for T76 {
         }
     }
 
-    /// `t76_write_block`.
+    /// Write a block of chip memory.
     fn write_block(&mut self, s: &Session, req: &BlockReq, data: &[u8]) -> Result<()> {
         if data.len() != req.len as usize {
             return Err(Error::Format(format!(
@@ -1166,7 +1236,7 @@ impl MemoryOps for T76 {
         }
     }
 
-    /// `t76_erase` plus the NAND/eMMC loops.
+    /// Erase the chip, plus the NAND/eMMC loops.
     fn erase(&mut self, s: &Session, kind: EraseKind) -> Result<()> {
         let params = ChipParams::from_device(&s.device);
         match kind {
@@ -1174,8 +1244,8 @@ impl MemoryOps for T76 {
                 ALG_NAND => self.nand_erase(&params, s.device.code_size),
                 ALG_EMMC => self.emmc_erase(s.device.code_size),
                 _ => {
-                    // Generic: 16-byte 0x0e (num_fuses/pld zero — the C
-                    // caller passes the device's fuse count, which comes from
+                    // Generic: 16-byte 0x0e (num_fuses/pld zero — the caller
+                    // passes the device's fuse count, which comes from
                     // the fuse-config profile, not the chip DB entry), then
                     // drain the 64-byte reply.
                     let mut msg = [0u8; 16];
@@ -1226,8 +1296,8 @@ impl MemoryOps for T76 {
     }
 
     /// Blank check by reading back the region and testing for erased flash
-    /// (0xff). The T76 has no dedicated blank-check opcode; the C tool reads
-    /// and compares host-side too. Uses the same operation-specific block size
+    /// (0xff). The T76 has no dedicated blank-check opcode, so this reads the
+    /// region back and compares host-side. Uses the same operation-specific block size
     /// as the read loop so NAND/eMMC are stepped correctly.
     fn blank_check(&mut self, s: &Session, region: Region) -> Result<bool> {
         let step = u64::from(self.block_size(s, region.kind));
@@ -1246,8 +1316,8 @@ impl MemoryOps for T76 {
 }
 
 impl EmmcOps for T76 {
-    /// CMD6 SWITCH to a hardware partition (t76_emmc_switch_partition,
-    ///), updating the reported capacity from the EXT_CSD
+    /// CMD6 SWITCH to a hardware partition, updating the reported
+    /// capacity from the EXT_CSD
     /// geometry captured at bring-up.
     fn select_partition(&mut self, _s: &Session, part: Partition) -> Result<()> {
         self.emmc_cmd27(EMMC_OP_SWITCH, partition_config(part))?;
@@ -1263,15 +1333,14 @@ impl EmmcOps for T76 {
 }
 
 impl PinTest for T76 {
-    /// `t76_pin_test`: the 8-byte 0x3e form, draining the
-    /// 32-byte result. Unlike the C this does NOT end the transaction — the
-    /// session token stays live and `end` remains the caller's job.
+    /// Pin/contact test: the 8-byte 0x3e form, draining the 32-byte result.
+    /// This does NOT end the transaction — the session token stays live and
+    /// `end` remains the caller's job.
     ///
-    /// TODO(hw): the C never actually decodes the 32-byte reply (its `value`
-    /// stays 0 — a long-standing bug), and the vendor calls it a bad-pin
-    /// bitmask. Decoded here as an LSB-first bitmask over 40
-    /// socket positions, mapped to package pins with the C's mask rule;
-    /// validate set-bit polarity on hardware before trusting the pin list.
+    /// TODO(hw): the 32-byte reply's encoding is unconfirmed; the vendor
+    /// surfaces it as a bad-pin bitmask. Decoded here as an LSB-first bitmask
+    /// over 40 socket positions, mapped to package pins; validate set-bit
+    /// polarity on hardware before trusting the pin list.
     fn contact_check(&mut self, s: &Session) -> Result<Vec<u8>> {
         let mut msg = [0u8; 8];
         msg[0] = CMD_PIN_DETECTION;
@@ -1283,7 +1352,7 @@ impl PinTest for T76 {
             let (byte, bit) = (usize::from(pos / 8), pos % 8);
             if byte < resp.len() && resp[byte] & (1 << bit) != 0 {
                 let logical = pos + 1;
-                // The C pin mapping: low half direct, high
+                // Pin mapping: low half direct, high
                 // half counted back from pin 40.
                 let pin = if logical <= pin_count / 2 {
                     logical
@@ -1301,97 +1370,99 @@ impl PinTest for T76 {
     }
 }
 
-impl FirmwareUpdate for T76 {
-    /// `t76_firmware_update`, transport only: the caller
-    /// supplies the raw `updateT76.dat` bytes and has already confirmed the
-    /// update (no interactive prompt here).
-    ///
-    /// File layout: 16-byte header — version, CRC,
-    /// unknown, block count — then `blocks` x 284-byte (0x114) blocks.
-    fn update(&mut self, image: &[u8]) -> Result<()> {
-        // Size / version / block-count / CRC validation.
-        if image.len() < 16 || image.len() > 1_048_576 {
+const UPDATE_HEADER_LEN: usize = 16;
+const UPDATE_BLOCK_LEN: usize = 0x114; // 284 programmable data bytes per block
+const UPDATE_MAX_LEN: usize = 1_048_576;
+const UPDATE_ADDR_STEP: u32 = 0x100; // destination address advance per block
+
+/// A validated `updateT76.dat` firmware image. The file is a 16-byte header
+/// (version tag, CRC-32, reserved word, block count) followed by a whole number
+/// of fixed [`UPDATE_BLOCK_LEN`]-byte data blocks. [`Self::parse`] checks the
+/// size, version tag, block-count/size agreement, and the stored CRC before any
+/// block is streamed to the device.
+struct UpdateFile<'a> {
+    body: &'a [u8], // the image past the header — an exact multiple of the block size
+}
+
+impl<'a> UpdateFile<'a> {
+    fn parse(image: &'a [u8]) -> Result<Self> {
+        if image.len() < UPDATE_HEADER_LEN || image.len() > UPDATE_MAX_LEN {
             return Err(Error::Format("updateT76.dat: bad file size".into()));
         }
-        let version = u32::from_le_bytes([image[0], image[1], image[2], image[3]]);
+        let version = u32::from_le_bytes(image[0..4].try_into().unwrap());
         if version & UPDATE_FILE_VERS_MASK != UPDATE_FILE_VERSION {
             return Err(Error::Format("updateT76.dat: bad file version".into()));
         }
-        let blocks = u32::from_le_bytes([image[12], image[13], image[14], image[15]]) as usize;
-        if blocks * 0x114 + 16 != image.len() {
+        let stored_crc = u32::from_le_bytes(image[4..8].try_into().unwrap());
+        let count = u32::from_le_bytes(image[12..16].try_into().unwrap()) as usize;
+        let body = &image[UPDATE_HEADER_LEN..];
+        if count.checked_mul(UPDATE_BLOCK_LEN) != Some(body.len()) {
             return Err(Error::Format("updateT76.dat: block count/size mismatch".into()));
         }
-        // The C `crc_32` is CRC-32/IEEE with initial
-        // 0xffffffff and NO final complement, i.e. `!crc32fast::hash`.
-        let crc = !crc32fast::hash(&image[16..]);
-        let stored = u32::from_le_bytes([image[4], image[5], image[6], image[7]]);
-        if crc != stored {
+        // CRC-32/IEEE with initial 0xffffffff and no final complement, taken
+        // over the post-header body — the file's own integrity check.
+        let crc = !crc32fast::hash(body);
+        if crc != stored_crc {
             return Err(Error::Format("updateT76.dat: CRC mismatch".into()));
         }
+        Ok(Self { body })
+    }
 
-        // Switch to the bootloader.
-        // TODO(hw): the C only switches when the device reports
-        // MP_STATUS_NORMAL and then re-opens the re-enumerated device; the
-        // bootloader status query lives in minipro.c, outside this driver.
-        // Here the switch is unconditional and the transport's reset must
-        // re-arm the same device — validate the re-enumeration path on
-        // hardware.
-        let mut msg = [0u8; 8];
-        msg[0] = CMD_SWITCH;
-        msg[1] = 0xaa;
-        le32(&mut msg, 4, BTLDR_MAGIC);
-        let resp = self.cmd(&msg, 8)?;
-        if resp.len() < 2 || resp[1] != 0 {
-            return Err(Error::Protocol);
-        }
+    /// The programmable data blocks, in order.
+    fn blocks(&self) -> impl Iterator<Item = &'a [u8]> {
+        self.body.chunks_exact(UPDATE_BLOCK_LEN)
+    }
+}
+
+impl FirmwareUpdate for T76 {
+    /// Flash a `updateT76.dat` image. The caller supplies the raw file bytes and
+    /// has already confirmed the update (no interactive prompt here). The image
+    /// is parsed and integrity-checked ([`UpdateFile`]) before the device leaves
+    /// normal mode: enter the bootloader, erase, stream each block, finalize
+    /// with the image CRC, reboot.
+    fn update(&mut self, image: &[u8]) -> Result<()> {
+        let update = UpdateFile::parse(image)?;
+
+        // Enter the bootloader.
+        // TODO(hw): the switch here is unconditional. On real hardware the
+        // device should report normal status first and will re-enumerate after
+        // the reset, so the transport must re-arm the same device — validate
+        // that path on hardware.
+        let mut switch = [0u8; 8];
+        switch[0] = CMD_SWITCH;
+        switch[1] = 0xaa;
+        le32(&mut switch, 4, BTLDR_MAGIC);
+        self.cmd_ok(&switch)?;
         self.reboot()?;
 
         // Erase.
-        let mut msg = [0u8; 8];
-        msg[0] = CMD_BOOTLOADER_ERASE;
-        msg[1] = 0xaa;
-        let resp = self.cmd(&msg, 8)?;
-        if resp.len() < 2 || resp[1] != 0 {
-            return Err(Error::Protocol);
-        }
+        self.cmd_ok(&[CMD_BOOTLOADER_ERASE, 0xaa, 0, 0, 0, 0, 0, 0])?;
 
         // Begin write — no reply.
-        let mut msg = [0u8; 8];
-        msg[0] = CMD_BOOTLOADER_WRITE;
-        msg[1] = 0xaa;
-        self.send(&msg)?;
+        self.send(&[CMD_BOOTLOADER_WRITE, 0xaa, 0, 0, 0, 0, 0, 0])?;
 
-        // 284-byte blocks in 0x11c-byte packets, 8-byte status each
-        //.
+        // Stream each block in a 0x11c-byte packet (8-byte header + 0x114 data),
+        // acknowledged with an 8-byte status; the destination address advances
+        // one step per block.
         let mut address = 0u32;
-        for i in 0..blocks {
+        for block in update.blocks() {
             let mut pkt = [0u8; 0x11c];
             pkt[0] = CMD_BOOTLOADER_WRITE;
-            pkt[2] = 0x00; // data length LSB
-            pkt[3] = 0x01; // data length MSB (0x100)
+            le16(&mut pkt, 2, UPDATE_ADDR_STEP as u16); // data length = 0x100
             le32(&mut pkt, 4, address);
-            let start = 16 + i * 0x114;
-            pkt[8..8 + 0x114].copy_from_slice(&image[start..start + 0x114]);
-            let resp = self.cmd(&pkt, 8)?;
-            if resp.len() < 2 || resp[1] != 0 {
-                return Err(Error::Protocol);
-            }
-            address += 256;
+            pkt[8..8 + UPDATE_BLOCK_LEN].copy_from_slice(block);
+            self.cmd_ok(&pkt)?;
+            address += UPDATE_ADDR_STEP;
         }
 
-        // Last block: fixed address + CRC in a 0x108-byte packet
-        //.
-        let mut pkt = [0u8; 0x108];
-        pkt[0] = CMD_BOOTLOADER_WRITE;
-        pkt[1] = 0x03;
-        pkt[2] = 0x00;
-        pkt[3] = 0x01;
-        le32(&mut pkt, 4, LAST_BLOCK_ADDR);
-        le32(&mut pkt, 8, LAST_BLOCK_CRC);
-        let resp = self.cmd(&pkt, 8)?;
-        if resp.len() < 2 || resp[1] != 0 {
-            return Err(Error::Protocol);
-        }
+        // Finalize: a fixed address plus the image CRC in a 0x108-byte packet.
+        let mut last = [0u8; 0x108];
+        last[0] = CMD_BOOTLOADER_WRITE;
+        last[1] = 0x03;
+        le16(&mut last, 2, UPDATE_ADDR_STEP as u16);
+        le32(&mut last, 4, LAST_BLOCK_ADDR);
+        le32(&mut last, 8, LAST_BLOCK_CRC);
+        self.cmd_ok(&last)?;
 
         // Back to normal mode.
         self.reboot()

@@ -33,8 +33,7 @@ pub const CMD_ERASE: u8 = 0x0e;
 pub const CMD_REQUEST_STATUS: u8 = 0x39;
 
 // ---------------------------------------------------------------------------
-// Little-endian field writers — the Rust form of the C
-// `format_int(.., MP_LITTLE_ENDIAN)`.
+// Little-endian field writers for packing fixed offsets in the wire packets.
 // ---------------------------------------------------------------------------
 
 /// Store a u16 little-endian at `off`.
@@ -193,8 +192,32 @@ fn cmd(tx: &mut dyn Transport, pkt: &[u8], resp_len: usize) -> Result<Vec<u8>> {
     command(tx, EP_CMD_OUT, EP_CMD_IN, pkt, resp_len)?.read()
 }
 
-/// `*_read_fuses`: `[0]`=space opcode, `[1]`=protocol_id, `[2]`=items_count,
-/// `[4..8]`=code_memory_size; send 8, recv 64, return `length` bytes from `[8]`.
+/// The fuse-write opcode addresses config space biased `0x38` bytes below
+/// `code_memory_size`; the T48/T56/T76 firmware expects that offset.
+const FUSE_WRITE_ADDR_BIAS: u32 = 0x38;
+
+/// Fill the 8-byte header shared by fuse read and write: opcode, protocol id,
+/// item count, and a little-endian 32-bit address/size at `[4]`.
+fn put_fuse_header(msg: &mut [u8], op: u8, protocol_id: u8, items_count: u8, addr: u32) {
+    msg[0] = op;
+    msg[1] = protocol_id;
+    msg[2] = items_count;
+    le32(msg, 4, addr);
+}
+
+/// Fill the 8-byte header shared by JEDEC-row read and write: opcode, type
+/// byte, size (low 8 bits) at `[2]`, row index at `[4]`, flags at `[5]`.
+fn put_jedec_header(msg: &mut [u8], op: u8, type_byte: u8, row: u8, flags: u8, size: u16) {
+    msg[0] = op;
+    msg[1] = type_byte;
+    msg[2] = size as u8;
+    msg[4] = row;
+    msg[5] = flags;
+}
+
+/// Read a fuse block. Request is 8 bytes (opcode selecting the fuse space,
+/// protocol id, item count, code size); the reply is 64 bytes and the fuse
+/// data is the first `length` bytes from offset `[8]`.
 pub(crate) fn fuse_read(
     tx: &mut dyn Transport,
     protocol_id: u8,
@@ -209,10 +232,7 @@ pub(crate) fn fuse_read(
         FuseKind::Lock => CMD_READ_LOCK,
     };
     let mut msg = [0u8; 8];
-    msg[0] = op;
-    msg[1] = protocol_id;
-    msg[2] = items_count;
-    le32(&mut msg, 4, code_size);
+    put_fuse_header(&mut msg, op, protocol_id, items_count, code_size);
     let resp = cmd(tx, &msg, 64)?;
     if resp.len() < 8 + length {
         return Err(Error::Protocol);
@@ -220,9 +240,9 @@ pub(crate) fn fuse_read(
     Ok(resp[8..8 + length].to_vec())
 }
 
-/// `*_write_fuses`: as above but the address is `code_memory_size - 0x38` (a
-/// preserved firmware-bug workaround) and the payload follows at `[8]`; a single
-/// 64-byte send, no reply.
+/// Write a fuse block. Same header as the read but the address field is biased
+/// by [`FUSE_WRITE_ADDR_BIAS`] and the payload follows at `[8]`; one 64-byte
+/// send, no reply.
 pub(crate) fn fuse_write(
     tx: &mut dyn Transport,
     protocol_id: u8,
@@ -240,17 +260,14 @@ pub(crate) fn fuse_write(
         return Err(Error::Format("fuse payload exceeds 56 bytes".into()));
     }
     let mut msg = [0u8; 64];
-    msg[0] = op;
-    msg[1] = protocol_id;
-    msg[2] = items_count;
-    le32(&mut msg, 4, code_size.wrapping_sub(0x38)); // 0x38 firmware-bug offset
+    let addr = code_size.wrapping_sub(FUSE_WRITE_ADDR_BIAS);
+    put_fuse_header(&mut msg, op, protocol_id, items_count, addr);
     msg[8..8 + data.len()].copy_from_slice(data);
     tx.send(EP_CMD_OUT, &msg)
 }
 
-/// `*_read_jedec_row`: `[0]`=0x1d, `[1]`=type byte, `[2]`=size, `[4]`=row,
-/// `[5]`=flags; send 8, recv 32, return the first `(size + 7) / 8` bytes (from
-/// `[0]`, not `[8]`).
+/// Read a JEDEC row (0x1d). Request is 8 bytes; the reply is 32 bytes and the
+/// row data is the first `(size + 7) / 8` bytes from offset `[0]`, not `[8]`.
 pub(crate) fn jedec_read(
     tx: &mut dyn Transport,
     type_byte: u8,
@@ -259,11 +276,7 @@ pub(crate) fn jedec_read(
     size: u16,
 ) -> Result<Vec<u8>> {
     let mut msg = [0u8; 8];
-    msg[0] = CMD_READ_JEDEC;
-    msg[1] = type_byte;
-    msg[2] = size as u8;
-    msg[4] = row;
-    msg[5] = flags;
+    put_jedec_header(&mut msg, CMD_READ_JEDEC, type_byte, row, flags, size);
     let resp = cmd(tx, &msg, 32)?;
     let nbytes = usize::from(size.div_ceil(8));
     if resp.len() < nbytes {
@@ -272,7 +285,8 @@ pub(crate) fn jedec_read(
     Ok(resp[..nbytes].to_vec())
 }
 
-/// `*_write_jedec_row`: the row payload at `[8]`, a single 64-byte send.
+/// Write a JEDEC row: the same 8-byte header with the row payload at `[8]`;
+/// one 64-byte send, no reply.
 pub(crate) fn jedec_write(
     tx: &mut dyn Transport,
     type_byte: u8,
@@ -289,11 +303,7 @@ pub(crate) fn jedec_write(
         )));
     }
     let mut msg = [0u8; 64];
-    msg[0] = CMD_WRITE_JEDEC;
-    msg[1] = type_byte;
-    msg[2] = size as u8;
-    msg[4] = row;
-    msg[5] = flags;
+    put_jedec_header(&mut msg, CMD_WRITE_JEDEC, type_byte, row, flags, size);
     msg[8..8 + nbytes].copy_from_slice(&data[..nbytes]);
     tx.send(EP_CMD_OUT, &msg)
 }
@@ -326,13 +336,13 @@ pub(crate) fn calibration_read(tx: &mut dyn Transport, len: usize) -> Result<Vec
 // ---------------------------------------------------------------------------
 const CMD_LOGIC_IC_TEST_VECTOR: u8 = 0x28;
 
-// Vector state codes (database.h; pst string "01LHCZXGV"). Only L/H/Z are
+// Vector state codes (pst string "01LHCZXGV"). Only L/H/Z are
 // checked against the two passes.
 const LOGIC_L: u8 = 2;
 const LOGIC_H: u8 = 3;
 const LOGIC_Z: u8 = 5;
 
-/// One logic-test pass (`do_ic_test`): `pull` = 0 pull-up, 1 pull-down. Sends a
+/// One logic-test pass: `pull` = 0 pull-up, 1 pull-down. Sends a
 /// 32-byte `0x28` command per vector (VCC + pull in `[1]`, pin count at `[2]`,
 /// vector index at `[4]`, the row packed two pins per byte from `[8]`), reads
 /// the pin status back, and returns `pin_count * vector_count` unpacked states.

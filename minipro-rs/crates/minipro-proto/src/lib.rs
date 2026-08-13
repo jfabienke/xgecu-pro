@@ -20,9 +20,9 @@ pub mod wire;
 use minipro_core::error::Error;
 use minipro_core::transport::{command, Ep};
 
-/// Detect the attached programmer and return the matching driver. Mirrors the C
-/// `minipro_open` dispatch: read `minipro_get_system_info`, branch on the
-/// device-type byte at `msg[6]`, and bind the matching driver.
+/// Detect the attached programmer and return the matching driver: read the
+/// system-info report, branch on the device-type byte at `msg[6]`, and bind
+/// the matching driver.
 pub fn detect(
     mut transport: Box<dyn minipro_core::Transport>,
 ) -> minipro_core::Result<Box<dyn minipro_core::Programmer>> {
@@ -34,7 +34,7 @@ pub fn detect(
         return Err(Error::Protocol);
     }
     match report[6] {
-        // MP_T56 = 6, MP_T48 = 7, MP_T76 = 8 (minipro.h:27-29).
+        // Device-type byte: 6 = T56, 7 = T48, 8 = T76.
         0x06 => {
             let mut t56 = t56::T56::new(transport);
             t56.query_info()?;
@@ -51,7 +51,7 @@ pub fn detect(
             Ok(Box::new(t76))
         }
         _ => Err(Error::Unsupported(
-            "attached programmer is not a supported model (T48, T56, and T76 are ported)",
+            "attached programmer is not a supported model (T48, T56, and T76 are supported)",
         )),
     }
 }
