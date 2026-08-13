@@ -152,6 +152,17 @@ impl DllDb {
         Ok(DllDb { devices, index, algo_dir: None, algo_path: None })
     }
 
+    /// Build from an already-parsed catalog (e.g. a persisted postcard blob),
+    /// with no bitstream source. Used by [`crate::HttpDb`] to skip re-parsing
+    /// the DLL when a cached catalog exists.
+    pub fn from_devices(devices: Vec<Device>) -> Self {
+        let mut index = HashMap::with_capacity(devices.len());
+        for (i, d) in devices.iter().enumerate() {
+            index.entry(d.name.to_ascii_uppercase()).or_insert(i);
+        }
+        DllDb { devices, index, algo_dir: None, algo_path: None }
+    }
+
     pub fn devices(&self) -> &[Device] {
         &self.devices
     }

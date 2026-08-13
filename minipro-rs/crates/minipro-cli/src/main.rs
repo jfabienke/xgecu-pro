@@ -43,10 +43,11 @@ struct Cli {
     #[arg(long, global = true, env = "MINIPRO_DB_DIR", value_name = "DIR")]
     db: Option<PathBuf>,
 
-    /// Serve the native DB from a mirror over HTTP(S), opt-in and RAM-only:
-    /// InfoICT76.dll (once) + .alg files (on demand) are fetched into memory and
-    /// never written to disk. Mirror serves the extracted files:
-    /// <url>/InfoICT76.dll, <url>/algoT76/<algo>.alg.
+    /// Provision the native DB from a mirror over HTTP(S), opt-in. Persists the
+    /// derived catalog + .alg bitstreams into the --db cache dir (or a default
+    /// cache); the proprietary InfoICT76.dll is fetched to RAM and never stored.
+    /// The first run each day checks the mirror for a new version. Mirror serves
+    /// the extracted files: <url>/InfoICT76.dll, <url>/algoT76/<algo>.alg.
     #[arg(long, global = true, env = "MINIPRO_DB_URL", value_name = "URL")]
     db_url: Option<String>,
 
@@ -269,13 +270,25 @@ pub(crate) fn open_programmer() -> Result<Box<dyn Programmer>> {
 
 /// Load the chip database. Boxed so callers stay backend-agnostic once a
 /// compiled/embedded backend implements `ChipDb` too.
-/// Load the chip database. Precedence: `--db-url` (mirror, RAM-only) > a `--db`
-/// directory with `InfoICT76.dll` (native `DllDb`) > `infoic.xml` (`XmlDb`).
+/// Where the provisioned catalog + `.alg` cache live (the DLL is never stored).
+fn default_cache_dir() -> PathBuf {
+    if let Ok(x) = std::env::var("XDG_CACHE_HOME") {
+        return PathBuf::from(x).join("minipro");
+    }
+    if let Ok(h) = std::env::var("HOME") {
+        return PathBuf::from(h).join(".cache/minipro");
+    }
+    std::env::temp_dir().join("minipro-cache")
+}
+
+/// Load the chip database. Precedence: `--db-url` (mirror; persists the derived
+/// catalog + bitstreams, never the DLL) > a `--db` directory with
+/// `InfoICT76.dll` (native `DllDb`) > `infoic.xml` (`XmlDb`).
 fn load_db(dir: Option<&Path>) -> Result<Box<dyn ChipDb>> {
     if let Ok(url) = std::env::var("MINIPRO_DB_URL") {
         if !url.is_empty() {
-            // RAM-only: the DLL/.alg are fetched into memory and never cached.
-            return Ok(Box::new(HttpDb::open(&url, None)?));
+            let cache = dir.map(Path::to_path_buf).unwrap_or_else(default_cache_dir);
+            return Ok(Box::new(HttpDb::open(&url, &cache, None)?));
         }
     }
     let dir = dir.ok_or_else(|| {
