@@ -517,6 +517,62 @@ mod tests {
         println!("worst reset(): {worst:?}");
     }
 
+    /// A live bulk round-trip, before and after a reset.
+    ///
+    /// System info is the only command this crate can build without reaching
+    /// into protocol knowledge — the request is five zero bytes — and it is
+    /// read-only: no bitstream upload, no socket voltage. **No chip need be
+    /// inserted**, so anyone with a T76 and a cable can run this.
+    ///
+    /// ```text
+    /// cargo test -p minipro-usb -- --ignored --nocapture live_command
+    /// ```
+    #[test]
+    #[ignore = "requires a connected T76"]
+    fn live_command_roundtrip_survives_reset() {
+        /// Send the system-info request and drain its reply. Draining is not
+        /// optional: an undrained EP81 wedges the T76 until it is replugged.
+        fn probe(tx: &mut UsbTransport) -> Vec<u8> {
+            let pending = command(tx, Ep(EP_CMD_OUT), Ep(EP_CMD_IN), &[0u8; 5], 64)
+                .expect("send system-info request");
+            pending.read().expect("drain system-info reply")
+        }
+        // System-info report layout: [6] = device type, [24..32] = device code.
+        const DEVICE_TYPE: usize = 6;
+        const T76_DEVICE_TYPE: u8 = 0x08;
+
+        let mut tx = UsbTransport::open(T76_VID, T76_PID).expect("a T76 must be connected");
+
+        let before = probe(&mut tx);
+        assert_eq!(before.len(), 64, "system info must return a full report");
+        assert_eq!(
+            before[DEVICE_TYPE], T76_DEVICE_TYPE,
+            "device-type byte must identify a T76"
+        );
+
+        tx.reset().expect("reset");
+
+        // The half `reset_end_to_end_cost` cannot establish: the device is not
+        // merely re-enumerated and claimable, it still carries bulk traffic.
+        let after = probe(&mut tx);
+        assert_eq!(
+            after[DEVICE_TYPE], T76_DEVICE_TYPE,
+            "device stopped answering after a reset"
+        );
+        // Guards against re-arming onto a *different* unit: `open_device`
+        // matches on vid:pid alone, so with two programmers attached the reset
+        // could hand back the wrong one.
+        assert_eq!(
+            &after[24..32],
+            &before[24..32],
+            "re-armed a different programmer than the one that was reset"
+        );
+        println!(
+            "round-trip ok before and after reset; link = {:?}",
+            tx.link_speed()
+        );
+    }
+
     #[test]
     fn known_ids_cover_t76_and_shared_family() {
         assert!(KNOWN_IDS.contains(&(T76_VID, T76_PID)));
@@ -580,8 +636,9 @@ mod tests {
     #[test]
     fn open_fails_cleanly_with_no_device() {
         // No T76 is attached in CI; open must fail with a typed USB error
-        // (enumeration succeeding but finding no match), never panic.
-        // TODO(hw): a live-device open/claim/transfer test needs real hardware.
+        // (enumeration succeeding but finding no match), never panic. The
+        // live open/claim/transfer path is covered by the `#[ignore]`d
+        // hardware tests above, which need a real device.
         match UsbTransport::open(T76_VID, T76_PID) {
             Err(e) => assert_eq!(e.code(), "usb"),
             // If a real T76 *is* plugged in, open should have succeeded and
