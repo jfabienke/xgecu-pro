@@ -24,10 +24,45 @@
 //! that looks like success. Verified on this vendor archive; using it would be
 //! worse than reporting no extractor at all.
 
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use minipro_core::error::{Error, Result};
+
+/// Leading bytes that mark a file as a vendor archive we can unpack.
+///
+/// Content beats extension here: XGecu's own naming has varied (`.rar` today,
+/// a bare SFX `.exe` inside it), users rename downloads, and a browser may
+/// serve the installer as `.bin`. Sniffing also rejects the opposite mistake —
+/// an unrelated `.exe` — before spawning an extractor on it.
+const ARCHIVE_MAGIC: &[(&[u8], &str)] = &[
+    (&[0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00], "RAR5"),
+    (&[0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00], "RAR4"),
+    // WinRAR SFX: a PE executable with an archive appended.
+    (&[0x4d, 0x5a], "PE/SFX"),
+];
+
+/// Does `path` look like a vendor archive, judged by its first bytes?
+pub fn is_vendor_archive(path: &Path) -> bool {
+    archive_kind(path).is_some()
+}
+
+/// The archive flavour of `path`, or `None` if it is not one (or unreadable).
+pub fn archive_kind(path: &Path) -> Option<&'static str> {
+    if !path.is_file() {
+        return None;
+    }
+    let mut head = [0u8; 8];
+    let n = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut head))
+        .ok()?;
+    let head = head.get(..n)?;
+    ARCHIVE_MAGIC
+        .iter()
+        .find(|(magic, _)| head.starts_with(magic))
+        .map(|(_, name)| *name)
+}
 
 /// A RAR-capable extractor found on the system.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -254,6 +289,40 @@ fn find_installer_exe(root: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archive_detection_reads_content_not_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        // Correct content, misleading name — must still be recognised.
+        let odd = dir.path().join("download.bin");
+        std::fs::write(&odd, b"Rar!\x1a\x07\x01\x00rest").unwrap();
+        assert_eq!(archive_kind(&odd), Some("RAR5"));
+
+        // Right extension, wrong content — must be rejected before we spawn
+        // an extractor on it.
+        let fake = dir.path().join("installer.exe");
+        std::fs::write(&fake, b"#!/bin/sh\necho not an archive\n").unwrap();
+        assert_eq!(archive_kind(&fake), None);
+
+        // A real SFX is a PE image.
+        let sfx = dir.path().join("setup.exe");
+        std::fs::write(&sfx, b"MZ\x90\x00padding").unwrap();
+        assert_eq!(archive_kind(&sfx), Some("PE/SFX"));
+    }
+
+    #[test]
+    fn archive_detection_tolerates_tiny_and_missing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let tiny = dir.path().join("t");
+        std::fs::write(&tiny, b"R").unwrap();
+        assert_eq!(archive_kind(&tiny), None);
+        assert_eq!(archive_kind(&dir.path().join("nope")), None);
+        assert_eq!(
+            archive_kind(dir.path()),
+            None,
+            "a directory is not an archive"
+        );
+    }
 
     #[test]
     fn install_hint_is_actionable() {

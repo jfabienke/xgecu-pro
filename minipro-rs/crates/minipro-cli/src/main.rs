@@ -393,18 +393,6 @@ fn default_cache_dir() -> PathBuf {
     std::env::temp_dir().join("minipro-cache")
 }
 
-/// Is this the vendor archive rather than an extracted directory?
-fn looks_like_vendor_archive(path: &Path) -> bool {
-    path.is_file()
-        && matches!(
-            path.extension()
-                .and_then(|e| e.to_str())
-                .map(str::to_ascii_lowercase)
-                .as_deref(),
-            Some("rar") | Some("exe")
-        )
-}
-
 /// Open a vendor archive by unpacking it (once) into the cache with whatever
 /// RAR tool the system has, then reading the result.
 fn load_archive_db(path: &Path) -> Result<Box<dyn ChipDb>> {
@@ -427,7 +415,7 @@ fn load_mirror_db(_url: &str, _cache: &Path) -> Result<Box<dyn ChipDb>> {
 
 /// Open a `--db` path, which may be a vendor archive or an extracted directory.
 fn load_local_db(path: &Path) -> Result<Box<dyn ChipDb>> {
-    if looks_like_vendor_archive(path) {
+    if minipro_db::extract::is_vendor_archive(path) {
         return load_archive_db(path);
     }
     if !path.is_dir() {
