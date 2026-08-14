@@ -66,11 +66,16 @@ unimplemented = "deny"
 #      raw indexing makes them fail immediately.
 # indexing_slicing = "warn"
 
-# Size-optimised release. Deliberately keeps unwinding: `panic = "abort"` would
-# save ~150 KiB but skip `Txn::drop`, leaving the chip socket energised after a
-# panic — exactly the hazard the RAII guard exists to prevent.
-[profile.min]
-inherits = "release"
+# One build for everyone: `cargo build --release` is the size-optimised build.
+#
+# Runtime cost of `opt-level = "z"` is irrelevant here — every operation is
+# bounded by USB latency, not CPU. Fat LTO adds ~30 s to a release build;
+# `lto = "thin"` recovers most of that if it becomes annoying.
+#
+# `panic = "abort"` is deliberately NOT set. It would drop ~136 KiB of
+# unwinding tables, but skip `Txn::drop` — leaving the chip socket energised
+# after a panic, exactly the hazard the RAII guard exists to prevent.
+[profile.release]
 opt-level = "z"
 lto = "fat"
 codegen-units = 1
