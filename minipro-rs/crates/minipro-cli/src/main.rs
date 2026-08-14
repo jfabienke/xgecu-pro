@@ -575,8 +575,19 @@ fn warn_firmware(prog: &dyn Programmer, db: &dyn ChipDb, rep: &mut dyn Reporter)
     }
 }
 
-/// Contact check (advisory hardware permitting): errors with `BadContact`
-/// unless skipped; programmers without pin-test support silently pass.
+/// Contact check — **advisory**: reports poor seating and continues.
+///
+/// It used to abort the operation, contradicting the design (see
+/// `docs/rust-redesign.md`, "Pin-detect is advisory, not fatal"). Two things
+/// argue for warning only. The decode is a hint, not a fact: the reply's
+/// payload semantics are still unconfirmed, and until they were fixed the check
+/// misread the opcode echo and failed on pins 2-6 every run. And even a true
+/// bad-contact report is not decisive — an oxidized vintage part can read
+/// perfectly, which is exactly how the AHA-1542CP dumps in `dumps/` were taken.
+///
+/// A read is non-destructive and verified by re-reading, so the honest split is
+/// to surface the warning and let the result speak. Programmers without
+/// pin-test support pass silently.
 fn pincheck(
     prog: &mut dyn Programmer,
     s: &minipro_core::Session,
@@ -589,12 +600,13 @@ fn pincheck(
     let Some(pins) = prog.pins() else {
         return Ok(());
     };
+    // A failure to *run* the check is a protocol error and still propagates;
+    // only its verdict is advisory.
     let open = pins.contact_check(s)?;
-    if open.is_empty() {
-        return Ok(());
+    if !open.is_empty() {
+        rep.event(&Event::Warn(Warning::BadContact(open)));
     }
-    rep.event(&Event::Warn(Warning::BadContact(open.clone())));
-    Err(Error::BadContact(open))
+    Ok(())
 }
 
 /// Compare the electronic id against the DB entry; `--force` downgrades a

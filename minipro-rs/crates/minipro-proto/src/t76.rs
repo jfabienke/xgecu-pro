@@ -1484,42 +1484,71 @@ impl EmmcOps for T76 {
 }
 
 impl PinTest for T76 {
-    /// Pin/contact test: the 8-byte 0x3e form, draining the 32-byte result.
+    /// Pin/contact test: the 8-byte `0x3e` form, draining the 32-byte result.
     /// This does NOT end the transaction — the session token stays live and
     /// `end` remains the caller's job.
     ///
-    /// TODO(hw): the 32-byte reply's encoding is unconfirmed; the vendor
-    /// surfaces it as a bad-pin bitmask. Decoded here as an LSB-first bitmask
-    /// over 40 socket positions, mapped to package pins; validate set-bit
-    /// polarity on hardware before trusting the pin list.
+    /// # Reply layout
+    ///
+    /// As with every reply on this device, byte 0 echoes the opcode and byte 1
+    /// is status; the payload starts at byte 2. An empty DIP28 socket answers
+    /// `3e 00 33 00 10 00 …` — reading the mask from byte 0 instead consumed
+    /// the `0x3e` echo as pin data (`0b0011_1110`) and reported pins 2-6 open
+    /// on *every* run, which made the contact check fail spuriously and forced
+    /// `--skip-pincheck`.
+    ///
+    /// # Unverified
+    ///
+    /// The payload is decoded as an LSB-first bitmask over the 40 ZIF
+    /// positions, which is how the vendor surfaces it. That reading is **not
+    /// confirmed**: an empty socket ought to mean "every pin open" under either
+    /// polarity, yet the payload is `33 00 10 …` rather than a uniform pattern.
+    /// Until known-good and known-bad seatings are correlated on hardware the
+    /// pin list is a hint, which is why the caller warns instead of aborting.
     fn contact_check(&mut self, s: &Session) -> Result<Vec<u8>> {
         let mut msg = [0u8; 8];
         msg[0] = CMD_PIN_DETECTION;
         let resp = self.cmd(&msg, 32)?;
+        // Payload only: skip the opcode echo and the status byte.
+        let mask = wire::slice_at(&resp, 2, resp.len().saturating_sub(2))?;
 
         let pin_count = u16::from(s.device.package.pin_count);
+        let half = pin_count / 2;
         let mut open = Vec::new();
-        for pos in 0..40u16 {
+        for pos in 0..ZIF_POSITIONS {
             let (byte, bit) = (usize::from(pos / 8), pos % 8);
-            if byte < resp.len() && resp[byte] & (1 << bit) != 0 {
-                let logical = pos + 1;
-                // Pin mapping: low half direct, high
-                // half counted back from pin 40.
-                let pin = if logical <= pin_count / 2 {
-                    logical
-                } else if pin_count + logical >= 40 {
-                    pin_count + logical - 40
-                } else {
-                    continue;
-                };
-                if pin >= 1 && pin <= pin_count {
-                    open.push(pin as u8);
-                }
+            if mask.get(byte).is_none_or(|b| b & (1 << bit) == 0) {
+                continue;
+            }
+            // A part sits at one end of the 40-way ZIF: its lower half lands on
+            // positions 1..=half and its upper half on the last `half`
+            // positions; the middle belongs to no pin of this package.
+            //
+            // These ranges must not overlap. The previous form tested
+            // `pin_count + logical >= 40`, true from position 12 on a DIP28, so
+            // positions 15+ re-claimed pins 3..14 that the first arm had
+            // already emitted — yielding lists like `[2,3,4,5,6,5,6,…]`, which
+            // no real pin list can contain.
+            let logical = pos + 1;
+            let pin = if logical <= half {
+                logical
+            } else if logical > ZIF_POSITIONS - half {
+                logical + pin_count - ZIF_POSITIONS
+            } else {
+                continue;
+            };
+            if (1..=pin_count).contains(&pin) {
+                open.push(pin as u8);
             }
         }
+        open.sort_unstable();
+        open.dedup();
         Ok(open)
     }
 }
+
+/// Positions in the T76's 40-way ZIF socket.
+const ZIF_POSITIONS: u16 = 40;
 
 const UPDATE_HEADER_LEN: usize = 16;
 const UPDATE_BLOCK_LEN: usize = 0x114; // 284 programmable data bytes per block
@@ -2637,15 +2666,77 @@ mod tests {
     #[test]
     fn contact_check_reports_open_pins() {
         let dev = device(0x07, vec![]);
-        // Bit 0 (socket position 1) set -> package pin 1 for a DIP8.
+        // Byte 0 echoes the opcode and byte 1 is status; the mask starts at 2.
+        // Mask bit 0 (socket position 1) -> package pin 1 for a DIP8.
         let mut resp = vec![0u8; 32];
-        resp[0] = 0x01;
+        resp[0] = 0x3e;
+        resp[2] = 0x01;
         let (mut t76, tx) = t76_with(vec![resp]);
         let open = t76.contact_check(&session(&dev)).unwrap();
         assert_eq!(open, vec![1]);
         // The 8-byte 0x3e form with a 32-byte drain.
         assert_eq!(tx.sent(), vec![(0x01, vec![0x3e, 0, 0, 0, 0, 0, 0, 0])]);
         assert_eq!(tx.recv_log(), vec![(0x81, 32)]);
+    }
+
+    /// The reply header is not pin data. Bytes captured from a real T76 with an
+    /// **empty** socket: `3e 00 33 00 10 …`. Decoding from byte 0 read the
+    /// `0x3e` opcode echo as a mask (`0b0011_1110`) and reported pins 2-6 open
+    /// on every run, so the check failed spuriously and reads needed
+    /// `--skip-pincheck`.
+    #[test]
+    fn contact_check_ignores_the_reply_header() {
+        let mut dev = device(0x07, vec![]);
+        dev.package.pin_count = 28;
+        dev.package.name = "DIP28".into();
+
+        let mut resp = vec![0u8; 32];
+        resp[0] = 0x3e; // opcode echo — must not be read as pins
+        resp[1] = 0x00; // status
+        resp[2] = 0x33;
+        resp[4] = 0x10;
+
+        let (mut t76, _tx) = t76_with(vec![resp]);
+        let open = t76.contact_check(&session(&dev)).unwrap();
+
+        // Mask bits 0,1,4,5 -> socket positions 1,2,5,6 -> pins 1,2,5,6.
+        // Position 21 (mask byte 2, bit 4) belongs to no pin of a 28-pin part.
+        assert_eq!(open, vec![1, 2, 5, 6]);
+        assert!(
+            !open.contains(&3) && !open.contains(&4),
+            "pins 3-4 came only from misreading the 0x3e echo"
+        );
+    }
+
+    /// A pin cannot be open twice. The previous mapping tested
+    /// `pin_count + logical >= 40`, true from position 12 on a DIP28, so the
+    /// upper-half arm re-claimed pins the lower-half arm had already emitted —
+    /// producing lists like `[2,3,4,5,6,5,6,9,10,25]`.
+    #[test]
+    fn contact_check_never_reports_a_pin_twice() {
+        for pin_count in [8u8, 14, 20, 28, 32, 40] {
+            let mut dev = device(0x07, vec![]);
+            dev.package.pin_count = pin_count;
+            // Every socket position open — the empty-socket case.
+            let mut resp = vec![0xffu8; 32];
+            resp[0] = 0x3e;
+            resp[1] = 0x00;
+            let (mut t76, _tx) = t76_with(vec![resp]);
+            let open = t76.contact_check(&session(&dev)).unwrap();
+
+            let mut uniq = open.clone();
+            uniq.dedup();
+            assert_eq!(open, uniq, "duplicate pins for a {pin_count}-pin package");
+            assert!(
+                open.iter().all(|&p| p >= 1 && p <= pin_count),
+                "pin outside the package for {pin_count} pins: {open:?}"
+            );
+            assert_eq!(
+                open.len(),
+                usize::from(pin_count),
+                "an all-open socket must list every pin of a {pin_count}-pin part once"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
