@@ -30,7 +30,7 @@ serde_json = "1.0"
 sha2 = "0.11"
 thiserror = "2.0"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 
 # Inherited by every crate via `[lints] workspace = true`.
 [workspace.lints.rust]
@@ -57,7 +57,7 @@ unimplemented = "deny"
 # builders total would cost readability for no safety.
 #
 # The no-panic guarantee on *external* bytes is instead carried by:
-#   1. `wire::{at, slice_at, read_le16, read_le32}` — total readers used where
+#   1. `wire::{at, slice_at, read_le32}` — total readers used where
 #      the bound involves device- or file-supplied lengths;
 #   2. explicit length guards at each reply-parsing entry point;
 #   3. property tests that drive every driver op with arbitrary replies and
@@ -65,3 +65,13 @@ unimplemented = "deny"
 #      which fail on any panic. Mutation-checked: reverting a total accessor to
 #      raw indexing makes them fail immediately.
 # indexing_slicing = "warn"
+
+# Size-optimised release. Deliberately keeps unwinding: `panic = "abort"` would
+# save ~150 KiB but skip `Txn::drop`, leaving the chip socket energised after a
+# panic — exactly the hazard the RAII guard exists to prevent.
+[profile.min]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = true

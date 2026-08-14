@@ -228,7 +228,8 @@ fn clear_alg_cache(dir: &Path) -> Result<()> {
 /// A version tag for the DLL, via `HEAD`: prefer ETag, then Last-Modified, then
 /// Content-Length. Errors if the request fails (treated as "offline").
 fn head_version(url: &str) -> Result<String> {
-    let resp = ureq::head(url)
+    let resp = agent()
+        .head(url)
         .call()
         .map_err(|e| Error::Format(format!("HTTP HEAD {url}: {e}")))?;
     let tag = resp
@@ -240,8 +241,22 @@ fn head_version(url: &str) -> Result<String> {
     Ok(tag)
 }
 
+/// One shared agent using the **platform** TLS stack (Security.framework on
+/// macOS, SChannel on Windows, OpenSSL on Linux) instead of a bundled one.
+fn agent() -> &'static ureq::Agent {
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(|| {
+        let mut b = ureq::AgentBuilder::new();
+        if let Ok(tls) = native_tls::TlsConnector::new() {
+            b = b.tls_connector(std::sync::Arc::new(tls));
+        }
+        b.build()
+    })
+}
+
 fn http_get(url: &str) -> Result<Vec<u8>> {
-    let resp = ureq::get(url)
+    let resp = agent()
+        .get(url)
         .call()
         .map_err(|e| Error::Format(format!("HTTP GET {url}: {e}")))?;
     let mut buf = Vec::new();

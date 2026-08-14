@@ -23,7 +23,7 @@ use minipro_core::ops;
 use minipro_core::programmer::Txn;
 use minipro_core::report::{Event, Outcome, Reporter, Warning};
 use minipro_core::Programmer;
-use minipro_db::{ChipDb, DllDb, HttpDb, XmlDb};
+use minipro_db::{ChipDb, DllDb, XmlDb};
 use reporters::{HumanReporter, JsonReporter};
 
 #[derive(Parser, Debug)]
@@ -275,17 +275,22 @@ fn render_error(mode: Mode, op: &'static str, err: &Error) {
 /// clean). `RUST_LOG` has full control; `MINIPRO_TRACE=1` is kept as the
 /// established alias for a full wire trace; default is warnings only.
 fn init_tracing() {
-    use tracing_subscriber::EnvFilter;
-    let filter = if let Ok(spec) = std::env::var("RUST_LOG") {
-        EnvFilter::new(spec)
-    } else if std::env::var_os("MINIPRO_TRACE").is_some() {
-        EnvFilter::new("minipro_proto=trace,minipro_usb=trace")
-    } else {
-        EnvFilter::new("warn")
-    };
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
+    use tracing_subscriber::filter::{LevelFilter, Targets};
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+    let spec = std::env::var("RUST_LOG").ok().unwrap_or_else(|| {
+        if std::env::var_os("MINIPRO_TRACE").is_some() {
+            "minipro_proto=trace,minipro_usb=trace".into()
+        } else {
+            "warn".into()
+        }
+    });
+    let filter: Targets = spec
+        .parse()
+        .unwrap_or_else(|_| Targets::new().with_default(LevelFilter::WARN));
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(filter)
         .init();
 }
 
@@ -422,11 +427,23 @@ fn load_archive_db(path: &Path) -> Result<Box<dyn ChipDb>> {
 /// catalog + bitstreams, never the DLL) > a `--db` **vendor archive** (`.rar` /
 /// SFX `.exe`, read in place with the `rar` feature) > a `--db` directory with
 /// `InfoICT76.dll` (native `DllDb`) > `infoic.xml` (`XmlDb`).
+#[cfg(feature = "net")]
+fn load_mirror_db(url: &str, cache: &Path) -> Result<Box<dyn ChipDb>> {
+    Ok(Box::new(minipro_db::HttpDb::open(url, cache, None)?))
+}
+
+#[cfg(not(feature = "net"))]
+fn load_mirror_db(_url: &str, _cache: &Path) -> Result<Box<dyn ChipDb>> {
+    Err(Error::Unsupported(
+        "this build has no mirror support; rebuild with `--features net`, or pass --db <dir>",
+    ))
+}
+
 fn load_db(dir: Option<&Path>) -> Result<Box<dyn ChipDb>> {
     if let Ok(url) = std::env::var("MINIPRO_DB_URL") {
         if !url.is_empty() {
             let cache = dir.map(Path::to_path_buf).unwrap_or_else(default_cache_dir);
-            return Ok(Box::new(HttpDb::open(&url, &cache, None)?));
+            return load_mirror_db(&url, &cache);
         }
     }
     let dir = dir.ok_or_else(|| {
