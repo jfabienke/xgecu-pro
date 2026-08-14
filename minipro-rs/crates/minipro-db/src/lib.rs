@@ -3,10 +3,22 @@
 
 //! The chip database and FPGA-bitstream store.
 //!
-//! Two backends behind one trait: an editable XML source (`infoic.xml` +
-//! `algorithm.xml`, parsed with quick-xml) and a compiled blob baked into the
-//! binary (postcard + `include_bytes!`) for fast startup. All content derives
-//! from XGecu's XGPro — see `docs/minipro-codebase-report.md` §5.
+//! Four backends behind the [`ChipDb`] trait, all reading XGecu's own data —
+//! see `docs/minipro-codebase-report.md` §5:
+//!
+//! | Backend | Source |
+//! |---|---|
+//! | [`XmlDb`] | `infoic.xml` + `logicic.xml` + `algorithm.xml` |
+//! | [`DllDb`] | `InfoICT76.dll` + `algoT76/`, the vendor files directly |
+//! | [`HttpDb`] | a mirror of those files (`net` feature) |
+//! | [`vendor`] | the vendor installer archive, fetched and unpacked (`net`) |
+//!
+//! Every cache holds **the vendor files themselves**, never a derived blob: a
+//! `postcard` catalog was measured at only ~6 ms faster to load than parsing
+//! the DLL (97 ms vs 103 ms for 33,612 devices), which did not justify a
+//! versioned binary format that had to be migrated forever. Keeping the source
+//! of truth means a struct change is a local re-parse, and any cache directory
+//! is directly usable as `--db`.
 //!
 //! The infoic.xml schema (the fields XGPro's database defines):
 //!
