@@ -2,7 +2,7 @@
 
 **A Rust redesign and reimplementation of [minipro](https://gitlab.com/nmatt0/minipro/-/tree/t76-improvements) for XGecu USB chip programmers — plus the reverse-engineering notes behind it.**
 
-The centerpiece is [`minipro-rs/`](minipro-rs/): a pure-Rust CLI that drives the
+The centerpiece is [`minipro-rs/`](minipro-rs/): a Rust CLI that drives the
 **T76**, **T56**, and **T48** through one trait-based driver layer. No libusb, no
 zlib, no XML step — it reads XGecu's `InfoICT76.dll` chip database directly and
 ships human / JSON / TUI output modes.
@@ -26,7 +26,7 @@ This is a **young project handling real hardware**. Honest state of play:
 | **T56 / T48 (all operations)** | ⚠️ Complete drivers, **never run against real silicon** — no T48/T56 hardware here |
 | **TL866II+ / TL866A/CS** | ❌ Not implemented |
 
-Every driver is pinned by **byte-exact golden-packet tests** (180 tests, hardware-free),
+Every driver is pinned by **byte-exact golden-packet tests** (187 tests, hardware-free),
 so the wire output is known-correct against captures — but a passing test suite is
 not the same as a validated write. **Reading is non-destructive; writing and erasing
 are not.** Treat the untested paths accordingly, and see
@@ -36,11 +36,16 @@ are not.** Treat the untested paths accordingly, and see
 
 ```sh
 cd minipro-rs
-cargo build --release          # pure Rust; no libusb/pkg-config
+cargo build --release          # no libusb, no pkg-config
 ./target/release/minipro info
 ```
 
-Requires Rust 1.85+. On macOS with a T76, **use a USB-2.0 cable** — the
+Requires Rust 1.85+. The USB, compression and parsing stacks are pure Rust; the
+only C in the default build is your platform's own TLS library, used to fetch a
+chip database over HTTPS — Security.framework on macOS, SChannel on Windows,
+OpenSSL on Linux. Building with `--no-default-features` drops mirror support
+and with it that dependency, which is also how you get a fully static musl
+binary. On macOS with a T76, **use a USB-2.0 cable** — the
 SuperSpeed bulk path fails on Apple Silicon and the tool will tell you so
 ([details](docs/ch569-usb3-notes.md)).
 
@@ -83,8 +88,8 @@ Two ways to skip the manual extraction:
   Nothing is unpacked to disk: the DLL and each bitstream are decompressed into
   memory on demand (~0.3 s for the catalog, ~10 ms per bitstream). This is
   **off by default** because it links [unrar](https://www.rarlab.com/), which is
-  not MIT and not pure Rust — enabling it puts unrar's terms on your binary,
-  while the default build stays MIT-clean and C-free.
+  not MIT — enabling it puts unrar's terms on your binary, while the default
+  build stays MIT-clean.
 
 ## What it does
 

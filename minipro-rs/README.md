@@ -8,7 +8,7 @@ output design.
 **Status:** working. The T76 driver is fully implemented and **hardware-verified**
 (byte-identical reads from a real T76). The native chip database reads XGecu's
 `InfoICT76.dll` directly (no XML needed) and can provision itself from a mirror.
-164 tests pass, clippy clean.
+187 tests pass, clippy clean.
 
 > ⚠️ **The T48 and T56 drivers are untested on hardware.** They are
 > reference-only implementations — verified against byte-exact golden
@@ -17,7 +17,7 @@ output design.
 > [Contributing](#contributing).
 
 ```
-cargo test           # 164 hardware-free protocol/golden/db tests
+cargo test           # 187 hardware-free protocol/golden/db tests
 cargo clippy --all-targets
 ./target/debug/minipro --json info
 ```
