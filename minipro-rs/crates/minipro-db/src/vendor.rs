@@ -13,9 +13,9 @@
 //! it points at the vendor's distribution channel rather than hosting a
 //! derived copy of `InfoICT76.dll`.
 //!
-//! The archive is cached verbatim and read in place by [`RarDb`], so the
-//! proprietary DLL is never extracted to disk — it is decompressed into memory
-//! per invocation and dropped. Bitstreams are likewise pulled on demand.
+//! The archive is cached verbatim, then unpacked once with whatever
+//! RAR-capable tool the system already has (see [`crate::extract`]) — no RAR
+//! decoder is linked in, so the shipped binary stays pure-Rust and MIT.
 //!
 //! Every failure here is diagnosable: [`FetchError`] distinguishes "you are
 //! offline" from "the mirror moved" from "the download is corrupt", and each
@@ -24,9 +24,9 @@
 
 use std::path::{Path, PathBuf};
 
-use minipro_core::error::Error;
+use minipro_core::error::{Error, Result};
 
-use crate::RarDb;
+use crate::{extract, DllDb};
 
 /// Vendor installer used by default. Pinned deliberately: a floating "latest"
 /// would silently change the chip database — and its firmware pairing —
@@ -154,24 +154,31 @@ pub fn ensure_archive(cache_dir: &Path, url: &str) -> std::result::Result<PathBu
     Ok(final_path)
 }
 
-/// Open the default database: cached-or-fetched vendor archive, read in place.
+/// Where the unpacked database lives inside the cache.
+const UNPACK_DIR: &str = "xgpro";
+
+/// Open the default database: an already-unpacked copy if present, otherwise
+/// fetch the vendor archive and unpack it once.
 ///
-/// A cached archive that turns out to be unreadable is deleted and the fetch
-/// retried once — otherwise a single bad download would wedge the tool
-/// permanently with no obvious remedy.
-pub fn open(cache_dir: &Path, url: &str) -> std::result::Result<RarDb, FetchError> {
-    let path = ensure_archive(cache_dir, url)?;
-    match RarDb::open(&path) {
-        Ok(db) => Ok(db),
-        Err(first) => {
-            let _ = std::fs::remove_file(&path);
-            let path = ensure_archive(cache_dir, url)?;
-            RarDb::open(&path).map_err(|_| FetchError::Corrupt {
-                url: url.to_string(),
-                detail: format!("archive did not parse: {first}"),
-            })
-        }
+/// Returns `Err(FetchError)` only for download/cache problems; a missing
+/// extractor or a failed unpack surfaces as `Ok(Err(_))`-style [`Error`] via
+/// the second result, so the caller can tell "could not get the file" from
+/// "got the file but cannot open it".
+pub fn open(cache_dir: &Path, url: &str) -> std::result::Result<Result<DllDb>, FetchError> {
+    let unpacked = cache_dir.join(UNPACK_DIR);
+    // Already unpacked by an earlier run: no network, no extractor needed.
+    if let Ok(db) = DllDb::load(&unpacked) {
+        return Ok(Ok(db));
     }
+    let archive = ensure_archive(cache_dir, url)?;
+    let opened =
+        extract::unpack_vendor_archive(&archive, &unpacked).and_then(|dir| DllDb::load(&dir));
+    if opened.is_ok() {
+        // The archive has served its purpose; the unpacked database is what
+        // later runs use, and keeping both doubles the cache for nothing.
+        let _ = std::fs::remove_file(&archive);
+    }
+    Ok(opened)
 }
 
 /// Map a transport error onto the taxonomy. ureq reports HTTP status and

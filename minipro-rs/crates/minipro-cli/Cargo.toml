@@ -19,14 +19,9 @@ name = "minipro"
 path = "src/main.rs"
 
 [features]
-default = ["net", "rar"]
+default = ["net"]
 # Mirror provisioning over HTTPS (pulls the rustls TLS stack, ~750 KiB).
 net = ["minipro-db/net"]
-# Read the chip DB straight from a vendor .rar / SFX .exe. **On by default**,
-# because the zero-setup database source fetches the vendor archive and reads it
-# in place. Links unrar (C++, not MIT) — drop it with --no-default-features if
-# that matters for your distribution.
-rar = ["minipro-db/rar"]
 
 [dependencies]
 anstream = "1.0.0"

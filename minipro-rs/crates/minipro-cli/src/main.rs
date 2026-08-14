@@ -405,22 +405,12 @@ fn looks_like_vendor_archive(path: &Path) -> bool {
         )
 }
 
-/// Open the vendor archive directly (`rar` feature), or explain how to extract
-/// it when the feature is off.
-#[cfg(feature = "rar")]
+/// Open a vendor archive by unpacking it (once) into the cache with whatever
+/// RAR tool the system has, then reading the result.
 fn load_archive_db(path: &Path) -> Result<Box<dyn ChipDb>> {
-    Ok(Box::new(minipro_db::RarDb::open(path)?))
-}
-
-#[cfg(not(feature = "rar"))]
-fn load_archive_db(path: &Path) -> Result<Box<dyn ChipDb>> {
-    Err(Error::Format(format!(
-        "{} is a vendor archive; this build cannot read one directly. \
-         Extract it (`unar {0}`, then `unar` the .exe it produces — use unar, not \
-         7z, which silently writes 0-byte files) and pass the directory, or \
-         rebuild with `--features rar`.",
-        path.display()
-    )))
+    let dest = default_cache_dir().join("xgpro");
+    let dir = minipro_db::extract::unpack_vendor_archive(path, &dest)?;
+    Ok(Box::new(DllDb::load(&dir)?))
 }
 
 #[cfg(feature = "net")]
@@ -475,7 +465,7 @@ fn local_candidates() -> Vec<PathBuf> {
 
 /// The zero-setup default: XGecu's own installer archive from the community
 /// mirror, cached and read in place (nothing proprietary is unpacked to disk).
-#[cfg(all(feature = "net", feature = "rar"))]
+#[cfg(feature = "net")]
 fn load_default_source(rep: &mut dyn Reporter) -> std::result::Result<Box<dyn ChipDb>, String> {
     use minipro_db::vendor;
     let cache = default_cache_dir();
@@ -496,14 +486,21 @@ fn load_default_source(rep: &mut dyn Reporter) -> std::result::Result<Box<dyn Ch
         ));
     }
     match vendor::open(&cache, url) {
-        Ok(db) => Ok(Box::new(db)),
+        Ok(Ok(db)) => Ok(Box::new(db)),
+        // Downloaded fine, but could not be unpacked (usually: no extractor).
+        // Strip the category prefix: this message is already self-describing.
+        Ok(Err(e)) => Err(e
+            .to_string()
+            .strip_prefix("format: ")
+            .unwrap_or(&e.to_string())
+            .to_string()),
         Err(e) => Err(e.explain()),
     }
 }
 
-#[cfg(not(all(feature = "net", feature = "rar")))]
+#[cfg(not(feature = "net"))]
 fn load_default_source(_rep: &mut dyn Reporter) -> std::result::Result<Box<dyn ChipDb>, String> {
-    Err("this build has no default database source (needs the `net` and `rar` features)".into())
+    Err("this build has no default database source (needs the `net` feature)".into())
 }
 
 /// Resolve the chip database.

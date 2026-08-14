@@ -40,12 +40,11 @@ cargo build --release          # no libusb, no pkg-config
 ./target/release/minipro info
 ```
 
-Requires Rust 1.85+. The USB, protocol and parsing stacks are pure Rust. The
-default build links two C libraries for the zero-setup database: your
-platform's TLS (Security.framework on macOS, SChannel on Windows, OpenSSL on
-Linux) and [unrar](https://www.rarlab.com/) to read the vendor archive.
-`--no-default-features` drops both — and with them the automatic database — for
-a pure-Rust, MIT-only, statically-linkable binary. On macOS with a T76, **use a USB-2.0 cable** — the
+Requires Rust 1.85+. The binary is pure Rust and MIT; the only C it links is
+your platform's own TLS library, used to download the chip database over HTTPS
+(Security.framework on macOS, SChannel on Windows, OpenSSL on Linux).
+`--no-default-features` drops that too, for a fully static MIT-only build
+without the automatic database. On macOS with a T76, **use a USB-2.0 cable** — the
 SuperSpeed bulk path fails on Apple Silicon and the tool will tell you so
 ([details](docs/ch569-usb3-notes.md)).
 
@@ -53,41 +52,47 @@ SuperSpeed bulk path fails on Apple Silicon and the tool will tell you so
 
 Chip parameters and the T76's per-chip FPGA bitstreams come from XGecu's own
 files. **You don't have to fetch them yourself** — on first use the tool
-downloads XGecu's installer archive (~63 MB) from the
-[community mirror](https://github.com/Kreeblah/XGecu_Software), caches it, and
-reads the database *out of the archive in place*. The proprietary
-`InfoICT76.dll` is never unpacked to disk: it is decompressed into memory each
-run and dropped, and bitstreams are pulled on demand.
+downloads XGecu's installer archive from the
+[community mirror](https://github.com/Kreeblah/XGecu_Software), unpacks just
+the database out of it, and caches the result (~75 MB).
 
 ```sh
-minipro search 27C256          # just works; downloads once, then cached
+minipro search 27C256          # just works; sets itself up once
 ```
+
+Unpacking needs a RAR-capable tool **already on your system** — no RAR decoder
+is bundled, which is what keeps this binary MIT. Probed in order:
+
+| Tool | Availability |
+|---|---|
+| `bsdtar` | **ships with macOS**; `apt install libarchive-tools` on Debian/Ubuntu |
+| `unar` | `brew install unar`, `apt install unar` |
+| `unrar` | RARLAB's own extractor |
+
+If none is present the tool says so and tells you how to install one, or how to
+extract the archive yourself and point at the result.
+
+> ⚠️ **7-Zip cannot be used** — both `7z` and `7zz` *list* the archive fine and
+> then write **zero-byte files**, which looks like success. That's why it isn't
+> in the list.
 
 Resolution order, explicit first:
 
 | Source | When |
 |---|---|
 | `--db <dir\|archive>` / `MINIPRO_DB_DIR` | an explicit path wins, and a failure there is fatal rather than silently downloading |
-| `--db-url <mirror>` / `MINIPRO_DB_URL` | an explicit mirror serving extracted files |
-| **vendor archive** (default) | fetched once, cached; override with `MINIPRO_VENDOR_URL` |
+| `--db-url <mirror>` / `MINIPRO_DB_URL` | a mirror serving already-extracted files (downloads only the DLL plus bitstreams on demand) |
+| **vendor archive** (default) | fetched once, unpacked, cached; override with `MINIPRO_VENDOR_URL` |
 | local databases | anything already on disk, so a machine set up once keeps working offline |
 
-If the download fails, the error says which of those was tried, why it failed
-(offline vs. the mirror moved vs. a corrupt download), and what to do instead.
-`minipro info` needs no database at all and works offline.
+Failures say which step was tried, why it failed — offline vs. the mirror moved
+vs. a corrupt download vs. no extractor — and what to do instead. `minipro info`
+needs no database at all and works offline.
 
-To supply the files yourself instead, download `xgpro_T76_V*.rar` and either
-pass it directly (`--db xgpro_T76_V1321.rar`) or extract it **twice** — the RAR
-contains a WinRAR SFX executable:
-
-```sh
-unar xgpro_T76_V1321.rar        # → Xgpro_T76_V1321.exe
-unar Xgpro_T76_V1321.exe        # → InfoICT76.dll + algoT76/*.alg
-```
-
-> ⚠️ Use `unar`, not `7z`. p7zip *lists* the RAR5 payload fine but cannot decode
-> it — it exits with `Unsupported Method` and leaves **0-byte files** that look
-> like a successful extraction.
+The 63 MB download is the vendor's packaging, not a design choice: the outer
+`.rar` holds the installer as a *single* compressed entry, so there is no
+smaller subset to request. Use `--db-url` against an extracted mirror if you
+want byte-minimal fetches.
 
 ## What it does
 
@@ -220,12 +225,10 @@ Original work in this repository is **[MIT](LICENSE)**.
 
 The MIT grant covers this project's own code and documentation only.
 
-**A default-build binary is not MIT-only.** It links
-[unrar](https://www.rarlab.com/) (its licence permits decompression but forbids
-using the source to build a RAR compressor) and your platform's TLS library
-(OpenSSL on Linux). If you redistribute binaries, those terms travel with them.
-`cargo build --no-default-features` produces an MIT-only, pure-Rust binary at
-the cost of the automatic chip database.
+The default binary bundles no third-party code beyond Rust crates: the chip
+database is unpacked by a tool you already have, never by a bundled RAR
+decoder. On Linux the TLS library it links is the system OpenSSL;
+`--no-default-features` removes even that.
 
 Proprietary third-party material — XGecu's Xgpro application and
 `InfoICT76.dll`, vendor datasheets, device-support lists, firmware images, and

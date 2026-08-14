@@ -56,13 +56,11 @@ mod net;
 #[cfg(feature = "net")]
 pub use net::HttpDb;
 
-#[cfg(feature = "rar")]
-mod rar;
-#[cfg(feature = "rar")]
-pub use rar::RarDb;
+/// Unpacking the vendor archive with an already-installed RAR tool.
+pub mod extract;
 
-/// Zero-setup default source: the vendor archive, fetched and read in place.
-#[cfg(all(feature = "net", feature = "rar"))]
+/// Zero-setup default source: the vendor archive, fetched then unpacked once.
+#[cfg(feature = "net")]
 pub mod vendor;
 
 /// The `<database type=…>` section of `infoic.xml` this crate targets.
