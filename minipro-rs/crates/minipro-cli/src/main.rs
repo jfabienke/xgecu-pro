@@ -47,7 +47,7 @@ struct Cli {
     /// derived catalog + .alg bitstreams into the --db cache dir (or a default
     /// cache); the proprietary InfoICT76.dll is fetched to RAM and never stored.
     /// The first run each day checks the mirror for a new version. Mirror serves
-    /// the extracted files: <url>/InfoICT76.dll, <url>/algoT76/<algo>.alg.
+    /// the extracted files: `<url>/InfoICT76.dll`, `<url>/algoT76/<algo>.alg`.
     #[arg(long, global = true, env = "MINIPRO_DB_URL", value_name = "URL")]
     db_url: Option<String>,
 

@@ -7,7 +7,7 @@
 //! `0x0c`/`0x0d`, ERASE `0x0e`, REQUEST_STATUS `0x39`), and a **byte-identical
 //! 64-byte BEGIN_TRANS header**. The T76 additionally appends a chip-class
 //! extension block
-//! in bytes `0x40..0x7f`; that stays in the driver, on top of [`pack_begin64`].
+//! in bytes `0x40..0x7f`; that stays in the driver, on top of `pack_begin64`.
 //!
 //! Extracted from the T76 driver so the T56/T48/TL866II+ ports reuse it rather
 //! than re-deriving the packing. The single source of the "magic length per

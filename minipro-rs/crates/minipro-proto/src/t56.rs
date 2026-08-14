@@ -15,7 +15,7 @@
 //!    the T76's chunked BEGIN_BS/BS_BLOCK/END_BS. (Logic chips use the two-part
 //!    `0x2a` protocol; deferred with the logic-test capability.)
 //! 2. **No 128-byte BEGIN extension** — the T56 sends exactly the shared
-//!    64-byte header ([`crate::wire::pack_begin64`]) and, unlike the T76, does
+//!    64-byte header (`wire::pack_begin64`) and, unlike the T76, does
 //!    *not* write `msg[24]` (I2C address) or `msg[63]` (algorithm number):
 //!    the algorithm is selected purely by the uploaded bitstream.
 //! 3. **One endpoint pair** — commands *and* bulk block data both use EP01 OUT
@@ -453,8 +453,8 @@ impl MemoryOps for T56 {
         self.send(data)
     }
 
-    /// Erase the chip: a 15-byte 0x0e (num_fuses at [2], pld at
-    /// [4]), then drain the 64-byte reply. A plain chip/fuse erase passes zero
+    /// Erase the chip: a 15-byte 0x0e (num_fuses at `[2]`, pld at
+    /// `[4]`), then drain the 64-byte reply. A plain chip/fuse erase passes zero
     /// for both (the caller derives them from the fuse-config profile, not the
     /// chip DB entry).
     fn erase(&mut self, _s: &Session, kind: EraseKind) -> Result<()> {

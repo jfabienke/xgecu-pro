@@ -12,7 +12,7 @@
 //! socket adapter, and configures pin-drivers before any chip op.
 //!
 //! Every command that produces a response goes through
-//! [`minipro_core::transport::command`], whose `#[must_use]` [`Pending`] guard
+//! [`minipro_core::transport::command`], whose `#[must_use]` [`Pending`](minipro_core::transport::Pending) guard
 //! encodes a load-bearing hardware invariant: *an undrained EP81/EP82
 //! response wedges the device until a USB replug*.
 //!
@@ -1574,7 +1574,7 @@ impl<'a> UpdateFile<'a> {
 impl FirmwareUpdate for T76 {
     /// Flash a `updateT76.dat` image. The caller supplies the raw file bytes and
     /// has already confirmed the update (no interactive prompt here). The image
-    /// is parsed and integrity-checked ([`UpdateFile`]) before the device leaves
+    /// is parsed and integrity-checked (`UpdateFile`) before the device leaves
     /// normal mode: enter the bootloader, erase, stream each block, finalize
     /// with the image CRC, reboot.
     fn update(&mut self, image: &[u8]) -> Result<()> {

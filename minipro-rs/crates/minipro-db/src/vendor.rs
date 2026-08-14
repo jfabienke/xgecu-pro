@@ -17,7 +17,7 @@
 //! RAR-capable tool the system already has (see [`crate::extract`]) — no RAR
 //! decoder is linked in, so the shipped binary stays pure-Rust and MIT.
 //!
-//! Every failure here is diagnosable: [`FetchError`] distinguishes "you are
+//! Every failure here is diagnosable: [`crate::vendor::FetchError`] distinguishes "you are
 //! offline" from "the mirror moved" from "the download is corrupt", and each
 //! renders with the concrete next step, because the fallback (`--db <dir>`)
 //! only helps if the user knows to reach for it.
