@@ -254,7 +254,7 @@ fn agent() -> &'static ureq::Agent {
     })
 }
 
-fn http_get(url: &str) -> Result<Vec<u8>> {
+pub(crate) fn http_get(url: &str) -> Result<Vec<u8>> {
     let resp = agent()
         .get(url)
         .call()

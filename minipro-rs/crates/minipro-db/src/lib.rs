@@ -61,6 +61,10 @@ mod rar;
 #[cfg(feature = "rar")]
 pub use rar::RarDb;
 
+/// Zero-setup default source: the vendor archive, fetched and read in place.
+#[cfg(all(feature = "net", feature = "rar"))]
+pub mod vendor;
+
 /// The `<database type=…>` section of `infoic.xml` this crate targets.
 const INFOIC_DB_TYPE: &str = "INFOICT76";
 /// The bitstream container in `algorithm.xml` for the T76.

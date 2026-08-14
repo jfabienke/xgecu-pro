@@ -423,10 +423,6 @@ fn load_archive_db(path: &Path) -> Result<Box<dyn ChipDb>> {
     )))
 }
 
-/// Load the chip database. Precedence: `--db-url` (mirror; persists the derived
-/// catalog + bitstreams, never the DLL) > a `--db` **vendor archive** (`.rar` /
-/// SFX `.exe`, read in place with the `rar` feature) > a `--db` directory with
-/// `InfoICT76.dll` (native `DllDb`) > `infoic.xml` (`XmlDb`).
 #[cfg(feature = "net")]
 fn load_mirror_db(url: &str, cache: &Path) -> Result<Box<dyn ChipDb>> {
     Ok(Box::new(minipro_db::HttpDb::open(url, cache, None)?))
@@ -439,27 +435,131 @@ fn load_mirror_db(_url: &str, _cache: &Path) -> Result<Box<dyn ChipDb>> {
     ))
 }
 
-fn load_db(dir: Option<&Path>) -> Result<Box<dyn ChipDb>> {
+/// Open a `--db` path, which may be a vendor archive or an extracted directory.
+fn load_local_db(path: &Path) -> Result<Box<dyn ChipDb>> {
+    if looks_like_vendor_archive(path) {
+        return load_archive_db(path);
+    }
+    if !path.is_dir() {
+        return Err(Error::Format(format!(
+            "{} is neither a directory nor a vendor .rar/.exe",
+            path.display()
+        )));
+    }
+    if path.join("InfoICT76.dll").is_file() {
+        Ok(Box::new(DllDb::load(path)?))
+    } else if path.join("infoic.xml").is_file() {
+        Ok(Box::new(XmlDb::load(path)?))
+    } else {
+        Err(Error::Format(format!(
+            "{} holds no chip database (expected InfoICT76.dll or infoic.xml)",
+            path.display()
+        )))
+    }
+}
+
+/// Places a database may already be sitting, checked before giving up. Keeps a
+/// machine that has been set up once working even when the network is gone.
+fn local_candidates() -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    let cache = default_cache_dir();
+    v.push(cache.join("xgpro_vendor.rar")); // a previous default-source download
+    v.push(cache.clone()); // an HttpDb-provisioned catalog
+    if let Ok(home) = std::env::var("HOME") {
+        v.push(PathBuf::from(&home).join(".local/share/minipro"));
+        v.push(PathBuf::from(&home).join("Xgpro_T76"));
+    }
+    v.push(PathBuf::from("Xgpro_T76"));
+    v
+}
+
+/// The zero-setup default: XGecu's own installer archive from the community
+/// mirror, cached and read in place (nothing proprietary is unpacked to disk).
+#[cfg(all(feature = "net", feature = "rar"))]
+fn load_default_source(rep: &mut dyn Reporter) -> std::result::Result<Box<dyn ChipDb>, String> {
+    use minipro_db::vendor;
+    let cache = default_cache_dir();
+    // Overridable so a user behind a restricted network (or a newer vendor
+    // release) can retarget the default source without patching the binary.
+    let url_owned = std::env::var("MINIPRO_VENDOR_URL").ok();
+    let url = url_owned
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .unwrap_or(vendor::DEFAULT_VENDOR_ARCHIVE);
+    if vendor::cached_archive(&cache).is_none() {
+        rep.event(&Event::Note(
+            format!(
+                "fetching the chip database once from {url} (~63 MB, cached at {})",
+                cache.display()
+            )
+            .into(),
+        ));
+    }
+    match vendor::open(&cache, url) {
+        Ok(db) => Ok(Box::new(db)),
+        Err(e) => Err(e.explain()),
+    }
+}
+
+#[cfg(not(all(feature = "net", feature = "rar")))]
+fn load_default_source(_rep: &mut dyn Reporter) -> std::result::Result<Box<dyn ChipDb>, String> {
+    Err("this build has no default database source (needs the `net` and `rar` features)".into())
+}
+
+/// Resolve the chip database.
+///
+/// Explicit wins, then the zero-setup default, then anything already on disk:
+///
+/// 1. `--db <dir|archive>` / `MINIPRO_DB_DIR` — an explicit path is obeyed, and
+///    a failure there is fatal rather than silently papered over by a download.
+/// 2. `--db-url <mirror>` / `MINIPRO_DB_URL` — an explicit mirror, same rule.
+/// 3. The default vendor archive (fetched once, cached).
+/// 4. Databases already present locally, so a machine set up earlier keeps
+///    working offline.
+///
+/// If every step fails, the error lists what was tried and how to fix it —
+/// the fallbacks are useless if the user cannot see them.
+fn load_db(dir: Option<&Path>, rep: &mut dyn Reporter) -> Result<Box<dyn ChipDb>> {
+    // 1 + 2: explicit sources are authoritative; do not fall back past them.
+    if let Some(path) = dir {
+        return load_local_db(path);
+    }
     if let Ok(url) = std::env::var("MINIPRO_DB_URL") {
         if !url.is_empty() {
-            let cache = dir.map(Path::to_path_buf).unwrap_or_else(default_cache_dir);
-            return load_mirror_db(&url, &cache);
+            return load_mirror_db(&url, &default_cache_dir());
         }
     }
-    let dir = dir.ok_or_else(|| {
-        Error::Format(
-            "no chip database: pass --db <dir or vendor .rar>, set MINIPRO_DB_DIR, or --db-url <mirror>"
-                .into(),
-        )
-    })?;
-    if looks_like_vendor_archive(dir) {
-        return load_archive_db(dir);
+
+    // 3: the default source.
+    let default_err = match load_default_source(rep) {
+        Ok(db) => return Ok(db),
+        Err(msg) => msg,
+    };
+
+    // 4: anything already on disk.
+    for cand in local_candidates() {
+        if cand.exists() {
+            if let Ok(db) = load_local_db(&cand) {
+                rep.event(&Event::Note(
+                    format!(
+                        "using the local chip database at {} (the default source was unavailable)",
+                        cand.display()
+                    )
+                    .into(),
+                ));
+                return Ok(db);
+            }
+        }
     }
-    if dir.join("InfoICT76.dll").is_file() {
-        Ok(Box::new(DllDb::load(dir)?))
-    } else {
-        Ok(Box::new(XmlDb::load(dir)?))
-    }
+
+    Err(Error::Format(format!(
+        "no chip database available.\n\n{default_err}\n\nAlso looked for a local database in:\n{}",
+        local_candidates()
+            .iter()
+            .map(|p| format!("  {}", p.display()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )))
 }
 
 /// Look up a chip and attach its FPGA bitstream from `algorithm.xml` (the DB
@@ -544,7 +644,7 @@ fn run_read(
     skip_pincheck: bool,
     rep: &mut dyn Reporter,
 ) -> Result<()> {
-    let db = load_db(db_dir)?;
+    let db = load_db(db_dir, rep)?;
     let dev = lookup_device(&*db, chip)?;
     let mut prog = open_programmer()?;
     warn_firmware(&*prog, &*db, rep);
@@ -595,7 +695,7 @@ fn run_write(
     skip_pincheck: bool,
     rep: &mut dyn Reporter,
 ) -> Result<()> {
-    let db = load_db(db_dir)?;
+    let db = load_db(db_dir, rep)?;
     let dev = lookup_device(&*db, chip)?;
     let image = load_image(file, format, dev.code_size, dev.blank_value)?;
     let mut prog = open_programmer()?;
@@ -614,7 +714,7 @@ fn run_write(
 }
 
 fn run_erase(db_dir: Option<&Path>, chip: &str, rep: &mut dyn Reporter) -> Result<()> {
-    let db = load_db(db_dir)?;
+    let db = load_db(db_dir, rep)?;
     let dev = lookup_device(&*db, chip)?;
     let mut prog = open_programmer()?;
     warn_firmware(&*prog, &*db, rep);
@@ -637,7 +737,7 @@ fn run_info(db_dir: Option<&Path>, rep: &mut dyn Reporter) -> Result<()> {
     // Without a DB we have no bitstream target to compare against, so the
     // expected version mirrors the device's (i.e. "no known mismatch").
     let firmware_expected = match db_dir {
-        Some(dir) => load_db(Some(dir))?.firmware_target().to_string(),
+        Some(dir) => load_db(Some(dir), rep)?.firmware_target().to_string(),
         None => firmware.clone(),
     };
     rep.finish(&Outcome::Info {
@@ -678,7 +778,8 @@ fn manufacturer_name(id: u8) -> &'static str {
 /// Read the seated chip's electronic id (through the `--like` socket family) and
 /// report which database devices share that id.
 fn run_detect(db_dir: Option<&Path>, like: &str, mode: Mode) -> Result<()> {
-    let db = load_db(db_dir)?;
+    let mut note = reporter_for(mode);
+    let db = load_db(db_dir, note.as_mut())?;
     let dev = lookup_device(&*db, like)?;
     let mut prog = open_programmer()?;
 
@@ -758,7 +859,8 @@ fn bitstream_loader(db: &dyn ChipDb) -> impl FnMut(&str) -> Result<Vec<u8>> + '_
 /// or bit-bangs the vectors (T48), so there is no `begin`/algorithm here.
 fn run_logic(db_dir: Option<&Path>, chip: &str, mode: Mode) -> Result<()> {
     use minipro_core::device::chip_type;
-    let db = load_db(db_dir)?;
+    let mut note = reporter_for(mode);
+    let db = load_db(db_dir, note.as_mut())?;
     let dev = lookup_device(&*db, chip)?;
     if dev.chip_type != chip_type::LOGIC || dev.vectors.is_empty() {
         return Err(Error::Unsupported(
@@ -798,7 +900,8 @@ fn run_logic(db_dir: Option<&Path>, chip: &str, mode: Mode) -> Result<()> {
 /// Autodetect a seated SPI 25-series flash. No device is known up front — the
 /// driver uploads the SPI25F probe bitstream and returns the JEDEC id.
 fn run_autodetect(db_dir: Option<&Path>, wide: bool, mode: Mode) -> Result<()> {
-    let db = load_db(db_dir)?;
+    let mut note = reporter_for(mode);
+    let db = load_db(db_dir, note.as_mut())?;
     let mut prog = open_programmer()?;
     let id = {
         let mut load = bitstream_loader(&*db);
@@ -818,7 +921,8 @@ fn run_autodetect(db_dir: Option<&Path>, wide: bool, mode: Mode) -> Result<()> {
 }
 
 fn run_search(db_dir: Option<&Path>, query: &str, limit: usize, mode: Mode) -> Result<()> {
-    let db = load_db(db_dir)?;
+    let mut note = reporter_for(mode);
+    let db = load_db(db_dir, note.as_mut())?;
     let found = db.search(query, limit);
     match mode {
         Mode::Json => println!("{}", reporters::search_json_line(query, &found)),
@@ -1015,14 +1119,37 @@ mod tests {
         );
     }
 
+    /// An explicit `--db` that does not resolve must fail loudly rather than
+    /// silently falling through to a download — an explicit path is a
+    /// statement of intent.
+    ///
+    /// Deliberately does *not* exercise `load_db(None)`: that path reaches the
+    /// network by design, and a unit test must stay hermetic.
     #[test]
-    fn missing_db_is_a_clear_error() {
-        let err = match load_db(None) {
+    fn explicit_db_path_failure_is_clear() {
+        let mut rep = reporter_for(Mode::Human);
+        let missing = Path::new("/nonexistent/xgpro-db");
+        let err = match load_db(Some(missing), rep.as_mut()) {
             Err(e) => e,
-            Ok(_) => panic!("load_db(None) must fail"),
+            Ok(_) => panic!("a nonexistent --db path must fail"),
         };
         assert_eq!(err.code(), "format");
-        assert!(err.to_string().contains("MINIPRO_DB_DIR"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nonexistent"),
+            "error should name the path: {msg}"
+        );
+    }
+
+    /// The offline fallback is only useful if the user can see where it looked.
+    #[test]
+    fn local_candidates_are_nonempty_and_absolute_or_relative_paths() {
+        let c = local_candidates();
+        assert!(!c.is_empty());
+        assert!(
+            c.iter().any(|p| p.ends_with("xgpro_vendor.rar")),
+            "a previously downloaded archive must be a candidate"
+        );
     }
 
     /// End-to-end over the trait surface without hardware: a fake programmer

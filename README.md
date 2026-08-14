@@ -40,28 +40,45 @@ cargo build --release          # no libusb, no pkg-config
 ./target/release/minipro info
 ```
 
-Requires Rust 1.85+. The USB, compression and parsing stacks are pure Rust; the
-only C in the default build is your platform's own TLS library, used to fetch a
-chip database over HTTPS — Security.framework on macOS, SChannel on Windows,
-OpenSSL on Linux. Building with `--no-default-features` drops mirror support
-and with it that dependency, which is also how you get a fully static musl
-binary. On macOS with a T76, **use a USB-2.0 cable** — the
+Requires Rust 1.85+. The USB, protocol and parsing stacks are pure Rust. The
+default build links two C libraries for the zero-setup database: your
+platform's TLS (Security.framework on macOS, SChannel on Windows, OpenSSL on
+Linux) and [unrar](https://www.rarlab.com/) to read the vendor archive.
+`--no-default-features` drops both — and with them the automatic database — for
+a pure-Rust, MIT-only, statically-linkable binary. On macOS with a T76, **use a USB-2.0 cable** — the
 SuperSpeed bulk path fails on Apple Silicon and the tool will tell you so
 ([details](docs/ch569-usb3-notes.md)).
 
 ### The chip database
 
 Chip parameters and the T76's per-chip FPGA bitstreams come from XGecu's own
-files, which are **not redistributed here**. Point the tool at an extracted
-Xgpro install:
+files. **You don't have to fetch them yourself** — on first use the tool
+downloads XGecu's installer archive (~63 MB) from the
+[community mirror](https://github.com/Kreeblah/XGecu_Software), caches it, and
+reads the database *out of the archive in place*. The proprietary
+`InfoICT76.dll` is never unpacked to disk: it is decompressed into memory each
+run and dropped, and bitstreams are pulled on demand.
 
 ```sh
-minipro --db /path/to/Xgpro_T76 search 27C256
+minipro search 27C256          # just works; downloads once, then cached
 ```
 
-To get one: download `xgpro_T76_V*.rar` from the
-[community mirror](https://github.com/Kreeblah/XGecu_Software) and extract it
-**twice** — the RAR contains a WinRAR SFX executable:
+Resolution order, explicit first:
+
+| Source | When |
+|---|---|
+| `--db <dir\|archive>` / `MINIPRO_DB_DIR` | an explicit path wins, and a failure there is fatal rather than silently downloading |
+| `--db-url <mirror>` / `MINIPRO_DB_URL` | an explicit mirror serving extracted files |
+| **vendor archive** (default) | fetched once, cached; override with `MINIPRO_VENDOR_URL` |
+| local databases | anything already on disk, so a machine set up once keeps working offline |
+
+If the download fails, the error says which of those was tried, why it failed
+(offline vs. the mirror moved vs. a corrupt download), and what to do instead.
+`minipro info` needs no database at all and works offline.
+
+To supply the files yourself instead, download `xgpro_T76_V*.rar` and either
+pass it directly (`--db xgpro_T76_V1321.rar`) or extract it **twice** — the RAR
+contains a WinRAR SFX executable:
 
 ```sh
 unar xgpro_T76_V1321.rar        # → Xgpro_T76_V1321.exe
@@ -71,25 +88,6 @@ unar Xgpro_T76_V1321.exe        # → InfoICT76.dll + algoT76/*.alg
 > ⚠️ Use `unar`, not `7z`. p7zip *lists* the RAR5 payload fine but cannot decode
 > it — it exits with `Unsupported Method` and leaves **0-byte files** that look
 > like a successful extraction.
-
-Two ways to skip the manual extraction:
-
-- **`--db-url <URL>`** provisions from a mirror serving the extracted files. The
-  proprietary DLL is fetched to RAM and never persisted; only the derived
-  catalog and bitstreams are cached.
-- **`--features rar`** reads the vendor archive *in place* — point `--db`
-  straight at the `.rar` or the `.exe`:
-
-  ```sh
-  cargo build --release --features rar
-  minipro --db ~/Downloads/xgpro_T76_V1321.rar search 27C256
-  ```
-
-  Nothing is unpacked to disk: the DLL and each bitstream are decompressed into
-  memory on demand (~0.3 s for the catalog, ~10 ms per bitstream). This is
-  **off by default** because it links [unrar](https://www.rarlab.com/), which is
-  not MIT — enabling it puts unrar's terms on your binary, while the default
-  build stays MIT-clean.
 
 ## What it does
 
@@ -220,8 +218,17 @@ See [`NOTICE`](NOTICE) for full attribution.
 
 Original work in this repository is **[MIT](LICENSE)**.
 
-The MIT grant covers this project's own code and documentation only. Proprietary
-third-party material — XGecu's Xgpro application and `InfoICT76.dll`, vendor
-datasheets, device-support lists, firmware images, and `.alg` bitstreams — is
-**not redistributed here** and is not covered by it; the tooling consumes some of
-it at runtime from vendor or mirror sources.
+The MIT grant covers this project's own code and documentation only.
+
+**A default-build binary is not MIT-only.** It links
+[unrar](https://www.rarlab.com/) (its licence permits decompression but forbids
+using the source to build a RAR compressor) and your platform's TLS library
+(OpenSSL on Linux). If you redistribute binaries, those terms travel with them.
+`cargo build --no-default-features` produces an MIT-only, pure-Rust binary at
+the cost of the automatic chip database.
+
+Proprietary third-party material — XGecu's Xgpro application and
+`InfoICT76.dll`, vendor datasheets, device-support lists, firmware images, and
+`.alg` bitstreams — is **not redistributed here** and is not covered by the MIT
+grant. The tool downloads XGecu's installer from a community mirror at runtime
+and reads it locally; it never republishes it.
