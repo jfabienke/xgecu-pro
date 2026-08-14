@@ -125,7 +125,9 @@ struct AlgorithmSet { firmware: FwVersion, algos: HashMap<AlgoName, Lazy<Bitstre
   DB was considered and dropped: it would be a frozen, rebuild-to-update
   snapshot that can't carry the ~48 MB of bitstreams anyway, so it solves
   nothing the source-backed backends don't already cover. The mirror catalog is
-  persisted as a versioned `postcard` blob (`MPDB` magic + schema `u16`).
+  cached as the vendor files themselves (`InfoICT76.dll` + `algoT76/`), the
+  same layout every source produces — a derived blob was measured at only ~6 ms
+  faster to load and was dropped rather than versioned forever.
 
 ## Error handling, CLI, ergonomics
 

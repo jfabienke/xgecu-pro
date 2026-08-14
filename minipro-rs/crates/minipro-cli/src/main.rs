@@ -382,13 +382,21 @@ pub(crate) fn open_programmer() -> Result<Box<dyn Programmer>> {
 
 /// Load the chip database. Boxed so callers stay backend-agnostic once a
 /// compiled/embedded backend implements `ChipDb` too.
-/// Where the provisioned catalog + `.alg` cache live (the DLL is never stored).
+/// Where the downloaded chip database lives.
+///
+/// `XDG_CACHE_HOME` wins when set — it is the documented override and works
+/// the same on every platform, which matters for scripting and tests. Failing
+/// that, the platform's own convention via `directories`: `~/Library/Caches`
+/// on macOS, `%LOCALAPPDATA%` on Windows, `~/.cache` on Linux. Hand-rolling
+/// that lookup got macOS wrong.
 fn default_cache_dir() -> PathBuf {
     if let Ok(x) = std::env::var("XDG_CACHE_HOME") {
-        return PathBuf::from(x).join("minipro");
+        if !x.is_empty() {
+            return PathBuf::from(x).join("minipro");
+        }
     }
-    if let Ok(h) = std::env::var("HOME") {
-        return PathBuf::from(h).join(".cache/minipro");
+    if let Some(dirs) = directories::ProjectDirs::from("", "", "minipro") {
+        return dirs.cache_dir().to_path_buf();
     }
     std::env::temp_dir().join("minipro-cache")
 }
@@ -441,8 +449,9 @@ fn load_local_db(path: &Path) -> Result<Box<dyn ChipDb>> {
 fn local_candidates() -> Vec<PathBuf> {
     let mut v = Vec::new();
     let cache = default_cache_dir();
+    v.push(cache.join("xgpro")); // unpacked by the default source
+    v.push(cache.join("mirror")); // provisioned from a --db-url mirror
     v.push(cache.join("xgpro_vendor.rar")); // a previous default-source download
-    v.push(cache.clone()); // an HttpDb-provisioned catalog
     if let Ok(home) = std::env::var("HOME") {
         v.push(PathBuf::from(&home).join(".local/share/minipro"));
         v.push(PathBuf::from(&home).join("Xgpro_T76"));

@@ -1,21 +1,25 @@
 // SPDX-FileCopyrightText: 2026 John Fabienke
 // SPDX-License-Identifier: MIT
 
-//! `HttpDb` — the native database served from a mirror. The **derived catalog
-//! and the bitstreams are persisted; the proprietary DLL never is**, and only
-//! the *latest* version is kept.
+//! `HttpDb` — the native database served from a mirror of extracted files.
 //!
 //! Opt-in (`net` feature).
 //!
-//! - `InfoICT76.dll` is fetched into memory, parsed, and **dropped** — never
-//!   written to disk. What persists is our own `catalog.postcard` (the parsed
-//!   device catalog, the `infoic.xml` equivalent) plus, under `algoT76/`, the
-//!   `.alg` bitstreams fetched on demand (the `algorithm.xml` equivalent).
-//! - **Freshness:** the first run of each (UTC) day does one cheap `HEAD` on the
-//!   DLL and compares its ETag/Last-Modified to the last-seen value. If the
-//!   mirror published a new version, the catalog is rebuilt and the `.alg` cache
-//!   is cleared (bitstreams are version-specific), so only the latest is kept.
-//!   Same-version days, and offline runs, use the cache with no download.
+//! The cache holds **the vendor files themselves**, in the same layout the
+//! default (vendor-archive) source produces: `InfoICT76.dll` beside an
+//! `algoT76/` directory of `.alg` bitstreams. There is deliberately no derived
+//! format — an earlier version persisted a `catalog.postcard` blob, which was
+//! measured at only 6 ms faster to load than parsing the DLL (97 ms vs 103 ms
+//! for 33,612 devices) while costing a versioned binary format, a schema-bump
+//! discipline, and a forced re-download whenever that schema changed. Keeping
+//! the source of truth means a format change just re-parses locally, and
+//! `--db <cache>/mirror` is directly usable by this tool or any other.
+//!
+//! **Freshness:** the first run of each (UTC) day does one cheap `HEAD` on the
+//! DLL and compares its ETag/Last-Modified to the last-seen value. If the
+//! mirror published a new version the DLL is refetched and the `.alg` cache is
+//! cleared (bitstreams are version-specific), so only the latest is kept.
+//! Same-version days, and offline runs, use the cache with no download.
 //!
 //! The mirror serves the extracted files — `<base>/InfoICT76.dll`,
 //! `<base>/algoT76/<algo>.alg`.
@@ -29,18 +33,16 @@ use minipro_core::error::{Error, FwVersion, Result};
 
 use crate::{algorithm_name, decode_alg, ChipDb, DllDb, Search};
 
-const CATALOG_FILE: &str = "catalog.postcard";
 const META_FILE: &str = "source.meta"; // "<version-tag>\n<utc-day>\n"
 
-// The persisted catalog is `MAGIC || schema:u16le || postcard(Vec<Device>)`.
-// postcard is not self-describing, so a `Device` struct change silently
-// mis-decodes an old blob; the schema tag turns that into a clean rebuild.
-// **Bump `CATALOG_SCHEMA` whenever `Device`'s serialized shape changes.**
-const CATALOG_MAGIC: &[u8; 4] = b"MPDB";
-const CATALOG_SCHEMA: u16 = 1;
+/// Subdirectory holding this mirror's copy of the vendor files. Kept separate
+/// from the default source's `xgpro/` so the two can never interleave a DLL
+/// from one version with bitstreams from another — a mismatch would upload the
+/// wrong FPGA bitstream for a chip.
+const MIRROR_DIR: &str = "mirror";
 
-/// A [`DllDb`] catalog persisted from a mirror; the DLL is never stored, and a
-/// once-a-day version check keeps only the latest version on disk.
+/// A [`DllDb`] provisioned from a mirror, cached as the vendor files
+/// themselves; a once-a-day version check keeps only the latest on disk.
 pub struct HttpDb {
     inner: DllDb,
     base_url: String,
@@ -50,15 +52,16 @@ pub struct HttpDb {
 impl HttpDb {
     pub fn open(base_url: &str, cache_dir: &Path, dll_sha256: Option<&str>) -> Result<Self> {
         let base_url = base_url.trim_end_matches('/').to_string();
-        std::fs::create_dir_all(cache_dir.join("algoT76"))?;
-        let catalog = cache_dir.join(CATALOG_FILE);
+        let dir = cache_dir.join(MIRROR_DIR);
+        std::fs::create_dir_all(dir.join("algoT76"))?;
+        let dll_path = dir.join("InfoICT76.dll");
         let dll_url = format!("{base_url}/InfoICT76.dll");
         let today = utc_day();
-        let meta = read_meta(cache_dir); // Option<(version_tag, day)>
+        let meta = read_meta(&dir); // Option<(version_tag, day)>
 
-        // Decide whether to (re)build from the DLL, and carry the version tag if
-        // the daily check already fetched it.
-        let (rebuild, checked_tag): (bool, Option<String>) = if !catalog.is_file() {
+        // Decide whether to (re)fetch the DLL, and carry the version tag if the
+        // daily check already fetched it.
+        let (rebuild, checked_tag): (bool, Option<String>) = if !dll_path.is_file() {
             (true, None)
         } else if meta.as_ref().is_some_and(|(_, d)| *d == today) {
             (false, None) // already checked today — trust the cache, no network
@@ -68,7 +71,7 @@ impl HttpDb {
                 Ok(cur) => {
                     let changed = meta.as_ref().map(|(t, _)| t != &cur).unwrap_or(true);
                     if !changed {
-                        write_meta(cache_dir, &cur, today); // stamp today's check
+                        write_meta(&dir, &cur, today); // stamp today's check
                     }
                     (changed, Some(cur))
                 }
@@ -76,37 +79,28 @@ impl HttpDb {
             }
         };
 
-        // Even when the version check says "no change", a catalog written by an
-        // older binary (different Device schema, or no header at all) can't be
-        // decoded — a bad magic/schema forces a rebuild instead of a mis-decode.
-        let cached = if rebuild {
-            None
-        } else {
-            read_catalog(&catalog)
-        };
-
-        // A decodable cache is used as-is; anything else rebuilds from the DLL.
-        let inner = if let Some(devices) = cached {
-            DllDb::from_devices(devices)
-        } else {
-            let dll = http_get(&dll_url)?; // into RAM only
+        if rebuild {
+            let dll = http_get(&dll_url)?;
             if let Some(want) = dll_sha256 {
                 verify_sha256(&dll, want)?;
             }
-            let inner = DllDb::from_dll_bytes(dll)?; // `dll` consumed & dropped
-            persist_catalog(&catalog, inner.all())?;
-            clear_alg_cache(cache_dir)?; // stale bitstreams: only the latest is kept
+            // Parse before storing: a corrupt download should not replace a
+            // working cache.
+            DllDb::from_dll_bytes(dll.clone())?;
+            let tmp = dll_path.with_extension("dll.part");
+            std::fs::write(&tmp, &dll)?;
+            std::fs::rename(&tmp, &dll_path)?;
+            clear_alg_cache(&dir)?; // stale bitstreams: only the latest is kept
             let tag = checked_tag
                 .or_else(|| head_version(&dll_url).ok())
                 .unwrap_or_default();
-            write_meta(cache_dir, &tag, today);
-            inner
-        };
+            write_meta(&dir, &tag, today);
+        }
 
         Ok(HttpDb {
-            inner,
+            inner: DllDb::load(&dir)?,
             base_url,
-            cache_dir: cache_dir.to_path_buf(),
+            cache_dir: dir,
         })
     }
 }
@@ -179,34 +173,6 @@ fn read_meta(dir: &Path) -> Option<(String, u64)> {
 fn write_meta(dir: &Path, tag: &str, day: u64) {
     // Best-effort; a failed stamp just means we re-check tomorrow.
     let _ = std::fs::write(dir.join(META_FILE), format!("{tag}\n{day}\n"));
-}
-
-fn persist_catalog(path: &Path, devices: &[Device]) -> Result<()> {
-    let blob = postcard::to_allocvec(devices)
-        .map_err(|e| Error::Format(format!("catalog encode: {e}")))?;
-    let mut framed = Vec::with_capacity(6 + blob.len());
-    framed.extend_from_slice(CATALOG_MAGIC);
-    framed.extend_from_slice(&CATALOG_SCHEMA.to_le_bytes());
-    framed.extend_from_slice(&blob);
-    let tmp = path.with_extension("postcard.part");
-    std::fs::write(&tmp, &framed)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
-}
-
-/// Read a persisted catalog, verifying the magic + schema version. Returns
-/// `None` (→ rebuild) if the file is missing, unframed, a different schema, or
-/// otherwise undecodable — never a hard error, since the fix is always to
-/// rebuild from the mirror.
-fn read_catalog(path: &Path) -> Option<Vec<Device>> {
-    let bytes = std::fs::read(path).ok()?;
-    if bytes.len() < 6 || &bytes[..4] != CATALOG_MAGIC {
-        return None;
-    }
-    if u16::from_le_bytes([bytes[4], bytes[5]]) != CATALOG_SCHEMA {
-        return None;
-    }
-    postcard::from_bytes(&bytes[6..]).ok()
 }
 
 /// Delete the cached `.alg` bitstreams (called on a version change).
@@ -303,38 +269,29 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// The mirror cache holds the vendor files themselves, in the same shape
+    /// the default source produces, so `--db <cache>/mirror` is usable
+    /// directly. Replaces an older test for a derived `catalog.postcard`
+    /// format that was measured to be only ~6 ms faster to load than parsing
+    /// the DLL, and was dropped rather than versioned forever.
     #[test]
-    fn catalog_header_roundtrips_and_rejects_mismatch() {
-        let dir = std::env::temp_dir().join(format!("minipro-cat-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("catalog.postcard");
-        let devs = vec![Device {
-            name: "CHIP@DIP8".into(),
-            blank_value: 0xFF,
-            ..Device::default()
-        }];
+    fn alg_cache_is_cleared_on_a_version_change() {
+        let dir = std::env::temp_dir().join(format!("minipro-alg-{}", std::process::id()));
+        let algs = dir.join("algoT76");
+        std::fs::create_dir_all(&algs).unwrap();
+        std::fs::write(algs.join("ROM28P32.alg"), b"stale").unwrap();
+        std::fs::write(dir.join("InfoICT76.dll"), b"kept").unwrap();
 
-        // Framed write is readable back.
-        persist_catalog(&path, &devs).unwrap();
-        let back = read_catalog(&path).expect("valid catalog");
-        assert_eq!(back.len(), 1);
-        assert_eq!(back[0].name, "CHIP@DIP8");
+        clear_alg_cache(&dir).unwrap();
 
-        // The header is MAGIC || schema:u16le.
-        let raw = std::fs::read(&path).unwrap();
-        assert_eq!(&raw[..4], CATALOG_MAGIC);
-        assert_eq!(u16::from_le_bytes([raw[4], raw[5]]), CATALOG_SCHEMA);
-
-        // A wrong schema version -> None (triggers a rebuild), not a mis-decode.
-        let mut bumped = raw.clone();
-        bumped[4] = bumped[4].wrapping_add(1);
-        std::fs::write(&path, &bumped).unwrap();
-        assert!(read_catalog(&path).is_none());
-
-        // A raw postcard blob with no header (an old-format file) -> None.
-        std::fs::write(&path, postcard::to_allocvec(&devs).unwrap()).unwrap();
-        assert!(read_catalog(&path).is_none());
-
+        assert!(
+            !algs.join("ROM28P32.alg").exists(),
+            "bitstreams are version-specific and must not survive a DLL change"
+        );
+        assert!(
+            dir.join("InfoICT76.dll").exists(),
+            "clearing bitstreams must not remove the catalog itself"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

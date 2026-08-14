@@ -17,7 +17,7 @@ workspace = true
 default = []
 # `net`: the CachedDb backend that provisions InfoICT76.dll + .alg files from a
 # mirror over HTTP(S), cached locally. Opt-in so the core stays dependency-lean.
-net = ["dep:ureq", "dep:sha2", "dep:postcard", "dep:native-tls"]
+net = ["dep:ureq", "dep:sha2", "dep:native-tls"]
 
 [dependencies]
 base64 = "0.23.1"
@@ -25,7 +25,6 @@ flate2 = "1.1.9"
 minipro-core = { path = "../minipro-core" }
 quick-xml = "0.41.0"
 sha2 = { version = "0.10", optional = true }
-postcard = { version = "1", features = ["use-std"], optional = true }
 ureq = { version = "2", optional = true, default-features = false, features = ["native-tls"] }
 native-tls = { version = "0.2", optional = true }
 

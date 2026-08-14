@@ -67,7 +67,7 @@ Every non-✅ cell is principled, not an oversight:
 | `minipro-core` | Device model, `Transport`/`Programmer` + capability traits, `Reporter`, typed `Error`, op orchestration. Object-safe capability upcasts; the must-drain `Pending` guard. |
 | `minipro-proto` | Per-programmer drivers (`t76.rs`, `t56.rs`, `t48.rs`), the shared `wire.rs` (II+-class header + shared ops), and `detect()`. |
 | `minipro-usb` | `UsbTransport` (over `nusb`) + `MockTransport` for hardware-free tests. |
-| `minipro-db` | `ChipDb` trait with four backends: `XmlDb` (infoic.xml), `DllDb` (parses `InfoICT76.dll` directly), `HttpDb` (`net` feature — provisions the DLL from a mirror into RAM, persists only the derived catalog + `.alg` bitstreams, daily version check), and `vendor` (the zero-setup default: downloads XGecu's installer archive once and unpacks the database with a system RAR tool — `bsdtar`/`unar`/`unrar` — so no RAR decoder is linked in). |
+| `minipro-db` | `ChipDb` trait with four backends: `XmlDb` (infoic.xml), `DllDb` (parses `InfoICT76.dll` directly), `HttpDb` (`net` feature — provisions the vendor files from a mirror of extracted files, daily version check), and `vendor` (the zero-setup default: downloads XGecu's installer archive once and unpacks the database with a system RAR tool — `bsdtar`/`unar`/`unrar` — so no RAR decoder is linked in). |
 | `minipro-cli` | The `minipro` binary: human / JSON / TUI reporters, mode selection. |
 
 ## Design in three lines
@@ -96,8 +96,8 @@ against the hardware-verified T76 goldens.
 3. **Firmware update** (per-device, obfuscation-table transcription).
 4. **Remaining DB fidelity**: GAL/PLD `config` (fuse-map geometry) and the
    host-side `pin_map` package tables. (The `chip_type`/`blank_value` fields,
-   the `logicic.xml` vector parser, and the `catalog.postcard` schema-version
-   header are done. A compiled/baked-in DB was considered and dropped —
+   the `logicic.xml` vector parser, and the `chip_type`/`blank_value` fields
+   are done. A compiled/baked-in DB was considered and dropped —
    direct-to-source via `DllDb`/`HttpDb` is better.)
 
 The FPGA logic test and SPI autodetect are **done** on T56/T76 — the driver ops
