@@ -55,6 +55,31 @@ pub(crate) fn ascii_field(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[..end]).trim().to_string()
 }
 
+// ---------------------------------------------------------------------------
+// Total readers for *externally supplied* bytes — device responses and vendor
+// files. Indexing those directly panics on a short buffer; these return a typed
+// error instead, so a truncated reply is a diagnosable protocol fault rather
+// than a crash. (Writes into our own fixed-size packet buffers stay plain
+// indexing: their bounds are compile-time facts, not attacker input.)
+// ---------------------------------------------------------------------------
+
+/// One byte at `off`, or [`Error::Protocol`] if the buffer is shorter.
+pub(crate) fn at(buf: &[u8], off: usize) -> Result<u8> {
+    buf.get(off).copied().ok_or(Error::Protocol)
+}
+
+/// `len` bytes starting at `off`, or [`Error::Protocol`] if out of range.
+pub(crate) fn slice_at(buf: &[u8], off: usize, len: usize) -> Result<&[u8]> {
+    buf.get(off..off.checked_add(len).ok_or(Error::Protocol)?)
+        .ok_or(Error::Protocol)
+}
+
+/// Read a little-endian u32 at `off`.
+pub(crate) fn read_le32(buf: &[u8], off: usize) -> Result<u32> {
+    let b = slice_at(buf, off, 4)?;
+    Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
 /// The device fields consumed by the II+-family packet packers.
 /// `from_device` copies them 1:1 from the core [`Device`], with sizes clamped
 /// to the wire widths.

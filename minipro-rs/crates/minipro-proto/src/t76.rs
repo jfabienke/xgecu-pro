@@ -1540,13 +1540,17 @@ impl<'a> UpdateFile<'a> {
         if image.len() < UPDATE_HEADER_LEN || image.len() > UPDATE_MAX_LEN {
             return Err(Error::Format("updateT76.dat: bad file size".into()));
         }
-        let version = u32::from_le_bytes(image[0..4].try_into().unwrap());
+        // Read the header totally: the size guard above already implies these
+        // are in range, but a total read keeps that a property of the code
+        // rather than of the reader's memory.
+        let bad = || Error::Format("updateT76.dat: truncated header".into());
+        let version = wire::read_le32(image, 0).map_err(|_| bad())?;
         if version & UPDATE_FILE_VERS_MASK != UPDATE_FILE_VERSION {
             return Err(Error::Format("updateT76.dat: bad file version".into()));
         }
-        let stored_crc = u32::from_le_bytes(image[4..8].try_into().unwrap());
-        let count = u32::from_le_bytes(image[12..16].try_into().unwrap()) as usize;
-        let body = &image[UPDATE_HEADER_LEN..];
+        let stored_crc = wire::read_le32(image, 4).map_err(|_| bad())?;
+        let count = wire::read_le32(image, 12).map_err(|_| bad())? as usize;
+        let body = image.get(UPDATE_HEADER_LEN..).ok_or_else(bad)?;
         if count.checked_mul(UPDATE_BLOCK_LEN) != Some(body.len()) {
             return Err(Error::Format(
                 "updateT76.dat: block count/size mismatch".into(),
@@ -3028,6 +3032,74 @@ mod prop_tests {
             let last = last_block_len(len);
             prop_assert!((1..=BS_PAYLOAD).contains(&last));
             prop_assert_eq!((len - last) % BS_PAYLOAD, 0);
+        }
+    }
+}
+
+/// Tier-4 robustness: every driver op driven with **arbitrary device replies**.
+///
+/// The wire code reads fixed offsets out of reply buffers (`resp[12]`,
+/// `resp[2..6]`, …). Each read is guarded, but the guards are hand-written, so
+/// these properties assert the guarantee rather than the discipline: a hostile
+/// or truncated reply must produce `Err`, never a panic. `proptest` fails the
+/// test on any panic, so "it returned" *is* the assertion.
+#[cfg(test)]
+mod fuzz_replies {
+    use super::*;
+    use crate::fuzz_tx::FuzzTx;
+    use proptest::prelude::*;
+
+    fn dev() -> Device {
+        Device {
+            name: "FUZZ".into(),
+            protocol_id: 0x07,
+            variant: 0x3200,
+            code_size: 0x8000,
+            page_size: 0x100,
+            chip_id_bytes: 4,
+            ..Default::default()
+        }
+    }
+
+    fn session() -> Session {
+        Session {
+            device: dev(),
+            emmc_capacity: 0,
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn t76_ops_never_panic(reply in proptest::collection::vec(any::<u8>(), 0..96)) {
+            let mut p = T76::new(Box::new(FuzzTx { reply }));
+            let s = session();
+            let _ = p.query_info();
+            let _ = p.identify(&s);
+            let _ = p.reset();
+            let _ = p.begin(&dev());
+            if let Some(m) = p.memory() {
+                let _ = m.read_block(&s, &BlockReq { kind: MemoryKind::Code, address: 0, len: 64 });
+                let _ = m.write_block(&s, &BlockReq { kind: MemoryKind::Code, address: 0, len: 4 }, &[0; 4]);
+                let _ = m.erase(&s, EraseKind::Chip);
+                let _ = m.blank_check(&s, Region { kind: MemoryKind::Code, offset: 0, len: 64 });
+            }
+            if let Some(f) = p.fuses() { let _ = f.read_fuses(&s, FuseKind::Config, 4, 1); }
+            if let Some(j) = p.jedec() { let _ = j.read_row(&s, 0, 0, 32); }
+            if let Some(c) = p.calibration() { let _ = c.read_calibration(8); }
+            if let Some(pt) = p.pins() { let _ = pt.contact_check(&s); }
+            if let Some(e) = p.emmc() { let _ = e.capacity(); }
+        }
+
+        /// The firmware flasher walks an untrusted image *and* the reply stream.
+        #[test]
+        fn t76_firmware_update_never_panics(
+            image in proptest::collection::vec(any::<u8>(), 0..600),
+            reply in proptest::collection::vec(any::<u8>(), 0..40),
+        ) {
+            let mut p = T76::new(Box::new(FuzzTx { reply }));
+            if let Some(fw) = p.firmware() {
+                let _ = fw.update(&image);
+            }
         }
     }
 }

@@ -57,7 +57,10 @@ pub struct ProgrammerInfo {
 /// Per-transaction state returned by [`Programmer::begin`]: the selected
 /// algorithm handle, eMMC capacity, current partition, etc. An opaque token the
 /// capability ops borrow; consumed by [`Programmer::end`].
-#[derive(Debug)]
+///
+/// `Default` exists so [`Txn`] can move the session out on drop without
+/// modelling an "already taken" state that callers would have to handle.
+#[derive(Debug, Default)]
 pub struct Session {
     pub device: Device,
     pub emmc_capacity: u64,
@@ -122,33 +125,29 @@ pub trait Programmer: Send {
 /// `begin`/`end` pair; lives in core, not in the trait, to keep the trait simple.
 pub struct Txn<'p> {
     prog: &'p mut dyn Programmer,
-    session: Option<Session>,
+    session: Session,
 }
 
 impl<'p> Txn<'p> {
     /// Begin a guarded transaction.
     pub fn begin(prog: &'p mut dyn Programmer, dev: &Device) -> Result<Txn<'p>> {
         let session = prog.begin(dev)?;
-        Ok(Txn {
-            prog,
-            session: Some(session),
-        })
+        Ok(Txn { prog, session })
     }
-    /// Access the programmer and session together for an operation.
+    /// Access the programmer and session together for an operation. Total: the
+    /// session is owned outright, so there is no "already ended" case.
     pub fn parts(&mut self) -> (&mut dyn Programmer, &Session) {
-        (self.prog, self.session.as_ref().expect("session live"))
+        (self.prog, &self.session)
     }
 }
 
 impl Drop for Txn<'_> {
     fn drop(&mut self) {
-        if let Some(s) = self.session.take() {
-            // By design: `end()` here is a best-effort de-energize on scope exit,
-            // not the operation's result. Any real failure surfaces on the op
-            // path (read/write/erase return their own `Result`); a `Drop` can't
-            // propagate, and the transaction is ending regardless, so there is
-            // nothing actionable to recover from an `end()` error here.
-            let _ = self.prog.end(s);
-        }
+        // By design: `end()` here is a best-effort de-energize on scope exit,
+        // not the operation's result. Any real failure surfaces on the op
+        // path (read/write/erase return their own `Result`); a `Drop` can't
+        // propagate, and the transaction is ending regardless, so there is
+        // nothing actionable to recover from an `end()` error here.
+        let _ = self.prog.end(std::mem::take(&mut self.session));
     }
 }

@@ -735,3 +735,51 @@ mod tests {
         assert_eq!(t48.query_info().unwrap_err().code(), "unsupported");
     }
 }
+
+/// Tier-4 robustness: arbitrary device replies must never panic this driver.
+/// See the equivalent module in `t76.rs` for the rationale.
+#[cfg(test)]
+mod fuzz_replies {
+    use super::*;
+    use crate::fuzz_tx::FuzzTx;
+    use proptest::prelude::*;
+
+    fn dev() -> Device {
+        Device {
+            name: "FUZZ".into(),
+            protocol_id: 0x07,
+            variant: 0x3200,
+            code_size: 0x8000,
+            page_size: 0x100,
+            chip_id_bytes: 4,
+            ..Default::default()
+        }
+    }
+    fn session() -> Session {
+        Session {
+            device: dev(),
+            emmc_capacity: 0,
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn t48_ops_never_panic(reply in proptest::collection::vec(any::<u8>(), 0..96)) {
+            let mut p = T48::new(Box::new(FuzzTx { reply }));
+            let s = session();
+            let _ = p.query_info();
+            let _ = p.identify(&s);
+            let _ = p.reset();
+            let _ = p.begin(&dev());
+            if let Some(m) = p.memory() {
+                let _ = m.read_block(&s, &BlockReq { kind: MemoryKind::Code, address: 0, len: 64 });
+                let _ = m.write_block(&s, &BlockReq { kind: MemoryKind::Code, address: 0, len: 4 }, &[0; 4]);
+                let _ = m.erase(&s, EraseKind::Chip);
+                let _ = m.blank_check(&s, Region { kind: MemoryKind::Code, offset: 0, len: 64 });
+            }
+            if let Some(f) = p.fuses() { let _ = f.read_fuses(&s, FuseKind::Config, 4, 1); }
+            if let Some(j) = p.jedec() { let _ = j.read_row(&s, 0, 0, 32); }
+            if let Some(c) = p.calibration() { let _ = c.read_calibration(8); }
+        }
+    }
+}

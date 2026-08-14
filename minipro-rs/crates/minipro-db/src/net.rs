@@ -84,9 +84,11 @@ impl HttpDb {
         } else {
             read_catalog(&catalog)
         };
-        let rebuild = rebuild || cached.is_none();
 
-        let inner = if rebuild {
+        // A decodable cache is used as-is; anything else rebuilds from the DLL.
+        let inner = if let Some(devices) = cached {
+            DllDb::from_devices(devices)
+        } else {
             let dll = http_get(&dll_url)?; // into RAM only
             if let Some(want) = dll_sha256 {
                 verify_sha256(&dll, want)?;
@@ -99,8 +101,6 @@ impl HttpDb {
                 .unwrap_or_default();
             write_meta(cache_dir, &tag, today);
             inner
-        } else {
-            DllDb::from_devices(cached.expect("cache present when not rebuilding"))
         };
 
         Ok(HttpDb {

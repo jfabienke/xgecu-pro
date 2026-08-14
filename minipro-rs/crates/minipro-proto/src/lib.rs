@@ -69,10 +69,8 @@ pub fn detect(
     // the msg[6] device-type byte are shared across all XGecu families; each
     // driver's own query_info re-reads and parses its family-specific layout.
     let report = command(transport.as_mut(), Ep(0x01), Ep(0x81), &[0u8; 5], 64)?.read()?;
-    if report.len() < 7 {
-        return Err(Error::Protocol);
-    }
-    match DeviceType::try_from(report[6])? {
+    // First contact with an unidentified device: read the type byte totally.
+    match DeviceType::try_from(*report.get(6).ok_or(Error::Protocol)?)? {
         DeviceType::T56 => {
             let mut t56 = t56::T56::new(transport);
             t56.query_info()?;
@@ -87,6 +85,36 @@ pub fn detect(
             let mut t76 = t76::T76::new(transport);
             t76.query_info()?;
             Ok(Box::new(t76))
+        }
+    }
+}
+
+/// A transport that answers **every** read with the same caller-supplied bytes,
+/// whatever length they are. Used by the property tests to drive each driver
+/// with hostile/truncated device replies and assert nothing panics.
+#[cfg(test)]
+pub(crate) mod fuzz_tx {
+    use minipro_core::error::Result;
+    use minipro_core::transport::{Ep, LinkSpeed, Transport};
+
+    pub(crate) struct FuzzTx {
+        pub reply: Vec<u8>,
+    }
+
+    impl Transport for FuzzTx {
+        fn send(&mut self, _ep: Ep, _data: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        /// Deliberately ignores the requested length: a real device can answer
+        /// short, and that must be an error, never a panic.
+        fn recv(&mut self, _ep: Ep, _len: usize) -> Result<Vec<u8>> {
+            Ok(self.reply.clone())
+        }
+        fn link_speed(&self) -> LinkSpeed {
+            LinkSpeed::High
+        }
+        fn reset(&mut self) -> Result<()> {
+            Ok(())
         }
     }
 }

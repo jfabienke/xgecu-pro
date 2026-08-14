@@ -85,13 +85,13 @@ impl Reporter for HumanReporter {
             Event::Progress { done, total } => {
                 let bar = self.bar.get_or_insert_with(|| {
                     let bar = ProgressBar::new(*total);
-                    bar.set_style(
-                        ProgressStyle::with_template(
-                            "  {bar:32.cyan/blue} {bytes}/{total_bytes} ({eta})",
-                        )
-                        .expect("static progress template is valid")
-                        .progress_chars("█▉▊▋▌▍▎▏ "),
-                    );
+                    // A malformed template is cosmetic, never fatal: keep the
+                    // default bar rather than taking down a chip operation.
+                    if let Ok(style) = ProgressStyle::with_template(
+                        "  {bar:32.cyan/blue} {bytes}/{total_bytes} ({eta})",
+                    ) {
+                        bar.set_style(style.progress_chars("█▉▊▋▌▍▎▏ "));
+                    }
                     bar
                 });
                 bar.set_length(*total);

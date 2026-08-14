@@ -42,3 +42,26 @@ unused_must_use = "deny"
 [workspace.lints.clippy]
 todo = "deny"
 dbg_macro = "deny"
+# No-panic policy: this drives hardware and parses untrusted vendor files and
+# device replies, so every failure must be a typed `Error`, never a crash.
+# Tests are exempt via `allow-unwrap-in-tests`/`allow-expect-in-tests` in
+# clippy.toml — asserting in a test is the point.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+# Deliberately NOT enabled. It cannot distinguish `msg[0] = CMD` on a local
+# `[u8; 64]` (a compile-time fact) from `resp[12]` on a device reply (fallible),
+# so it fires ~100 times on provably-safe packet construction. Making the
+# builders total would cost readability for no safety.
+#
+# The no-panic guarantee on *external* bytes is instead carried by:
+#   1. `wire::{at, slice_at, read_le16, read_le32}` — total readers used where
+#      the bound involves device- or file-supplied lengths;
+#   2. explicit length guards at each reply-parsing entry point;
+#   3. property tests that drive every driver op with arbitrary replies and
+#      every file parser with arbitrary bytes (`fuzz_replies`, `prop_tests`),
+#      which fail on any panic. Mutation-checked: reverting a total accessor to
+#      raw indexing makes them fail immediately.
+# indexing_slicing = "warn"
