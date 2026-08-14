@@ -759,6 +759,16 @@ fn run_info(db_dir: Option<&Path>, rep: &mut dyn Reporter) -> Result<()> {
     Ok(())
 }
 
+/// Whether a 24-bit autodetect result is a chip answering at all.
+///
+/// A floating SPI bus settles to all-zeros or all-ones depending on which way
+/// the bitstream biases it, and JEDEC assigns neither `0x00` nor `0xff` as a
+/// manufacturer id. Reporting these as a successful detection of an "unknown
+/// vendor" hides the far likelier truth: nothing drove the bus.
+fn responded(id: u32) -> bool {
+    id != 0x000000 && id != 0xff_ffff
+}
+
 /// Decode a JEDEC manufacturer id byte to a name (common vendors only).
 fn manufacturer_name(id: u8) -> &'static str {
     match id {
@@ -916,6 +926,9 @@ fn run_autodetect(db_dir: Option<&Path>, wide: bool, mode: Mode) -> Result<()> {
             .ok_or(Error::Unsupported("this programmer has no SPI autodetect"))?;
         ad.spi_autodetect(wide, &mut load)?
     };
+    if !responded(id) {
+        return Err(Error::NoDeviceResponse { id });
+    }
     let mfr = manufacturer_name((id >> 16) as u8);
     match mode {
         Mode::Json => {
@@ -944,6 +957,19 @@ mod tests {
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(args).expect("args parse")
+    }
+
+    #[test]
+    fn idle_bus_patterns_are_not_a_detection() {
+        // The two ways a floating SPI bus reads back, seen on real hardware:
+        // the narrow bitstream biases it low, the wide one high.
+        assert!(!responded(0x000000), "all-zeros is an idle bus");
+        assert!(!responded(0xff_ffff), "all-ones is an idle bus");
+        // A real Winbond W25Q64 must still detect.
+        assert!(responded(0xef4017));
+        // 0x00/0xff are only meaningless as the *manufacturer* byte; a valid
+        // vendor with zero device bytes is still a response.
+        assert!(responded(0xef0000));
     }
 
     #[test]

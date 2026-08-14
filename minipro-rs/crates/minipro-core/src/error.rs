@@ -77,6 +77,11 @@ pub enum Error {
     /// Pin-contact check reported open pins (advisory — reads may still work).
     #[error("bad contact on pins {0:?}")]
     BadContact(Vec<u8>),
+    /// Autodetect read back an idle bus rather than a chip. `0x000000` and
+    /// `0xffffff` are the two patterns a floating SPI bus settles to; JEDEC
+    /// assigns neither, so they mean "nothing answered", not "unknown vendor".
+    #[error("no SPI device responded (read 0x{id:06x}, which is an idle bus, not a JEDEC id)")]
+    NoDeviceResponse { id: u32 },
     /// The programmer's overcurrent protection tripped during BEGIN_TRANS.
     #[error("overcurrent protection triggered")]
     Overcurrent,
@@ -116,6 +121,7 @@ impl Error {
             Error::Protocol => "protocol",
             Error::ChipIdMismatch { .. } => "chip_id_mismatch",
             Error::BadContact(_) => "bad_contact",
+            Error::NoDeviceResponse { .. } => "no_device_response",
             Error::Overcurrent => "overcurrent",
             Error::FirmwareMismatch { .. } => "firmware_mismatch",
             Error::Verify { .. } => "verify_failed",
@@ -135,6 +141,11 @@ impl Error {
             Error::BadContact(_) => {
                 Some("reseat/clean the pins, or --skip-pincheck to read anyway")
             }
+            Error::NoDeviceResponse { .. } => Some(
+                "check orientation and clip contact on pin 1 (CS) and pin 8 (VCC); \
+                 in-circuit the board can load the supply and hold the bus, so read the chip \
+                 out of circuit if it keeps not answering",
+            ),
             Error::Overcurrent => Some("check chip orientation and socket position, then retry"),
             Error::FirmwareMismatch { .. } => {
                 Some("regenerate algorithm.xml for the device firmware")
@@ -169,6 +180,7 @@ mod tests {
                 "chip_id_mismatch",
             ),
             (Error::BadContact(vec![3, 4]), "bad_contact"),
+            (Error::NoDeviceResponse { id: 0 }, "no_device_response"),
             (Error::Overcurrent, "overcurrent"),
             (
                 Error::FirmwareMismatch {
