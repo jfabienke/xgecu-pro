@@ -1622,10 +1622,15 @@ impl FirmwareUpdate for T76 {
         let update = UpdateFile::parse(image)?;
 
         // Enter the bootloader.
-        // TODO(hw): the switch here is unconditional. On real hardware the
-        // device should report normal status first and will re-enumerate after
-        // the reset, so the transport must re-arm the same device — validate
-        // that path on hardware.
+        // TODO(hw): the switch here is unconditional — the device should be
+        // confirmed in normal status first.
+        //
+        // The transport half is now validated on a live T76: `reboot` -> a USB
+        // reset -> re-arming the same device works (see the `reset_*` hardware
+        // tests in minipro-usb; it used to fail outright because the interface
+        // claim was never released). Still unvalidated is whether the
+        // *bootloader* re-enumerates under the same vid:pid, which the re-arm
+        // assumes — if it does not, this reboot cannot find its way back.
         let mut switch = [0u8; 8];
         switch[0] = CMD_SWITCH;
         switch[1] = 0xaa;

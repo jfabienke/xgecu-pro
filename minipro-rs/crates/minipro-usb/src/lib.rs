@@ -58,10 +58,23 @@ const CMD_READ_TIMEOUT: Duration = Duration::from_millis(360_000);
 const CLAIM_ATTEMPTS: u32 = 5;
 const CLAIM_RETRY_DELAY: Duration = Duration::from_millis(200);
 
+/// Re-enumeration poll after a device reset. Measured worst case on a live T76
+/// is ~50 ms from the reset returning to open-and-claimable, so a 10 ms poll
+/// finds the device on its first or second look. See the `reset_*` hardware
+/// tests, which record the numbers this is derived from.
+const REENUMERATE_POLL: Duration = Duration::from_millis(10);
+/// Overall budget for a device to come back after a reset. Far above the
+/// measured worst case on purpose: a slow or loaded host should still recover.
+const REENUMERATE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Real USB transport over `nusb`.
 pub struct UsbTransport {
     device: nusb::Device,
-    interface: nusb::Interface,
+    /// Held purely to keep interface 0 claimed for the endpoints' lifetime.
+    /// `None` only inside [`Transport::reset`], between releasing the claim and
+    /// re-claiming after re-enumeration: a device cannot be reset while any of
+    /// its interfaces is claimed.
+    interface: Option<nusb::Interface>,
     /// Bulk OUT endpoints, claimed lazily and cached (0x01 command, 0x05 payload…).
     out_eps: HashMap<u8, Endpoint<Bulk, Out>>,
     /// Bulk IN endpoints, claimed lazily and cached (0x81 command, 0x82 payload…).
@@ -82,7 +95,7 @@ impl UsbTransport {
         let (device, interface, link) = open_device(vid, pid)?;
         let mut tx = UsbTransport {
             device,
-            interface,
+            interface: Some(interface),
             out_eps: HashMap::new(),
             in_eps: HashMap::new(),
             link,
@@ -129,6 +142,8 @@ impl UsbTransport {
             Entry::Vacant(v) => {
                 let ep = self
                     .interface
+                    .as_ref()
+                    .ok_or_else(no_interface)?
                     .endpoint::<Bulk, Out>(addr)
                     .map_err(|e| Error::Usb(format!("claim bulk OUT 0x{addr:02x}: {e}")))?;
                 Ok(v.insert(ep))
@@ -148,6 +163,8 @@ impl UsbTransport {
             Entry::Vacant(v) => {
                 let ep = self
                     .interface
+                    .as_ref()
+                    .ok_or_else(no_interface)?
                     .endpoint::<Bulk, In>(addr)
                     .map_err(|e| Error::Usb(format!("claim bulk IN 0x{addr:02x}: {e}")))?;
                 Ok(v.insert(ep))
@@ -218,33 +235,49 @@ impl Transport for UsbTransport {
     }
 
     fn reset(&mut self) -> Result<()> {
-        // A nusb reset re-enumerates the device and invalidates every handle,
-        // so drop the claimed endpoints/interface and reopen from scratch.
+        // A reset re-enumerates the device and invalidates every handle, so
+        // drop the endpoints *and* release interface 0 first: a device with a
+        // claimed interface cannot be reset ("cannot perform this operation
+        // while interfaces are claimed"), which made this path fail outright.
+        // Order matters — the endpoints borrow their claim from the interface.
         self.out_eps.clear();
         self.in_eps.clear();
+        self.interface = None;
         self.device
             .reset()
             .wait()
             .map_err(|e| Error::Usb(format!("device reset: {e}")))?;
-        // TODO(hw): re-enumeration timing after reset needs validation on a
-        // live T76; 25 x 200 ms (5 s) matches the vendor claim-retry cadence.
-        let mut last_err = Error::Usb("device did not re-enumerate after reset".into());
-        for _ in 0..25 {
-            std::thread::sleep(CLAIM_RETRY_DELAY);
+
+        // Cadence measured on a live T76 (macOS, High Speed, 5 rounds): the
+        // reset call itself blocks ~95 ms, the device reappears 17-31 ms later,
+        // and is open-and-claimable 27-50 ms after that — first try, every
+        // time. Polling promptly costs nothing when the device is slower, and
+        // `open_device` already absorbs a transient claim failure internally.
+        // The deadline stays generous for loaded or slower hosts.
+        let deadline = std::time::Instant::now() + REENUMERATE_TIMEOUT;
+        loop {
+            std::thread::sleep(REENUMERATE_POLL);
             match open_device(self.vid, self.pid) {
                 Ok((device, interface, link)) => {
                     self.device = device;
-                    self.interface = interface;
+                    self.interface = Some(interface);
                     self.link = link;
                     self.out_ep(EP_CMD_OUT)?;
                     self.in_ep(EP_CMD_IN)?;
                     return Ok(());
                 }
-                Err(e) => last_err = e,
+                // Report why it never came back, not a generic timeout.
+                Err(e) if std::time::Instant::now() >= deadline => return Err(e),
+                Err(_) => {}
             }
         }
-        Err(last_err)
     }
+}
+
+/// The transport lost its interface claim — only reachable if a [`Transport::reset`]
+/// released it and then failed to re-establish it.
+fn no_interface() -> Error {
+    Error::Usb("usb interface is not claimed (a device reset did not complete)".into())
 }
 
 /// Choose the error [`UsbTransport::open_any`] returns after every id failed.
@@ -396,6 +429,92 @@ mod tests {
         let resp = pending.read().unwrap(); // dropping without read would warn
         assert_eq!(resp.len(), 32);
         assert_eq!(resp[0], 0xaa);
+    }
+
+    /// Measures what [`UsbTransport::reset`] actually has to wait for, so the
+    /// retry cadence can be set from data instead of copied from the vendor.
+    ///
+    /// Needs a connected T76:
+    /// ```text
+    /// cargo test -p minipro-usb -- --ignored --nocapture reset_reenumeration
+    /// ```
+    ///
+    /// Enumeration and readiness are timed separately: "visible in the device
+    /// list" and "open + interface claimed" are different events, and only the
+    /// second one lets a command go out.
+    #[test]
+    #[ignore = "requires a connected T76"]
+    fn reset_reenumeration_timing() {
+        use std::time::Instant;
+        const POLL: Duration = Duration::from_millis(2);
+        const GIVE_UP: Duration = Duration::from_secs(15);
+        const ROUNDS: usize = 5;
+
+        let mut worst_ready = Duration::ZERO;
+        for round in 1..=ROUNDS {
+            let (device, interface, _) =
+                open_device(T76_VID, T76_PID).expect("a T76 must be connected");
+            drop(interface);
+
+            let t = Instant::now();
+            device.reset().wait().expect("device reset");
+            let reset_call = t.elapsed();
+            drop(device); // the handle is invalid past reset
+
+            // Phase 1: back in the enumeration list.
+            let t = Instant::now();
+            let enumerated = loop {
+                let seen = nusb::list_devices()
+                    .wait()
+                    .map(|ds| {
+                        ds.into_iter()
+                            .any(|d| d.vendor_id() == T76_VID && d.product_id() == T76_PID)
+                    })
+                    .unwrap_or(false);
+                if seen {
+                    break t.elapsed();
+                }
+                assert!(t.elapsed() < GIVE_UP, "never re-enumerated");
+                std::thread::sleep(POLL);
+            };
+
+            // Phase 2: actually usable — this is the event reset() needs.
+            let mut attempts = 0usize;
+            let ready = loop {
+                attempts += 1;
+                if open_device(T76_VID, T76_PID).is_ok() {
+                    break t.elapsed();
+                }
+                assert!(t.elapsed() < GIVE_UP, "never became claimable");
+                std::thread::sleep(POLL);
+            };
+
+            worst_ready = worst_ready.max(ready);
+            println!(
+                "round {round}: reset()={reset_call:?}  enumerated={enumerated:?}  \
+                 ready={ready:?}  open_device attempts={attempts}"
+            );
+        }
+        println!("worst ready: {worst_ready:?}");
+    }
+
+    /// End-to-end cost of a real [`UsbTransport::reset`], which is what the
+    /// retry cadence actually buys or wastes. Companion to
+    /// `reset_reenumeration_timing`, which decomposes the wait.
+    #[test]
+    #[ignore = "requires a connected T76"]
+    fn reset_end_to_end_cost() {
+        use std::time::Instant;
+        let mut tx = UsbTransport::open(T76_VID, T76_PID).expect("a T76 must be connected");
+        let mut worst = Duration::ZERO;
+        for round in 1..=5 {
+            let t = Instant::now();
+            tx.reset().expect("reset");
+            let dt = t.elapsed();
+            worst = worst.max(dt);
+            println!("round {round}: UsbTransport::reset() = {dt:?}");
+        }
+        println!("worst reset(): {worst:?}");
     }
 
     #[test]
