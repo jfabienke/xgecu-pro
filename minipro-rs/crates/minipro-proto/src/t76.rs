@@ -567,7 +567,7 @@ impl T76 {
         match &r {
             Ok(v) => tracing::trace!(
                 got = v.len(),
-                head = format_args!("{:02x?}", &v[..v.len().min(8)]),
+                head = format_args!("{:02x?}", &v[..v.len().min(32)]),
                 "t76 resp"
             ),
             Err(e) => tracing::trace!(error = %e, "t76 resp"),
@@ -679,8 +679,20 @@ impl T76 {
         finalize_last_block: bool,
     ) -> Result<()> {
         if self.uploaded_algo.as_deref() == Some(name) {
+            tracing::debug!(
+                algorithm = name,
+                "bitstream already resident, skipping upload"
+            );
             return Ok(()); // already resident this session
         }
+        // Which algorithm went into the FPGA is the first thing you want to
+        // know when a chip does not answer.
+        tracing::debug!(
+            algorithm = name,
+            bytes = bits.len(),
+            nand_finalize = finalize_last_block,
+            "uploading FPGA bitstream"
+        );
 
         self.cmd_ok(&bs_begin(bits.len()))?;
         for chunk in bits.chunks(BS_PAYLOAD) {
