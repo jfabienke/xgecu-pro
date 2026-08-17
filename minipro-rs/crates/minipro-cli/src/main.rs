@@ -43,11 +43,12 @@ struct Cli {
     #[arg(long, global = true, env = "MINIPRO_DB_DIR", value_name = "DIR")]
     db: Option<PathBuf>,
 
-    /// Provision the native DB from a mirror over HTTP(S), opt-in. Persists the
-    /// derived catalog + .alg bitstreams into the --db cache dir (or a default
-    /// cache); the proprietary InfoICT76.dll is fetched to RAM and never stored.
-    /// The first run each day checks the mirror for a new version. Mirror serves
-    /// the extracted files: `<url>/InfoICT76.dll`, `<url>/algoT76/<algo>.alg`.
+    /// Provision the chip database from a mirror of already-extracted files,
+    /// opt-in. Caches the vendor files as-is — InfoICT76.dll beside an algoT76/
+    /// directory — under the --db cache dir (or a default cache), so the result
+    /// is directly reusable as `--db <cache>/mirror`. The first run each day
+    /// checks the mirror for a new version. Mirror serves the extracted files:
+    /// `<url>/InfoICT76.dll`, `<url>/algoT76/<algo>.alg`.
     #[arg(long, global = true, env = "MINIPRO_DB_URL", value_name = "URL")]
     db_url: Option<String>,
 

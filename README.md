@@ -24,11 +24,13 @@ This is a **young project handling real hardware**. Honest state of play:
 | **T76 reads** | ✅ **Hardware-verified** — byte-identical to known-good dumps, stable over repeated reads |
 | **T76 write / erase / NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device** |
 | **T56 / T48 (all operations)** | ⚠️ Complete drivers, **never run against real silicon** — no T48/T56 hardware here |
+| **T76 pin-contact check** | ❌ Wired up but **measures nothing** — the device returns a constant, so it warns and never blocks |
+| **`@ISP_VGA` parts** (monitor EDID, MStar scaler flash) | ❌ Not implemented — refused with a reason; the C tool rejects these too |
 | **TL866II+ / TL866A/CS** | ❌ Not implemented |
 
-Every driver is pinned by **byte-exact golden-packet tests** (187 tests, hardware-free),
-so the wire output is known-correct against captures — but a passing test suite is
-not the same as a validated write. **Reading is non-destructive; writing and erasing
+Every driver is pinned by **byte-exact golden-packet tests** (199 tests, hardware-free,
+plus 5 `#[ignore]`d ones that need a real device), so the wire output is known-correct
+against captures — but a passing test suite is not the same as a validated write. **Reading is non-destructive; writing and erasing
 are not.** Treat the untested paths accordingly, and see
 [Contributing](#contributing) if you can help close the gap.
 
@@ -101,7 +103,7 @@ want byte-minimal fetches.
 
 Across the three drivers: memory read/write/erase/blank-check/identify, MCU
 fuses, JEDEC/PLD rows, write-protect, calibration, logic-IC testing, SPI
-autodetect — plus eMMC/NAND, pin-contact test and firmware update on the T76.
+autodetect — plus eMMC/NAND and firmware update on the T76.
 Full capability matrix in the [`minipro-rs` README](minipro-rs/README.md).
 
 Design notes worth knowing: reads are **verified by default** (re-read stability
@@ -152,14 +154,17 @@ $ minipro --json read M27C256B@DIP28 rom.bin
 {"code":"format","msg":"no chip database: pass --db <dir>, set MINIPRO_DB_DIR, or --db-url <mirror>","ok":false,"op":"read"}
 ```
 
-Codes include `usb`, `protocol`, `chip_id_mismatch`, `bad_contact`,
-`overcurrent`, `firmware_mismatch`, `verify_failed`, `unsupported`, `format`,
-`io`. Where a remediation exists, the outcome carries a `hint` — e.g. a `usb`
-failure on macOS suggests the USB-2.0 cable.
+Codes are `usb`, `protocol`, `chip_id_mismatch`, `bad_contact`, `overcurrent`,
+`firmware_mismatch`, `verify_failed`, `no_device_response`, `unsupported`,
+`format`, `io`. Where a remediation exists, the outcome carries a `hint` — e.g. a
+`usb` failure on macOS suggests the USB-2.0 cable, and `no_device_response`
+(autodetect read an idle bus rather than a chip) suggests what to check.
 
 **TUI** — a [ratatui](https://ratatui.rs) interface with a searchable chip-DB
-browser, a live 40-pin ZIF contact map, an operation progress gauge, a hex view,
-and a log pane.
+browser, a 40-pin ZIF contact map, an operation progress gauge, a hex view, and a
+log pane. The contact map renders whatever the pin check reports, which on the
+T76 is a constant — treat it as a layout, not a measurement, until that check
+does something (see the status table above).
 
 ## Repo layout
 
@@ -168,6 +173,7 @@ minipro-rs/     The Rust workspace — core / proto (drivers) / usb / db / cli
 docs/           Reverse-engineering notes, protocol analysis, design docs
 docs/hardware/  FPGA + MCU pinouts and schematic (Anlogic EG4X20 + WCH CH569W)
 dumps/          Verified ROM dumps read with this tooling (Adaptec AHA-1542CP)
+submission/     Those dumps written up for preservation archives
 hardware/       USB identity notes for the T76
 ```
 
@@ -199,6 +205,13 @@ The most valuable contribution is **hardware nobody here has**:
   not.
 - **Implement the TL866II+ / TL866A/CS drivers.** The TL866II+ is close to the
   existing T48 and reuses most of the shared wire layer.
+
+There are also hardware tests that only run when you ask, and they need nothing
+in the socket — no chip, no adapter:
+
+```sh
+cargo test -p minipro-usb -- --ignored --nocapture     # open, claim, transfer, reset
+```
 
 Bug reports are most useful with the programmer model, `minipro info` output,
 the exact command, and a `--json` line. See the
