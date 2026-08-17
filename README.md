@@ -185,6 +185,7 @@ Reverse-engineering and analysis, useful independently of the Rust code:
 | [`minipro-codebase-report.md`](docs/minipro-codebase-report.md) | Review of the upstream C implementation |
 | [`rust-redesign.md`](docs/rust-redesign.md) · [`rust-trait-model.md`](docs/rust-trait-model.md) · [`rust-roadmap.md`](docs/rust-roadmap.md) | The design this project was built from, and what's next |
 | [`minipro-vs-rust.md`](docs/minipro-vs-rust.md) | Honest comparison with the C tool |
+| [`multi-programmer.md`](docs/multi-programmer.md) | Driving a bank of programmers in parallel — what's ready, and the reset bug to fix first |
 
 ## Contributing
 
