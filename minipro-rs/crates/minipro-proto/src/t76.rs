@@ -1712,6 +1712,28 @@ mod tests {
     /// state. If it carries real data under a *test* bitstream, that explains
     /// the dead contact check and hands us a working socket diagnostic.
     ///
+    /// # What these bitstreams are
+    ///
+    /// Diffing the decoded blobs identifies `TestGND`/`TestVcc` as one design
+    /// built twice with a parameter flipped, exactly as `TestLgcPull`/
+    /// `TestLgcDown` are one design with the pull direction flipped. Using the
+    /// known pair as the yardstick:
+    ///
+    /// | Pair | Bytes differing | Of |
+    /// |---|---|---|
+    /// | `TestLgcPull` / `TestLgcDown` (known: pull up vs down) | 93 | 629,101 |
+    /// | `TestGND` / `TestVcc` | 143 | 701,145 |
+    /// | `SPI25F11` / `SPI25F21` (genuinely different designs) | 82,178 | 701,145 |
+    /// | `TestGND` / `SPI25F11` | 94,641 | 701,145 |
+    ///
+    /// 0.02% apart, over the same offset span (213..622,070) as the known pair,
+    /// against 12-13% for designs that really differ. So `TestGND`/`TestVcc`
+    /// drive the socket to each rail the way the logic pair drives pins each
+    /// way — a pin-driver self-test, which is what the vendor's "self test"
+    /// menu item would run. `Test_100M` has no partner and a size of its own
+    /// (663,961), so it is a separate design; the name points at a 100 MHz
+    /// timing check, but nothing here confirms that.
+    ///
     /// **The ZIF socket must be empty** — these bitstreams drive socket pins
     /// with patterns meant for a test fixture.
     ///
