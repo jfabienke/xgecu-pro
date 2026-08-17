@@ -86,6 +86,12 @@ pub(crate) const T76_FW_TARGET: FwVersion = FwVersion(0x0111);
 /// Algorithm-name prefixes XGPro uses, indexed by `protocol_id - 1`. Empty
 /// entries are unused ids. (These names are facts — what XGPro calls each
 /// algorithm — and their order is dictated by the protocol-id enumeration.)
+///
+/// **Case is part of the fact.** Bitstreams are resolved by joining an exact
+/// path, so `Nand_`/`Vga_` spelled `NAND_`/`VGA_` here would find the file on a
+/// case-insensitive filesystem (macOS APFS) and fail on a case-sensitive one
+/// (Linux ext4) — silently costing every NAND device on Linux. The
+/// `catalog_coverage` test checks the whole table against a real archive.
 const ALGO_TABLE: &[&str] = &[
     "IIC24C", "MW93ALG", "SPI25F", "AT45D", "F29EE", "W29F32P", // 0x01..0x06
     "ROM28P", "ROM32P", "ROM40P", "R28TO32P", "ROM24P", "ROM44", // 0x07..0x0C
@@ -94,8 +100,8 @@ const ALGO_TABLE: &[&str] = &[
     "P18F2", "P16F5X", "P16CX", "", "ATMGA_", "ATTINY_", // 0x19..0x1E
     "AT89P20_", "", "AT89C_", "P87C_", "SST89_", "W78E_", // 0x1F..0x24
     "", "", "ROM24P", "ROM28P", "RAM32", "GAL16", // 0x25..0x2A
-    "GAL20", "GAL22", "NAND_", "PIC32X", "RAM36", "KB90", // 0x2B..0x30
-    "EMMC_", "VGA_", "CPLD_", "GEN_", "ITE_", // 0x31..0x35
+    "GAL20", "GAL22", "Nand_", "PIC32X", "RAM36", "KB90", // 0x2B..0x30
+    "EMMC_", "Vga_", "CPLD_", "GEN_", "ITE_", // 0x31..0x35
 ];
 
 /// The FPGA algorithm name for a device: `algo_table[protocol_id-1]` +
