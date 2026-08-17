@@ -1707,6 +1707,35 @@ mod tests {
     /// signal; whatever does not is dead. `TestLgcPull` is included as a
     /// control because its use is already known-good.
     ///
+    /// # What the device does return
+    ///
+    /// Status-type commands are inert here: system info differs only in its
+    /// voltage field (ADC jitter, masked below) and `0x39` never moves.
+    ///
+    /// `0x28` — the opcode the logic test reads pin state through — is *not*
+    /// inert, and its reply is clean rather than the stale buffer `0x3e`
+    /// returns:
+    ///
+    /// ```text
+    /// 28 00 18 00 18 00 00 00 | 00 …   no bitstream loaded
+    /// 28 00 18 00 10 00 00 00 | 00 …   after any bitstream upload
+    ///          ^^ byte 4 tracks FPGA configuration state
+    /// ```
+    ///
+    /// Byte 4 is a real signal, but it only says *a* bitstream is loaded — it
+    /// does not distinguish `TestGND` from `TestVcc` from `TestLgcPull`. The
+    /// per-pin nibble field (`[8..]`, 4 bits per pin) stays zero under every
+    /// stimulus tried: idle/`0xf` filler, all-low, alternating, and both pull
+    /// polarities.
+    ///
+    /// What is missing is the *stimulus*, not the readback. `logic_pass` gets
+    /// data out of this same opcode by sending a real vector table with a real
+    /// pin count; the probe below sends a made-up vector with `pin_count = 40`,
+    /// which no logic part has. Deriving the self-test's vector encoding by
+    /// trial would be inventing protocol against hardware, so it stops here:
+    /// the remaining unknown is exactly what a USB capture of the vendor's
+    /// self test would supply.
+    ///
     /// Of particular interest: `contact_check` (`0x3e`) was shown to return a
     /// byte-identical payload under the SPI bitstream regardless of socket
     /// state. If it carries real data under a *test* bitstream, that explains
@@ -1770,6 +1799,27 @@ mod tests {
             pins[0] = CMD_PIN_DETECTION;
             if let Ok(v) = t.cmd(&pins, 32) {
                 out.push(("pins:0x3e", v));
+            }
+            // The logic test reads per-pin state back through 0x28 rather than
+            // any status register, so a pin-driver self-test plausibly does
+            // too. Lowest voltage code (0x03 = 1.8 V) and the all-0xf vector
+            // the logic path leaves as filler, which drives nothing.
+            for (label, pull, fill) in [
+                ("vec:0x28 idle", 0u8, 0xffu8), // all-0xf: drives nothing
+                ("vec:0x28 pull1", 1u8, 0xff),
+                // Alternating nibbles: if the read-back path is live it should
+                // mirror a driven pattern rather than staying uniformly zero.
+                ("vec:0x28 alt", 0, 0x10),
+                ("vec:0x28 low", 0, 0x00),
+            ] {
+                let mut msg = [fill; 32];
+                msg[0] = 0x28;
+                msg[1] = 0x03 | (pull << 7); // 0x03 = 1.8 V, the lowest code
+                le16(&mut msg, 2, 40);
+                le32(&mut msg, 4, 0);
+                if let Ok(v) = t.cmd(&msg, 32) {
+                    out.push((label, v));
+                }
             }
             out
         }
