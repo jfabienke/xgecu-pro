@@ -114,12 +114,28 @@ const ALGO_TABLE: &[&str] = &[
 /// use minipro_core::device::Device;
 /// let dev = Device { protocol_id: 0x07, variant: 0x3200, ..Default::default() };
 /// assert_eq!(minipro_db::algorithm_name(&dev).as_deref(), Some("ROM28P32"));
+///
+/// // An unset algorithm number is no algorithm, not algorithm zero.
+/// let blank = Device { protocol_id: 0x2a, variant: 0x0000, ..Default::default() };
+/// assert_eq!(minipro_db::algorithm_name(&blank), None);
 /// ```
 pub fn algorithm_name(dev: &Device) -> Option<String> {
     let pid = dev.protocol_id;
     let idx = (pid as usize).checked_sub(1)?;
     let prefix = ALGO_TABLE.get(idx).copied().filter(|s| !s.is_empty())?;
     let algo_number = (dev.variant >> 8) as u8;
+    // Algorithm number zero means the catalog entry has no algorithm, not that
+    // it uses algorithm 0: no shipped bitstream is numbered `00`, and the one
+    // device that reaches here (`GAL16V8@SOIC20`, variant 0x0000) has a sibling
+    // `GAL16V8` at variant 0xa101 that resolves properly. Without this the name
+    // is invented — `GAL1600` — and the miss is reported as a gap in the vendor
+    // archive rather than an empty field in it.
+    //
+    // The vendor's *utility* indices do start at zero (`TEST_100M` is 0x00), but
+    // utility bitstreams are fetched by name here, never through `variant`.
+    if algo_number == 0 {
+        return None;
+    }
     let mut name = String::from(prefix);
     match pid {
         0x31 => {
