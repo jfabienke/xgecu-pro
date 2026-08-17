@@ -22,7 +22,7 @@ This is a **young project handling real hardware**. Honest state of play:
 | Path | Status |
 |---|---|
 | **T76 reads** | ✅ **Hardware-verified** — byte-identical to known-good dumps, stable over repeated reads |
-| **T76 write / erase / NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device** |
+| **T76 write / erase / NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device** — `write --dry-run` checks the setup without programming |
 | **T56 / T48 (all operations)** | ⚠️ Complete drivers, **never run against real silicon** — no T48/T56 hardware here |
 | **T76 pin-contact check** | ❌ Wired up but **measures nothing** — the device returns a constant, so it warns and never blocks |
 | **`@ISP_VGA` parts** (monitor EDID, MStar scaler flash) | ❌ Not implemented — refused with a reason; the C tool rejects these too |
@@ -110,6 +110,12 @@ Design notes worth knowing: reads are **verified by default** (re-read stability
 plus crc32/sha256 in the outcome), and the type system encodes the T76's nastiest
 hardware quirk — an undrained USB response wedges the device until replug, so the
 must-drain guard makes forgetting it a compile error.
+
+`write --dry-run` runs every step up to the moment of programming and stops:
+image and size validation, the FPGA bitstream upload, the per-chip-class
+`BEGIN_TRANS`, the contact check, and the chip-id match. It energizes the socket
+exactly as a read does — `begin()` takes only the device, not the operation — so
+it is safe on parts a bad write would destroy, like an OTP EPROM.
 
 ## Output modes
 

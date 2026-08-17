@@ -146,6 +146,11 @@ enum Command {
         /// Skip the pin-contact check
         #[arg(long)]
         skip_pincheck: bool,
+        /// Run every step up to the point of programming, then stop without
+        /// modifying the chip. Energizes the socket exactly as a read does, so
+        /// it is safe on one-time-programmable parts.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Erase the whole chip
     Erase {
@@ -229,6 +234,8 @@ impl Cli {
                 format: Fmt::Auto,
                 force: false,
                 skip_pincheck: false,
+                // The legacy -p/-w form predates the flag and always commits.
+                dry_run: false,
             })),
             (Some(_), None, None) => Err(Error::Format(
                 "-p needs -r FILE (read) or -w FILE (write)".into(),
@@ -342,6 +349,7 @@ fn main() -> ExitCode {
             format,
             force,
             skip_pincheck,
+            dry_run,
         } => run_write(
             db_dir,
             chip,
@@ -349,6 +357,7 @@ fn main() -> ExitCode {
             *format,
             *force,
             *skip_pincheck,
+            *dry_run,
             &mut *reporter_for(mode),
         ),
         Command::Erase { chip } => run_erase(db_dir, chip, &mut *reporter_for(mode)),
@@ -713,6 +722,7 @@ fn run_write(
     format: Fmt,
     force: bool,
     skip_pincheck: bool,
+    dry_run: bool,
     rep: &mut dyn Reporter,
 ) -> Result<()> {
     let db = load_db(db_dir, rep)?;
@@ -726,6 +736,17 @@ fn run_write(
         let (p, s) = txn.parts();
         pincheck(p, s, skip_pincheck, rep)?;
         check_chip_id(p, s, &dev, force, rep)?;
+        // Everything above is what a read does too — `Txn::begin` takes only the
+        // device, so the socket is energized identically either way. The single
+        // destructive step is below, which is what `--dry-run` skips: it makes
+        // the setup verifiable on parts that cannot survive a bad write (an OTP
+        // EPROM, or anything whose contents matter).
+        if dry_run {
+            rep.finish(&Outcome::Ok {
+                op: "write-dry-run",
+            });
+            return Ok(());
+        }
         ops::write_region(p, s, Region::code(&dev), &image, rep)?;
     }
 
@@ -971,6 +992,29 @@ mod tests {
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(args).expect("args parse")
+    }
+
+    /// `--dry-run` must be opt-in. A default that skipped the write would be a
+    /// silent no-op; a default that committed when asked not to would destroy a
+    /// part. Both directions are worth pinning.
+    #[test]
+    fn dry_run_is_opt_in_and_reaches_the_command() {
+        let plain = parse(&["minipro", "write", "CHIP@DIP28", "rom.bin"]);
+        match plain.command {
+            Some(Command::Write { dry_run, .. }) => assert!(!dry_run, "must commit by default"),
+            other => panic!("expected a write command, got {other:?}"),
+        }
+        let dry = parse(&["minipro", "write", "CHIP@DIP28", "rom.bin", "--dry-run"]);
+        match dry.command {
+            Some(Command::Write { dry_run, .. }) => assert!(dry_run, "--dry-run must be honoured"),
+            other => panic!("expected a write command, got {other:?}"),
+        }
+        // The legacy -p/-w form has no such flag and must never dry-run.
+        let legacy = parse(&["minipro", "-p", "CHIP@DIP28", "-w", "rom.bin"]);
+        match legacy.resolve_command().expect("resolves") {
+            Some(Command::Write { dry_run, .. }) => assert!(!dry_run),
+            other => panic!("expected a write command, got {other:?}"),
+        }
     }
 
     /// `@ISP_VGA` parts are programmed down a display cable, not through the
