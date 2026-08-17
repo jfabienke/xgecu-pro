@@ -1009,9 +1009,10 @@ impl Programmer for T76 {
     fn caps(&self) -> Caps {
         // Logic test / autodetect upload utility bitstreams (TestLgcPull/Down,
         // SPI25F*) fetched from algoT76/ by name, per pass.
+        // No PINTEST: `0x3e` does not measure the socket on this device, and
+        // issuing it corrupts the read that follows. See `impl PinTest for T76`.
         Caps::MEMORY
             | Caps::EMMC
-            | Caps::PINTEST
             | Caps::FWUPDATE
             | Caps::FUSES
             | Caps::JEDEC
@@ -1113,9 +1114,9 @@ impl Programmer for T76 {
     fn emmc(&mut self) -> Option<&mut dyn EmmcOps> {
         Some(self)
     }
-    fn pins(&mut self) -> Option<&mut dyn PinTest> {
-        Some(self)
-    }
+    // No `pins()` upcast: not advertising PINTEST is what stops `pincheck` from
+    // running, and running it destroys the subsequent read. `PinTest` is still
+    // implemented below so the finding — and the decode — stay on the record.
     fn firmware(&mut self) -> Option<&mut dyn FirmwareUpdate> {
         Some(self)
     }
@@ -1509,11 +1510,23 @@ impl PinTest for T76 {
     /// on *every* run, which made the contact check fail spuriously and forced
     /// `--skip-pincheck`.
     ///
-    /// # This does not measure the socket
+    /// # Not reachable: the T76 does not advertise PINTEST
     ///
-    /// The payload is decoded as an LSB-first bitmask over the 40 ZIF
-    /// positions, which is how the vendor surfaces it. On the T76 that reading
-    /// is **wrong**, and the evidence is now direct rather than circumstantial:
+    /// This is left implemented because the decode and the evidence are worth
+    /// keeping, but [`Programmer::pins`] returns `None` for the T76, so nothing
+    /// calls it. Two separate reasons, either of which is sufficient.
+    ///
+    /// **It destroys the read that follows.** Measured on an `MX27C2000@DIP32`:
+    /// issuing `0x3e` between `BEGIN_TRANS` and the operation turns a correct
+    /// `c220` electronic id into `00ff`, and — with the id check forced past —
+    /// corrupts **244,827 of 262,144 bytes** of the data read. The wreckage has
+    /// no printable strings at all where the good dump has 565. Worst of all it
+    /// is *consistent*, so the built-in re-read verification reports
+    /// `stable: true` on the corrupted image and the caller is told the dump is
+    /// good. Silently wrong with a green result, on the one operation this
+    /// project is trusted for.
+    ///
+    /// **And it never measured anything anyway:**
     ///
     /// - The reply is byte-identical across every socket state tried — empty,
     ///   clip attached, adapter seated — and across every uploaded bitstream,
