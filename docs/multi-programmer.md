@@ -13,7 +13,7 @@ than an error.*
 | Threading model | **Ready.** `Transport: Send`, `Programmer: Send`, no shared mutable state |
 | Chip database | **Ready.** `DllDb` is `Send + Sync` and read-only after load — share one `Arc` |
 | Device selection | **Missing.** `open_device` takes the first `vid:pid` match |
-| Reset re-arm | **Unsafe.** Can silently re-arm onto a *different* programmer |
+| Reset re-arm | **Fixed.** Refuses rather than re-arm a different unit (§3) |
 | Power / bandwidth | **Bounded.** Physical limits bite before the software does |
 
 Nothing here requires re-architecting. The work is one small correctness fix,
@@ -95,10 +95,27 @@ or an error:
 Wrong data, silently, with a green result. For a production run that is the
 worst available outcome.
 
-The hardware test `live_command_roundtrip_survives_reset` asserts the
-system-info device code is unchanged across a reset, which catches this in
-CI-with-hardware. **The production path has no equivalent guard.** Adding one is
-cheap: remember the identity at open, and refuse to re-arm anything else.
+### Fixed
+
+`UsbTransport` now records which unit it opened and re-arms only that one. The
+selector is explicit about the three cases:
+
+- `Select::Any` — first match, still correct for an **initial** open, where any
+  attached programmer of the right model will do.
+- `Select::Serial(s)` — exactly the unit with that USB serial.
+- `Select::Sole` — the only match, **erroring if there is more than one**.
+
+Because the T76 reports no serial (§4), reset takes the `Sole` path: with two
+programmers attached it stops with a message saying the reset unit cannot be
+told apart, instead of continuing against whichever answered. Refusing is the
+point — silently binding to the wrong device is the failure this prevents.
+
+The hardware test `live_command_roundtrip_survives_reset` additionally checks the
+system-info device code is unchanged across a reset, so the guarantee is verified
+at both layers.
+
+**Not verified here:** the ambiguous branch needs two programmers attached, and
+only one is available. The single-device path is hardware-verified.
 
 ## 4. What identifies a programmer
 
@@ -106,18 +123,24 @@ cheap: remember the identity at open, and refuse to re-arm anything else.
 
 | Field | Stable across replug? | Notes |
 |---|---|---|
-| `serial_number()` | Yes | The right key — **if** the T76 populates the descriptor (unverified) |
+| `serial_number()` | Yes | **The T76 returns `None`** — measured, see below |
 | `bus_id()` + `device_address()` | No | Identifies a *port*, not a unit — which may be what a fixed rack wants |
 | `product_string()` / `manufacturer_string()` | Yes | Not unique between units |
 
-One caveat worth stating plainly: the serial in `minipro info`
-(`4NDKOPR01U1DSHVEH7AQ5935`) comes from the **system-info report**, not the USB
-string descriptor. Keying on it means open-then-query — workable (open each
-candidate, ask, keep the match) but not a pre-open filter.
+**Settled, and it constrains the design: the T76 exposes no USB serial string
+descriptor.** `serial_number()` is `None` on a live device (printed by the
+`reset_reenumeration_timing` hardware test). So there is no cheap pre-open key
+that distinguishes two T76s.
 
-**Open question:** does the T76 populate its USB serial string descriptor? This
-needs one enumeration against real hardware to settle, and it decides whether
-selection can be a cheap pre-open filter or must open-and-interrogate.
+The serial in `minipro info` (`4NDKOPR01U1DSHVEH7AQ5935`) is a **system-info
+report** field, not a descriptor. Reaching it means opening the device and
+issuing a command, so per-unit selection has to be open-each-candidate,
+ask-who-you-are, keep-the-match — with `bus_id()` + `device_address()` as the
+only pre-open discriminator, and that names a port rather than a unit.
+
+This is why §3's fix refuses instead of re-identifying: with no descriptor
+serial there is nothing to match on, so the only safe response to an ambiguous
+re-enumeration is to stop.
 
 ## 5. Threads, not processes
 
@@ -172,9 +195,11 @@ impl UsbTransport {
 }
 ```
 
-`UsbTransport` stores the `ProgrammerId` it opened. `reset()` re-opens **that**
-device and returns a typed error rather than silently binding to another unit if
-it cannot be found again.
+`UsbTransport` already stores the identity it opened and re-opens **that** device
+on reset, returning a typed error rather than binding to another unit (§3). What
+this sketch adds is making the identity *selectable* from outside — and since the
+T76 has no descriptor serial (§4), `serial` here has to come from the
+system-info report, so `list_programmers` must open each candidate to fill it in.
 
 CLI surface: `--device <serial>` to pin one unit, and a listing subcommand so an
 operator can see what the host sees.
@@ -187,12 +212,17 @@ line carries its own outcome, so adding a device field makes runs attributable.
 
 Ordered by value, not by size.
 
-1. **Pin the identity across `reset`** — S. A correctness fix worth having even
-   with one programmer, and independent of everything else here.
-2. **`list_programmers()` + `open_id()`** — S/M. The selection API.
-3. **Confirm the USB serial descriptor** — S 🔌. One enumeration; decides
-   whether selection is pre-open or open-and-query.
-4. **`--device` flag and a listing subcommand** — S ⛓️ (needs 2).
+1. ~~**Pin the identity across `reset`**~~ — **done** (§3). Reset re-arms only
+   the unit it opened, and refuses when it cannot tell which that was.
+2. **`list_programmers()` + `open_id()`** — M. The selection API. Larger than
+   first scoped: with no descriptor serial (§4) this cannot be a pre-open
+   filter, so it has to open each candidate, read its system-info serial, and
+   keep the match — which means the transport layer needs to either carry a
+   protocol query or hand candidates up to a caller that can.
+3. ~~**Confirm the USB serial descriptor**~~ — **done** (§4). The T76 reports
+   `None`, which is what reshaped item 2.
+4. **`--device <serial>` flag and a listing subcommand** — S ⛓️ (needs 2), where
+   the serial is the system-info one, not a USB descriptor field.
 5. **Worker pool with a shared `Arc<DllDb>`** — M ⛓️ (needs 2).
 6. **Measure the real ceiling** — M 🔌. Per-unit current under VPP load, and
    throughput scaling per host controller. Replaces the estimate in §6.

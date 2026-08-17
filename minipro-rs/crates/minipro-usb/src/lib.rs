@@ -82,6 +82,24 @@ pub struct UsbTransport {
     link: LinkSpeed,
     vid: u16,
     pid: u16,
+    /// USB serial of the unit this transport opened, when the device reports
+    /// one. Load-bearing across [`Transport::reset`]: it is what stops the
+    /// re-arm from binding to a different programmer. `None` when the device
+    /// exposes no serial descriptor, which reset handles by refusing to guess.
+    serial: Option<String>,
+}
+
+/// Which physical device [`open_device`] should pick when several share a
+/// `vid:pid`.
+enum Select<'a> {
+    /// First match — correct for an initial open, where any attached
+    /// programmer of the right model will do.
+    Any,
+    /// Exactly the unit with this USB serial.
+    Serial(&'a str),
+    /// The only match, refusing if there is more than one. Used when re-arming
+    /// a device that reports no serial: continuing would mean guessing.
+    Sole,
 }
 
 impl UsbTransport {
@@ -92,7 +110,7 @@ impl UsbTransport {
     /// the bulk command endpoints 0x01 OUT / 0x81 IN, and records the
     /// negotiated link speed.
     pub fn open(vid: u16, pid: u16) -> Result<Self> {
-        let (device, interface, link) = open_device(vid, pid)?;
+        let (device, interface, link, serial) = open_device(vid, pid, Select::Any)?;
         let mut tx = UsbTransport {
             device,
             interface: Some(interface),
@@ -101,6 +119,7 @@ impl UsbTransport {
             link,
             vid,
             pid,
+            serial,
         };
         // Claim the command pair eagerly: if 0x01/0x81 are missing or not bulk
         // this is the wrong device, and we want to fail in open, not on the
@@ -254,14 +273,26 @@ impl Transport for UsbTransport {
         // time. Polling promptly costs nothing when the device is slower, and
         // `open_device` already absorbs a transient claim failure internally.
         // The deadline stays generous for loaded or slower hosts.
+        // Re-arm *this* unit, not whichever answers first. Matching on vid:pid
+        // alone is safe with one programmer attached and silently wrong with
+        // two: the transport would carry on against a different device, so a
+        // write would land in the wrong chip and the verify read would go to
+        // that same wrong chip and pass. Cloned up front because the match arm
+        // needs `&mut self`.
+        let want_serial = self.serial.clone();
         let deadline = std::time::Instant::now() + REENUMERATE_TIMEOUT;
         loop {
             std::thread::sleep(REENUMERATE_POLL);
-            match open_device(self.vid, self.pid) {
-                Ok((device, interface, link)) => {
+            let sel = match want_serial.as_deref() {
+                Some(s) => Select::Serial(s),
+                None => Select::Sole,
+            };
+            match open_device(self.vid, self.pid, sel) {
+                Ok((device, interface, link, serial)) => {
                     self.device = device;
                     self.interface = Some(interface);
                     self.link = link;
+                    self.serial = serial;
                     self.out_ep(EP_CMD_OUT)?;
                     self.in_ep(EP_CMD_IN)?;
                     return Ok(());
@@ -300,15 +331,48 @@ fn no_device_error(last: Option<Error>) -> Error {
     }
 }
 
-/// Enumerate, open, arm (T76 only), and claim interface 0 of `vid:pid`.
-fn open_device(vid: u16, pid: u16) -> Result<(nusb::Device, nusb::Interface, LinkSpeed)> {
+/// Enumerate, open, arm (T76 only), and claim interface 0 of `vid:pid`,
+/// choosing between multiple attached units per `sel`. Also returns the chosen
+/// unit's USB serial, so a later reset can insist on the same one.
+fn open_device(
+    vid: u16,
+    pid: u16,
+    sel: Select<'_>,
+) -> Result<(nusb::Device, nusb::Interface, LinkSpeed, Option<String>)> {
     let devices = nusb::list_devices()
         .wait()
         .map_err(|e| Error::Usb(format!("enumerate: {e}")))?;
-    let info = devices
+    let mut found: Vec<_> = devices
         .into_iter()
-        .find(|d| d.vendor_id() == vid && d.product_id() == pid)
-        .ok_or_else(|| Error::Usb(format!("no programmer found ({vid:04x}:{pid:04x})")))?;
+        .filter(|d| d.vendor_id() == vid && d.product_id() == pid)
+        .collect();
+    // The "no programmer found" wording is a contract with `no_device_error`,
+    // which keys on it to decide between a clean listing and a verbatim error.
+    let absent = || Error::Usb(format!("no programmer found ({vid:04x}:{pid:04x})"));
+    let info = match sel {
+        Select::Any => found.into_iter().next().ok_or_else(absent)?,
+        Select::Serial(want) => found
+            .into_iter()
+            .find(|d| d.serial_number().is_some_and(|s| s == want))
+            .ok_or_else(|| {
+                Error::Usb(format!(
+                    "programmer {want} did not come back after its reset; \
+                     refusing to continue against a different unit"
+                ))
+            })?,
+        Select::Sole => {
+            if found.len() > 1 {
+                return Err(Error::Usb(format!(
+                    "{} programmers match {vid:04x}:{pid:04x} and this one reports no USB \
+                     serial, so the unit that was reset cannot be told apart from the others; \
+                     leave one attached, or reopen explicitly",
+                    found.len()
+                )));
+            }
+            found.pop().ok_or_else(absent)?
+        }
+    };
+    let serial = info.serial_number().map(|s| s.to_string());
     let link = link_speed_from(info.speed());
     let device = info
         .open()
@@ -349,7 +413,7 @@ fn open_device(vid: u16, pid: u16) -> Result<(nusb::Device, nusb::Interface, Lin
         Error::Usb(format!("claim interface 0: {detail}"))
     })?;
 
-    Ok((device, interface, link))
+    Ok((device, interface, link, serial))
 }
 
 /// Map nusb's negotiated speed onto the trait's three-way [`LinkSpeed`].
@@ -452,9 +516,14 @@ mod tests {
 
         let mut worst_ready = Duration::ZERO;
         for round in 1..=ROUNDS {
-            let (device, interface, _) =
-                open_device(T76_VID, T76_PID).expect("a T76 must be connected");
+            let (device, interface, _, serial) =
+                open_device(T76_VID, T76_PID, Select::Any).expect("a T76 must be connected");
             drop(interface);
+            // Whether the T76 exposes a serial decides how `reset` re-arms:
+            // by serial if present, else by insisting it is the sole match.
+            if round == 1 {
+                println!("usb serial descriptor: {serial:?}");
+            }
 
             let t = Instant::now();
             device.reset().wait().expect("device reset");
@@ -482,7 +551,7 @@ mod tests {
             let mut attempts = 0usize;
             let ready = loop {
                 attempts += 1;
-                if open_device(T76_VID, T76_PID).is_ok() {
+                if open_device(T76_VID, T76_PID, Select::Any).is_ok() {
                     break t.elapsed();
                 }
                 assert!(t.elapsed() < GIVE_UP, "never became claimable");
