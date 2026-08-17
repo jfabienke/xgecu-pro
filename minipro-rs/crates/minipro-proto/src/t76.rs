@@ -1509,14 +1509,27 @@ impl PinTest for T76 {
     /// on *every* run, which made the contact check fail spuriously and forced
     /// `--skip-pincheck`.
     ///
-    /// # Unverified
+    /// # This does not measure the socket
     ///
     /// The payload is decoded as an LSB-first bitmask over the 40 ZIF
-    /// positions, which is how the vendor surfaces it. That reading is **not
-    /// confirmed**: an empty socket ought to mean "every pin open" under either
-    /// polarity, yet the payload is `33 00 10 …` rather than a uniform pattern.
-    /// Until known-good and known-bad seatings are correlated on hardware the
-    /// pin list is a hint, which is why the caller warns instead of aborting.
+    /// positions, which is how the vendor surfaces it. On the T76 that reading
+    /// is **wrong**, and the evidence is now direct rather than circumstantial:
+    ///
+    /// - The reply is byte-identical across every socket state tried — empty,
+    ///   clip attached, adapter seated — and across every uploaded bitstream,
+    ///   including the logic-test ones. A constant cannot be a measurement.
+    /// - The payload is *stale buffer*. A full 32-byte reply reads
+    ///   `3e 00 30 00 10 00 00 00 | 32 30 32 36 2d 30 33 2d …` — and
+    ///   `32 30 32 36 2d 30 33 2d` is ASCII `"2026-03-"`, the manufacture date
+    ///   left over from an earlier system-info reply. The firmware does not
+    ///   zero its reply buffer, so most of what is decoded as a pin mask is
+    ///   the tail of a previous, unrelated response.
+    ///
+    /// So the pin list is noise, which is why the caller warns instead of
+    /// aborting. Reaching a real socket diagnostic needs the sequence XGPro
+    /// uses with `TestGND`/`TestVcc` — see the `discover_self_test_bitstreams`
+    /// harness, which establishes that uploading them changes nothing
+    /// observable through any command we currently know.
     fn contact_check(&mut self, s: &Session) -> Result<Vec<u8>> {
         let mut msg = [0u8; 8];
         msg[0] = CMD_PIN_DETECTION;
@@ -1684,6 +1697,105 @@ mod tests {
     use minipro_core::device::{Algorithm, Package};
     use minipro_usb::MockTransport;
     use std::collections::VecDeque;
+
+    /// Discovery harness for the three self-test bitstreams XGPro ships but
+    /// nothing here drives: `TestGND`, `TestVcc`, `Test_100M`.
+    ///
+    /// No capture tells us what to send after uploading one, so rather than
+    /// guess a sequence this drives the *known* read-only probes before and
+    /// after each upload and prints what comes back. Whatever changes is the
+    /// signal; whatever does not is dead. `TestLgcPull` is included as a
+    /// control because its use is already known-good.
+    ///
+    /// Of particular interest: `contact_check` (`0x3e`) was shown to return a
+    /// byte-identical payload under the SPI bitstream regardless of socket
+    /// state. If it carries real data under a *test* bitstream, that explains
+    /// the dead contact check and hands us a working socket diagnostic.
+    ///
+    /// **The ZIF socket must be empty** — these bitstreams drive socket pins
+    /// with patterns meant for a test fixture.
+    ///
+    /// ```text
+    /// MINIPRO_DB_DIR="$HOME/Library/Caches/minipro/xgpro" \
+    ///   cargo test -p minipro-proto --lib -- --ignored --nocapture discover_self_test
+    /// ```
+    #[test]
+    #[ignore = "requires a connected T76 with an EMPTY socket, and MINIPRO_DB_DIR"]
+    fn discover_self_test_bitstreams() {
+        use minipro_db::{ChipDb, DllDb};
+        use minipro_usb::{UsbTransport, T76_PID, T76_VID};
+
+        let Some(dir) = std::env::var_os("MINIPRO_DB_DIR") else {
+            println!("set MINIPRO_DB_DIR to an unpacked Xgpro_T76 directory");
+            return;
+        };
+        let db = DllDb::load(std::path::Path::new(&dir)).expect("load database");
+        let tx = UsbTransport::open(T76_VID, T76_PID).expect("a T76 must be connected");
+        let mut t76 = T76::new(Box::new(tx));
+
+        /// Every read-only probe we know how to issue, so a change anywhere is visible.
+        fn probes(t: &mut T76) -> Vec<(&'static str, Vec<u8>)> {
+            let mut out = Vec::new();
+            if let Ok(v) = t.cmd(&[0u8; 5], 64) {
+                out.push(("sysinfo", v));
+            }
+            let mut status = [0u8; 8];
+            status[0] = CMD_REQUEST_STATUS;
+            if let Ok(v) = t.cmd(&status, 32) {
+                out.push(("status:0x39", v));
+            }
+            let mut pins = [0u8; 8];
+            pins[0] = CMD_PIN_DETECTION;
+            if let Ok(v) = t.cmd(&pins, 32) {
+                out.push(("pins:0x3e", v));
+            }
+            out
+        }
+
+        let hex = |b: &[u8]| -> String {
+            b.iter()
+                .map(|x| format!("{x:02x}"))
+                .collect::<Vec<_>>()
+                .join("")
+        };
+
+        println!("=== baseline (no test bitstream uploaded) ===");
+        let baseline = probes(&mut t76);
+        for (n, v) in &baseline {
+            println!("  {n:<12} {}", hex(v));
+        }
+
+        for name in ["TestGND", "TestVcc", "Test_100M", "TestLgcPull"] {
+            let Ok(Some(algo)) = db.load_algorithm_named(name) else {
+                println!("\n=== {name}: NOT FOUND in the database ===");
+                continue;
+            };
+            println!("\n=== {name} ({} bytes) ===", algo.bitstream.len());
+            if let Err(e) = t76.write_bitstream_named(name, &algo.bitstream, true) {
+                println!("  upload failed: {e}");
+                continue;
+            }
+            for (n, v) in probes(&mut t76) {
+                let base = baseline.iter().find(|(bn, _)| *bn == n).map(|(_, b)| b);
+                // The sysinfo voltage field is a live ADC reading that jitters
+                // by a few mV between reads; comparing it would report every
+                // upload as a change and hide whether anything real moved.
+                let significant = |b: &[u8], v: &[u8]| -> bool {
+                    if n == "sysinfo" && b.len() >= 60 && v.len() >= 60 {
+                        b[..56] != v[..56] || b[60..] != v[60..]
+                    } else {
+                        b != v
+                    }
+                };
+                let changed = base.is_none_or(|b| significant(b, &v));
+                println!(
+                    "  {n:<12} {}  {}",
+                    hex(&v),
+                    if changed { "<-- CHANGED" } else { "(same)" }
+                );
+            }
+        }
+    }
 
     /// Records every OUT packet (with its endpoint) and pops canned IN
     /// responses in order, logging the requested (ep, len).

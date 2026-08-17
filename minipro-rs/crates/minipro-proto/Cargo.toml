@@ -19,5 +19,8 @@ tracing.workspace = true
 minipro-core = { path = "../minipro-core" }
 
 [dev-dependencies]
+# Hardware tests need a real transport and real bitstreams. Dev-only: the
+# driver itself must not depend on a database or a transport implementation.
+minipro-db = { path = "../minipro-db" }
 minipro-usb = { path = "../minipro-usb" }
 proptest.workspace = true
