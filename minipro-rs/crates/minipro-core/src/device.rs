@@ -70,6 +70,13 @@ pub mod chip_type {
     pub const PLD: u8 = 0x03;
     pub const SRAM: u8 = 0x04;
     pub const LOGIC: u8 = 0x05;
+    pub const NAND: u8 = 0x06;
+    pub const EMMC: u8 = 0x07;
+    /// In-system programming through a display's VGA connector: the monitor's
+    /// EDID EEPROM over the DDC/I²C pins, and MStar scaler firmware in an
+    /// external SPI flash. A transport of its own, not a socket operation —
+    /// and not implemented here (nor in the C tool, which rejects it too).
+    pub const VGA: u8 = 0x08;
 }
 
 /// eMMC hardware partition (T76 `--partition`).

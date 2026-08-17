@@ -559,10 +559,23 @@ fn load_db(dir: Option<&Path>, rep: &mut dyn Reporter) -> Result<Box<dyn ChipDb>
 /// Look up a chip and attach its FPGA bitstream from `algorithm.xml` (the DB
 /// stores chip parameters and bitstreams separately; `begin` needs both).
 fn lookup_device(db: &dyn ChipDb, chip: &str) -> Result<minipro_core::device::Device> {
+    use minipro_core::device::chip_type;
     let mut dev = db
         .get(chip)
         .cloned()
         .ok_or(Error::Unsupported("unknown chip (try `minipro search`)"))?;
+    // The catalog lists 30 `@ISP_VGA` parts — monitor EDID EEPROMs and MStar
+    // scaler flash — which are programmed down a display cable rather than
+    // through the ZIF socket. Without that rejection the algorithm resolves and
+    // the socket path runs anyway, failing later with something unrelated to
+    // the real reason. Caught here so every operation reports it the same way;
+    // `search` does not come through here, so they stay discoverable.
+    if dev.chip_type == chip_type::VGA {
+        return Err(Error::Unsupported(
+            "programming over a display's VGA/DDC connection is not implemented \
+             (@ISP_VGA parts: monitor EDID and MStar scaler flash)",
+        ));
+    }
     dev.algorithm = db.load_algorithm(&dev)?;
     Ok(dev)
 }
@@ -957,6 +970,57 @@ mod tests {
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(args).expect("args parse")
+    }
+
+    /// `@ISP_VGA` parts are programmed down a display cable, not through the
+    /// ZIF socket. Without the gate in `lookup_device` the algorithm resolves
+    /// and the socket path runs anyway, so the user sees a failure unrelated to
+    /// the real reason. The C tool rejects these too.
+    #[test]
+    fn vga_devices_are_rejected_with_a_reason() {
+        use minipro_core::device::{chip_type, Algorithm, Device};
+        use minipro_core::error::FwVersion;
+        use minipro_db::Search;
+
+        struct Db(Device);
+        impl ChipDb for Db {
+            fn get(&self, name: &str) -> Option<&Device> {
+                (name == self.0.name).then_some(&self.0)
+            }
+            fn search(&self, _q: &str, _l: usize) -> Search<'_> {
+                Search {
+                    total: 0,
+                    hits: Vec::new(),
+                    truncated: false,
+                }
+            }
+            fn firmware_target(&self) -> FwVersion {
+                FwVersion(0x0111)
+            }
+            fn load_algorithm(&self, _d: &Device) -> Result<Option<Algorithm>> {
+                Ok(None)
+            }
+        }
+
+        let vga = Db(Device {
+            name: "EDID_128B@ISP_VGA".into(),
+            chip_type: chip_type::VGA,
+            ..Device::default()
+        });
+        let err = lookup_device(&vga, "EDID_128B@ISP_VGA").expect_err("must be rejected");
+        assert_eq!(err.code(), "unsupported");
+        let msg = err.to_string();
+        assert!(msg.contains("VGA/DDC"), "must name the interface: {msg}");
+        assert!(msg.contains("ISP_VGA"), "must name the parts: {msg}");
+
+        // A socket part of the same shape must still resolve — the gate keys on
+        // the chip type, not on anything incidental.
+        let ok = Db(Device {
+            name: "W25Q64BV@SOIC8".into(),
+            chip_type: chip_type::MEMORY,
+            ..Device::default()
+        });
+        assert!(lookup_device(&ok, "W25Q64BV@SOIC8").is_ok());
     }
 
     #[test]
