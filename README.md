@@ -210,6 +210,7 @@ Reverse-engineering and analysis, useful independently of the Rust code:
 | [`minipro-codebase-report.md`](docs/minipro-codebase-report.md) | Review of the upstream C implementation |
 | [`minipro-setup.md`](docs/minipro-setup.md) | Building the C fork locally — the reference this project is checked against |
 | [`rust-redesign.md`](docs/rust-redesign.md) · [`rust-trait-model.md`](docs/rust-trait-model.md) · [`rust-roadmap.md`](docs/rust-roadmap.md) | The design this project was built from, and what's next |
+| [`design-decisions.md`](docs/design-decisions.md) | The decisions in retrospect — what was chosen over the C's way, why, and how each fared against real silicon |
 | [`minipro-vs-rust.md`](docs/minipro-vs-rust.md) | Honest comparison with the C tool |
 | [`multi-programmer.md`](docs/multi-programmer.md) | Driving a bank of programmers in parallel — what's ready, and the reset bug to fix first |
 
