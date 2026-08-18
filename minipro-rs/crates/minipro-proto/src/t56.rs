@@ -474,12 +474,17 @@ impl MemoryOps for T56 {
             n => n,
         });
         let mut done = 0u64;
+        // Blank-check streams the region exactly as a read does, so it must
+        // announce the transfer the same way.
+        let blocks = region.len.div_ceil(step).min(u64::from(u32::MAX)) as u32;
         while done < region.len {
             let len = step.min(region.len - done) as u32;
             let req = BlockReq {
                 kind: region.kind,
                 address: region.offset + done,
                 len,
+                init: done == 0,
+                block_count: blocks,
             };
             if self
                 .read_block(s, &req)?
@@ -746,11 +751,7 @@ mod tests {
             device: dev.clone(),
             emmc_capacity: 0,
         };
-        let req = BlockReq {
-            kind: MemoryKind::Code,
-            address: 0x80,
-            len: 0x40,
-        };
+        let req = BlockReq::single(MemoryKind::Code, 0x80, 0x40);
         let out = t56.read_block(&s, &req).unwrap();
         assert_eq!(out, (0..0x40u8).collect::<Vec<u8>>());
         // 8-byte command: 0x0d, size 0x40 LE at [2], addr 0x80 LE at [4].
@@ -841,8 +842,8 @@ mod fuzz_replies {
             let _ = p.reset();
             let _ = p.begin(&dev());
             if let Some(m) = p.memory() {
-                let _ = m.read_block(&s, &BlockReq { kind: MemoryKind::Code, address: 0, len: 64 });
-                let _ = m.write_block(&s, &BlockReq { kind: MemoryKind::Code, address: 0, len: 4 }, &[0; 4]);
+                let _ = m.read_block(&s, &BlockReq::single(MemoryKind::Code, 0, 64));
+                let _ = m.write_block(&s, &BlockReq::single(MemoryKind::Code, 0, 4), &[0; 4]);
                 let _ = m.erase(&s, EraseKind::Chip);
                 let _ = m.blank_check(&s, Region { kind: MemoryKind::Code, offset: 0, len: 64 });
             }

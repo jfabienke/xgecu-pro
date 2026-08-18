@@ -1276,25 +1276,18 @@ impl MemoryOps for T76 {
         }
 
         match req.kind {
-            // MP_CODE: 16-byte 0x0d init, data on EP82.
-            // TODO(hw): the init should be sent once per region with the total
-            // block count, then one block drained per call; BlockReq is
-            // per-block, so each call opens a one-block stream (same layout,
-            // block_count = 1).
+            // MP_CODE: one 16-byte 0x0d init for the region, then a block
+            // drained per call from EP82.
             MemoryKind::Code => {
-                let mut msg = [0u8; 16];
-                msg[0] = CMD_READ_CODE;
-                le16(&mut msg, 2, req.len.min(u32::from(u16::MAX)) as u16);
-                le32(&mut msg, 4, req.address.min(u64::from(u32::MAX)) as u32);
-                le32(&mut msg, 8, 1); // block_count
-                command(
-                    self.tx.as_mut(),
-                    EP_MSG_OUT,
-                    EP_DAT_IN,
-                    &msg,
-                    req.len as usize,
-                )?
-                .read()
+                if req.init {
+                    let mut msg = [0u8; 16];
+                    msg[0] = CMD_READ_CODE;
+                    le16(&mut msg, 2, req.len.min(u32::from(u16::MAX)) as u16);
+                    le32(&mut msg, 4, req.address.min(u64::from(u32::MAX)) as u32);
+                    le32(&mut msg, 8, req.block_count);
+                    self.send(&msg)?;
+                }
+                self.tx.recv(EP_DAT_IN, req.len as usize)
             }
             // MP_DATA: 0x10, payload is 16 header bytes +
             // data on EP82.
@@ -1361,9 +1354,16 @@ impl MemoryOps for T76 {
                 le16(&mut msg, 2, req.len.min(u32::from(u16::MAX)) as u16);
                 le32(&mut msg, 4, req.address.min(u64::from(u32::MAX)) as u32);
                 le32(&mut msg, 12, req.len);
-                let mut init = msg;
-                le32(&mut init, 8, 1); // block_count, init only
-                self.send(&init)?;
+                // The whole transfer is announced once, with the real block
+                // count. Re-announcing per block (with a count of 1) leaves the
+                // device never entering a program cycle: it accepts every
+                // packet, reports no error, and programs nothing — measured on
+                // an MX27C2000, zero bits changed across a full 256 KiB write.
+                if req.init {
+                    let mut init = msg;
+                    le32(&mut init, 8, req.block_count);
+                    self.send(&init)?;
+                }
 
                 let mut pkt = Vec::with_capacity(16 + data.len());
                 pkt.extend_from_slice(&msg); // header with [8..11] zeroed
@@ -1464,12 +1464,17 @@ impl MemoryOps for T76 {
     fn blank_check(&mut self, s: &Session, region: Region) -> Result<bool> {
         let step = u64::from(self.block_size(s, region.kind));
         let mut done = 0u64;
+        // Blank-check streams the region exactly as a read does, so it must
+        // announce the transfer the same way.
+        let blocks = region.len.div_ceil(step).min(u64::from(u32::MAX)) as u32;
         while done < region.len {
             let len = step.min(region.len - done) as u32;
             let req = BlockReq {
                 kind: region.kind,
                 address: region.offset + done,
                 len,
+                init: done == 0,
+                block_count: blocks,
             };
             let block = self.read_block(s, &req)?;
             if block.iter().any(|&b| b != s.device.blank_value) {
@@ -2493,11 +2498,7 @@ mod tests {
         let dev = device(0x07, vec![]);
         let payload = vec![0x5au8; 0x40];
         let (mut t76, tx) = t76_with(vec![payload.clone()]);
-        let req = BlockReq {
-            kind: MemoryKind::Code,
-            address: 0x1000,
-            len: 0x40,
-        };
+        let req = BlockReq::single(MemoryKind::Code, 0x1000, 0x40);
         let got = t76.read_block(&session(&dev), &req).unwrap();
         assert_eq!(got, payload);
         // 16-byte 0x0d: size LE16 at [2], address LE32 at [4], block count at
@@ -2519,11 +2520,7 @@ mod tests {
         let mut raw = vec![0xeeu8; 16]; // header junk
         raw.extend(vec![0x77u8; 8]);
         let (mut t76, tx) = t76_with(vec![raw]);
-        let req = BlockReq {
-            kind: MemoryKind::Data,
-            address: 4,
-            len: 8,
-        };
+        let req = BlockReq::single(MemoryKind::Data, 4, 8);
         let got = t76.read_block(&session(&dev), &req).unwrap();
         assert_eq!(got, vec![0x77u8; 8]);
         let sent = tx.sent();
@@ -2540,11 +2537,7 @@ mod tests {
         let mut raw = vec![0u8; 16];
         raw.extend([1, 2, 3, 4]);
         let (mut t76, tx) = t76_with(vec![raw]);
-        let req = BlockReq {
-            kind: MemoryKind::User,
-            address: 0,
-            len: 4,
-        };
+        let req = BlockReq::single(MemoryKind::User, 0, 4);
         let got = t76.read_block(&session(&dev), &req).unwrap();
         assert_eq!(got, vec![1, 2, 3, 4]);
         // MP_USER reply comes back on EP81 (msg_recv), not EP82.
@@ -2556,11 +2549,7 @@ mod tests {
         let dev = device(0x07, vec![]);
         let data = vec![0xabu8; 0x40];
         let (mut t76, tx) = t76_with(vec![]);
-        let req = BlockReq {
-            kind: MemoryKind::Code,
-            address: 0x200,
-            len: 0x40,
-        };
+        let req = BlockReq::single(MemoryKind::Code, 0x200, 0x40);
         t76.write_block(&session(&dev), &req, &data).unwrap();
 
         let sent = tx.sent();
@@ -2586,11 +2575,7 @@ mod tests {
         let dev = device(0x07, vec![]);
         let data = [9u8, 8, 7, 6];
         let (mut t76, tx) = t76_with(vec![]);
-        let req = BlockReq {
-            kind: MemoryKind::User,
-            address: 0,
-            len: 4,
-        };
+        let req = BlockReq::single(MemoryKind::User, 0, 4);
         t76.write_block(&session(&dev), &req, &data).unwrap();
         let sent = tx.sent();
         assert_eq!(sent.len(), 1);
@@ -2610,11 +2595,7 @@ mod tests {
         let block = vec![0xffu8; 0x21000];
         let (mut t76, tx) = t76_with(vec![block.clone()]);
         // Block 2: address = 2 * 0x21000.
-        let req = BlockReq {
-            kind: MemoryKind::Code,
-            address: 2 * 0x21000,
-            len: 0x21000,
-        };
+        let req = BlockReq::single(MemoryKind::Code, 2 * 0x21000, 0x21000);
         let got = t76.read_block(&session(&dev), &req).unwrap();
         assert_eq!(got.len(), block.len());
         // 16-byte 0x0d with block index at [2..3] + fixed NAND header
@@ -2643,11 +2624,7 @@ mod tests {
         let block_len = 2112u32 * 64;
         let data: Vec<u8> = (0..block_len).map(|i| i as u8).collect();
         let (mut t76, tx) = t76_with(vec![vec![0u8; 32]]); // 0x39 commit reply
-        let req = BlockReq {
-            kind: MemoryKind::Code,
-            address: 0,
-            len: block_len,
-        };
+        let req = BlockReq::single(MemoryKind::Code, 0, block_len);
         t76.nand_write(&p, &req, &data).unwrap();
         let _ = s;
 
@@ -2705,11 +2682,7 @@ mod tests {
         let payload = vec![0x42u8; 0x10000];
         let (mut t76, tx) = t76_with(vec![payload.clone()]);
         // 64 KiB block at byte offset 0x200000 -> LBA 0x1000.
-        let req = BlockReq {
-            kind: MemoryKind::Code,
-            address: 0x20_0000,
-            len: 0x10000,
-        };
+        let req = BlockReq::single(MemoryKind::Code, 0x20_0000, 0x10000);
         let got = t76.read_block(&session(&dev), &req).unwrap();
         assert_eq!(got, payload);
 
@@ -2749,11 +2722,7 @@ mod tests {
             vec![0u8; 32], // first 0x39
             vec![0u8; 32], // second 0x39
         ]);
-        let req = BlockReq {
-            kind: MemoryKind::Code,
-            address: 0,
-            len: 0x10000,
-        };
+        let req = BlockReq::single(MemoryKind::Code, 0, 0x10000);
         t76.write_block(&session(&dev), &req, &data).unwrap();
 
         let sent = tx.sent();
@@ -3385,8 +3354,8 @@ mod fuzz_replies {
             let _ = p.reset();
             let _ = p.begin(&dev());
             if let Some(m) = p.memory() {
-                let _ = m.read_block(&s, &BlockReq { kind: MemoryKind::Code, address: 0, len: 64 });
-                let _ = m.write_block(&s, &BlockReq { kind: MemoryKind::Code, address: 0, len: 4 }, &[0; 4]);
+                let _ = m.read_block(&s, &BlockReq::single(MemoryKind::Code, 0, 64));
+                let _ = m.write_block(&s, &BlockReq::single(MemoryKind::Code, 0, 4), &[0; 4]);
                 let _ = m.erase(&s, EraseKind::Chip);
                 let _ = m.blank_check(&s, Region { kind: MemoryKind::Code, offset: 0, len: 64 });
             }

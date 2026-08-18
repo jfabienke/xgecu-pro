@@ -22,7 +22,8 @@ This is a **young project handling real hardware**. Honest state of play:
 | Path | Status |
 |---|---|
 | **T76 reads** | ✅ **Hardware-verified** — byte-identical to known-good dumps, stable over repeated reads |
-| **T76 write / erase / NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device** — `write --dry-run` checks the setup without programming |
+| **T76 write** (parallel EPROM) | ✅ **Hardware-verified** — programs and verifies correctly on an MX27C2000; other chip classes untested |
+| **T76 erase / NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device** — `write --dry-run` checks setup without programming |
 | **T56 / T48 (all operations)** | ⚠️ Complete drivers, **never run against real silicon** — no T48/T56 hardware here |
 | **T76 pin-contact check** | ❌ **Removed** — it measured nothing and *corrupted reads*; the T76 no longer advertises it |
 | **`@ISP_VGA` parts** (monitor EDID, MStar scaler flash) | ❌ Not implemented — refused with a reason; the C tool rejects these too |

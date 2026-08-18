@@ -28,12 +28,17 @@ pub fn read_region(
     let mut bytes = Vec::with_capacity(total as usize);
     rep.event(&Event::Progress { done: 0, total });
     let mut done = 0u64;
+    // The device is told the whole transfer once, on the first block; the rest
+    // stream against that setup. See `BlockReq::init`.
+    let blocks = total.div_ceil(step).min(u64::from(u32::MAX)) as u32;
     while done < total {
         let len = step.min(total - done) as u32;
         let req = BlockReq {
             kind: region.kind,
             address: region.offset + done,
             len,
+            init: done == 0,
+            block_count: blocks,
         };
         let block = mem.read_block(s, &req)?;
         if block.len() != len as usize {
@@ -132,12 +137,15 @@ pub fn write_region(
         let step = u64::from(mem.block_size(s, region.kind));
         rep.event(&Event::Progress { done: 0, total });
         let mut done = 0u64;
+        let blocks = total.div_ceil(step).min(u64::from(u32::MAX)) as u32;
         while done < total {
             let len = step.min(total - done) as u32;
             let req = BlockReq {
                 kind: region.kind,
                 address: region.offset + done,
                 len,
+                init: done == 0,
+                block_count: blocks,
             };
             let start = done as usize;
             mem.write_block(s, &req, &image.bytes[start..start + len as usize])?;

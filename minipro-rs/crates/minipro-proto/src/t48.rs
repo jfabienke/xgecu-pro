@@ -402,12 +402,17 @@ impl MemoryOps for T48 {
             n => n,
         });
         let mut done = 0u64;
+        // Blank-check streams the region exactly as a read does, so it must
+        // announce the transfer the same way.
+        let blocks = region.len.div_ceil(step).min(u64::from(u32::MAX)) as u32;
         while done < region.len {
             let len = step.min(region.len - done) as u32;
             let req = BlockReq {
                 kind: region.kind,
                 address: region.offset + done,
                 len,
+                init: done == 0,
+                block_count: blocks,
             };
             if self
                 .read_block(s, &req)?
@@ -694,11 +699,7 @@ mod tests {
             device: dev.clone(),
             emmc_capacity: 0,
         };
-        let req = BlockReq {
-            kind: MemoryKind::Code,
-            address: 0,
-            len: 0x20,
-        };
+        let req = BlockReq::single(MemoryKind::Code, 0, 0x20);
         let out = t48.read_block(&s, &req).unwrap();
         assert_eq!(out, (0..0x20u8).collect::<Vec<u8>>());
         // Command went out on EP01.
@@ -715,11 +716,7 @@ mod tests {
             device: dev.clone(),
             emmc_capacity: 0,
         };
-        let req = BlockReq {
-            kind: MemoryKind::Code,
-            address: 0x40,
-            len: 4,
-        };
+        let req = BlockReq::single(MemoryKind::Code, 0x40, 4);
         t48.write_block(&s, &req, &[1, 2, 3, 4]).unwrap();
         let sent = tx.sent();
         assert_eq!(sent[0].0, 0x01); // command
@@ -772,8 +769,8 @@ mod fuzz_replies {
             let _ = p.reset();
             let _ = p.begin(&dev());
             if let Some(m) = p.memory() {
-                let _ = m.read_block(&s, &BlockReq { kind: MemoryKind::Code, address: 0, len: 64 });
-                let _ = m.write_block(&s, &BlockReq { kind: MemoryKind::Code, address: 0, len: 4 }, &[0; 4]);
+                let _ = m.read_block(&s, &BlockReq::single(MemoryKind::Code, 0, 64));
+                let _ = m.write_block(&s, &BlockReq::single(MemoryKind::Code, 0, 4), &[0; 4]);
                 let _ = m.erase(&s, EraseKind::Chip);
                 let _ = m.blank_check(&s, Region { kind: MemoryKind::Code, offset: 0, len: 64 });
             }

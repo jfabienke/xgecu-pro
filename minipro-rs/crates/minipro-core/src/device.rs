@@ -44,6 +44,27 @@ pub struct BlockReq {
     pub kind: MemoryKind,
     pub address: u64,
     pub len: u32,
+    /// First block of the region: the driver announces the whole transfer once,
+    /// then streams blocks. The T76 will not program without it — a per-block
+    /// init restarts the setup 2048 times and no cell is ever written.
+    pub init: bool,
+    /// Total blocks in this region, carried on the `init` packet so the device
+    /// knows how much is coming. Meaningless when `init` is false.
+    pub block_count: u32,
+}
+
+impl BlockReq {
+    /// A one-block transfer that is its own init — the shape most call sites
+    /// (fuses, single-shot reads, tests) actually want.
+    pub fn single(kind: MemoryKind, address: u64, len: u32) -> Self {
+        BlockReq {
+            kind,
+            address,
+            len,
+            init: true,
+            block_count: 1,
+        }
+    }
 }
 
 /// What an erase should target.
