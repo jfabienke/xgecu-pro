@@ -30,7 +30,7 @@ use minipro_core::device::{
 };
 use minipro_core::error::{Error, FwVersion, Result};
 use minipro_core::programmer::{Caps, Programmer, ProgrammerInfo, Session};
-use minipro_core::transport::{command, Ep, LinkSpeed, Transport};
+use minipro_core::transport::{command, command_slow, Ep, LinkSpeed, Transport};
 
 use crate::wire::{
     self, ascii_field, le16, le32, pack_begin64, ChipParams, CMD_END_TRANS, CMD_ERASE, CMD_READID,
@@ -1410,7 +1410,9 @@ impl MemoryOps for T76 {
                     // drain the 64-byte reply.
                     let mut msg = [0u8; 16];
                     msg[0] = CMD_ERASE;
-                    command(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, &msg, 64)?.discard()
+                    // A full-chip erase can take minutes; this is one of the
+                    // few replies that legitimately needs the long deadline.
+                    command_slow(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, &msg, 64)?.discard()
                 }
             },
             EraseKind::Sector { address } => {
@@ -1426,7 +1428,7 @@ impl MemoryOps for T76 {
             EraseKind::Fuses => {
                 let mut msg = [0u8; 16];
                 msg[0] = CMD_ERASE;
-                command(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, &msg, 64)?.discard()
+                command_slow(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, &msg, 64)?.discard()
             }
         }
     }

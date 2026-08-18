@@ -49,9 +49,16 @@ const EP_CMD_IN: u8 = 0x81;
 /// Vendor `MP_USBTIMEOUT`: every OUT transfer, and IN transfers on the payload
 /// and status endpoints, complete within seconds or not at all.
 const SHORT_TIMEOUT: Duration = Duration::from_millis(5_000);
-/// Vendor `MP_USB_READ_TIMEOUT`: command responses on EP 0x81 can lag by a full
-/// chip-erase (minutes), so that endpoint alone gets the long deadline.
-const CMD_READ_TIMEOUT: Duration = Duration::from_millis(360_000);
+/// Deadline for a reply the device only sends once a chip operation finishes —
+/// a full-chip erase. Reached exclusively via [`Transport::recv_slow`].
+///
+/// The vendor (`MP_USB_READ_TIMEOUT`) applies this to *every* command reply, and
+/// so did we. That is why a device which stopped answering a trivial command
+/// appeared to freeze for six minutes rather than failing: measured on a live
+/// T76, no ordinary reply on EP 0x81 took longer than 200 ms (p50 47 ms, across
+/// info / detect / dry-run / a full 256 KiB read), so the blanket deadline was
+/// 1800x the observed worst case.
+const SLOW_READ_TIMEOUT: Duration = Duration::from_millis(360_000);
 
 /// Interface-claim retry (vendor: 5 attempts, 200 ms apart — the pipes need a
 /// moment to settle after the T76 config-cycle re-arm below).
@@ -190,6 +197,33 @@ impl UsbTransport {
             }
         }
     }
+
+    /// Shared body of [`Transport::recv`] / [`Transport::recv_slow`]; the only
+    /// difference between them is the deadline.
+    fn recv_within(&mut self, ep: Ep, len: usize, timeout: Duration) -> Result<Vec<u8>> {
+        tracing::trace!(ep = format_args!("{:02x}", ep.0), len, "usb in");
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let endpoint = self.in_ep(ep.0)?;
+        // IN transfers must request a nonzero multiple of the max packet size
+        // (the libusb-overflow rule: short reads are rounded up to 64 bytes).
+        let mps = endpoint.max_packet_size();
+        let request = len.div_ceil(mps) * mps;
+        let completion = endpoint.transfer_blocking(Buffer::new(request), timeout);
+        completion
+            .status
+            .map_err(|e| Error::Usb(format!("bulk IN 0x{:02x}: {e}", ep.0)))?;
+        if completion.actual_len < len {
+            return Err(Error::Usb(format!(
+                "bulk IN 0x{:02x}: short read {}/{len}",
+                ep.0, completion.actual_len
+            )));
+        }
+        let mut data = completion.buffer.into_vec();
+        data.truncate(len);
+        Ok(data)
+    }
 }
 
 impl Transport for UsbTransport {
@@ -218,35 +252,11 @@ impl Transport for UsbTransport {
     }
 
     fn recv(&mut self, ep: Ep, len: usize) -> Result<Vec<u8>> {
-        tracing::trace!(ep = format_args!("{:02x}", ep.0), len, "usb in");
-        if len == 0 {
-            return Ok(Vec::new());
-        }
-        // Command responses (EP 0x81) may take a full chip operation to arrive;
-        // payload/status endpoints answer within seconds (vendor timeouts).
-        let timeout = if ep.0 == EP_CMD_IN {
-            CMD_READ_TIMEOUT
-        } else {
-            SHORT_TIMEOUT
-        };
-        let endpoint = self.in_ep(ep.0)?;
-        // IN transfers must request a nonzero multiple of the max packet size
-        // (the libusb-overflow rule: short reads are rounded up to 64 bytes).
-        let mps = endpoint.max_packet_size();
-        let request = len.div_ceil(mps) * mps;
-        let completion = endpoint.transfer_blocking(Buffer::new(request), timeout);
-        completion
-            .status
-            .map_err(|e| Error::Usb(format!("bulk IN 0x{:02x}: {e}", ep.0)))?;
-        if completion.actual_len < len {
-            return Err(Error::Usb(format!(
-                "bulk IN 0x{:02x}: short read {}/{len}",
-                ep.0, completion.actual_len
-            )));
-        }
-        let mut data = completion.buffer.into_vec();
-        data.truncate(len);
-        Ok(data)
+        self.recv_within(ep, len, SHORT_TIMEOUT)
+    }
+
+    fn recv_slow(&mut self, ep: Ep, len: usize) -> Result<Vec<u8>> {
+        self.recv_within(ep, len, SLOW_READ_TIMEOUT)
     }
 
     fn link_speed(&self) -> LinkSpeed {

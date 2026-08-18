@@ -37,6 +37,19 @@ pub trait Transport: Send {
     fn send(&mut self, ep: Ep, data: &[u8]) -> Result<()>;
     /// Receive exactly `len` bytes on `ep` (IN).
     fn recv(&mut self, ep: Ep, len: usize) -> Result<Vec<u8>>;
+    /// Receive with an extended deadline, for the few commands the device
+    /// answers only once a chip operation has finished (erase, chiefly).
+    ///
+    /// Separate from [`Transport::recv`] on purpose. The deadline that suits a
+    /// chip erase is minutes; applying it to every reply means a device that
+    /// stops answering a millisecond-scale command freezes for minutes instead
+    /// of failing. Opting in per command keeps the common path fast to fail.
+    ///
+    /// Defaults to `recv`, so transports with no notion of a deadline (mocks)
+    /// need do nothing.
+    fn recv_slow(&mut self, ep: Ep, len: usize) -> Result<Vec<u8>> {
+        self.recv(ep, len)
+    }
     /// Currently negotiated link speed.
     fn link_speed(&self) -> LinkSpeed;
     /// Reset the device / re-arm the endpoints.
@@ -53,16 +66,22 @@ pub struct Pending<'t> {
     tx: &'t mut dyn Transport,
     ep: Ep,
     len: usize,
+    /// Whether this reply waits on a chip operation; see [`command_slow`].
+    slow: bool,
 }
 
 impl<'t> Pending<'t> {
     /// Read and return the response payload.
     pub fn read(self) -> Result<Vec<u8>> {
-        self.tx.recv(self.ep, self.len)
+        if self.slow {
+            self.tx.recv_slow(self.ep, self.len)
+        } else {
+            self.tx.recv(self.ep, self.len)
+        }
     }
     /// Drain and discard the response (still required — the device must be read).
     pub fn discard(self) -> Result<()> {
-        self.tx.recv(self.ep, self.len).map(|_| ())
+        self.read().map(|_| ())
     }
 }
 
@@ -81,5 +100,107 @@ pub fn command<'t>(
         tx,
         ep: r#in,
         len: resp_len,
+        slow: false,
     })
+}
+
+/// Like [`command`], but for a reply the device sends only after a chip
+/// operation completes — a full-chip erase can legitimately take minutes.
+///
+/// Use this *only* where the wait is inherent to the chip. Everything else
+/// should fail fast: measured on a live T76, no ordinary command reply took
+/// longer than 200 ms.
+pub fn command_slow<'t>(
+    tx: &'t mut dyn Transport,
+    out: Ep,
+    r#in: Ep,
+    pkt: &[u8],
+    resp_len: usize,
+) -> Result<Pending<'t>> {
+    tx.send(out, pkt)?;
+    Ok(Pending {
+        tx,
+        ep: r#in,
+        len: resp_len,
+        slow: true,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Records which receive path a `Pending` resolved through.
+    #[derive(Default)]
+    struct Spy {
+        slow_used: bool,
+        fast_used: bool,
+    }
+    impl Transport for Spy {
+        fn send(&mut self, _ep: Ep, _data: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        fn recv(&mut self, _ep: Ep, len: usize) -> Result<Vec<u8>> {
+            self.fast_used = true;
+            Ok(vec![0; len])
+        }
+        fn recv_slow(&mut self, _ep: Ep, len: usize) -> Result<Vec<u8>> {
+            self.slow_used = true;
+            Ok(vec![0; len])
+        }
+        fn link_speed(&self) -> LinkSpeed {
+            LinkSpeed::High
+        }
+        fn reset(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The long deadline is opt-in per command. Getting this backwards is not a
+    /// cosmetic slip: routing an ordinary command through the slow path turns a
+    /// device that stops answering into a multi-minute freeze instead of a
+    /// prompt error, which is exactly the behaviour this split removed.
+    #[test]
+    fn only_command_slow_takes_the_long_deadline() {
+        let mut spy = Spy::default();
+        command(&mut spy, Ep(0x01), Ep(0x81), &[0u8; 8], 8)
+            .expect("send")
+            .discard()
+            .expect("drain");
+        assert!(spy.fast_used, "command() must use the ordinary deadline");
+        assert!(!spy.slow_used);
+
+        let mut spy = Spy::default();
+        command_slow(&mut spy, Ep(0x01), Ep(0x81), &[0u8; 8], 8)
+            .expect("send")
+            .discard()
+            .expect("drain");
+        assert!(spy.slow_used, "command_slow() must use the long deadline");
+        assert!(!spy.fast_used);
+    }
+
+    /// `recv_slow` defaults to `recv`, so a transport with no deadlines (mocks,
+    /// replay fixtures) keeps working without implementing it.
+    #[test]
+    fn recv_slow_defaults_to_recv() {
+        struct Minimal(bool);
+        impl Transport for Minimal {
+            fn send(&mut self, _e: Ep, _d: &[u8]) -> Result<()> {
+                Ok(())
+            }
+            fn recv(&mut self, _e: Ep, len: usize) -> Result<Vec<u8>> {
+                self.0 = true;
+                Ok(vec![0; len])
+            }
+            fn link_speed(&self) -> LinkSpeed {
+                LinkSpeed::High
+            }
+            fn reset(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+        let mut m = Minimal(false);
+        assert_eq!(m.recv_slow(Ep(0x81), 4).expect("recv"), vec![0u8; 4]);
+        assert!(m.0, "the default must fall through to recv");
+    }
 }
