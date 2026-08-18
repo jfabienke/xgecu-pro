@@ -21,20 +21,26 @@ This is a **young project handling real hardware**. Honest state of play:
 
 | Path | Status |
 |---|---|
-| **T76 reads** | ✅ **Hardware-verified** — byte-identical to known-good dumps, stable over repeated reads |
-| **T76 write** (parallel EPROM) | ✅ **Hardware-verified** — programs and verifies correctly on an MX27C2000; other chip classes untested |
-| **T76 erase / NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device** — `write --dry-run` checks setup without programming |
-| **Erasing a one-time-programmable part** | ❌ Refused with a reason — the database's erase flag is honoured, as the C tool does |
+| **T76 reads** | ✅ **Hardware-verified** — byte-identical across repeated reads on two chip classes (AT27C256R 32 KiB DIP-28, MX27C2000 256 KiB DIP-32) |
+| **T76 write** (parallel EPROM) | ✅ **Hardware-verified** — programs and verifies on an MX27C2000: exactly the intended bits changed, nothing else moved |
+| **T76 erase / NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device**. `write --dry-run` checks the whole setup without programming |
+| **T76 write** (every other chip class) | ⚠️ Only the parallel-EPROM path has touched silicon |
 | **T56 / T48 (all operations)** | ⚠️ Complete drivers, **never run against real silicon** — no T48/T56 hardware here |
-| **T76 pin-contact check** | ❌ **Removed** — it measured nothing and *corrupted reads*; the T76 no longer advertises it |
+| **T76 pin-contact check** | ❌ **Removed** — it measured nothing *and corrupted every read*; the T76 no longer advertises it |
+| **Erasing a one-time-programmable part** | ❌ Refused with a reason — the database's erase flag is honoured, as the C tool does |
 | **`@ISP_VGA` parts** (monitor EDID, MStar scaler flash) | ❌ Not implemented — refused with a reason; the C tool rejects these too |
 | **TL866II+ / TL866A/CS** | ❌ Not implemented |
 
-Every driver is pinned by **byte-exact golden-packet tests** (199 tests, hardware-free,
+Every driver is pinned by **byte-exact golden-packet tests** (203 tests, hardware-free,
 plus 5 `#[ignore]`d ones that need a real device), so the wire output is known-correct
-against captures — but a passing test suite is not the same as a validated write. **Reading is non-destructive; writing and erasing
-are not.** Treat the untested paths accordingly, and see
-[Contributing](#contributing) if you can help close the gap.
+against captures.
+
+A green suite is not the same as a working operation, and this project has the
+scars to prove it: the write path passed every test while programming *nothing*,
+because no test could tell "wrote correctly" from "wrote nothing" — only a chip
+could. **Reading is non-destructive; writing and erasing are not.** Treat the
+untested rows above accordingly, and see [Contributing](#contributing) if you can
+help close the gap.
 
 ## Quick start
 
@@ -112,6 +118,12 @@ Design notes worth knowing: reads are **verified by default** (re-read stability
 plus crc32/sha256 in the outcome), and the type system encodes the T76's nastiest
 hardware quirk — an undrained USB response wedges the device until replug, so the
 must-drain guard makes forgetting it a compile error.
+
+Deadlines are **per command, not per endpoint**: an ordinary reply gets seconds,
+and only the commands that genuinely block on the chip (a full-chip erase) get
+minutes. Measured on a live T76, no ordinary reply took longer than 200 ms, so a
+device that stops answering surfaces as a typed error rather than an apparent
+freeze.
 
 `write --dry-run` runs every step up to the moment of programming and stops:
 image and size validation, the FPGA bitstream upload, the per-chip-class
@@ -196,6 +208,7 @@ Reverse-engineering and analysis, useful independently of the Rust code:
 | [`ch569-usb3-notes.md`](docs/ch569-usb3-notes.md) | The CH569 USB 3.0 stack and the macOS SuperSpeed failure |
 | [`open-source-status.md`](docs/open-source-status.md) | Landscape of open-source T76 support |
 | [`minipro-codebase-report.md`](docs/minipro-codebase-report.md) | Review of the upstream C implementation |
+| [`minipro-setup.md`](docs/minipro-setup.md) | Building the C fork locally — the reference this project is checked against |
 | [`rust-redesign.md`](docs/rust-redesign.md) · [`rust-trait-model.md`](docs/rust-trait-model.md) · [`rust-roadmap.md`](docs/rust-roadmap.md) | The design this project was built from, and what's next |
 | [`minipro-vs-rust.md`](docs/minipro-vs-rust.md) | Honest comparison with the C tool |
 | [`multi-programmer.md`](docs/multi-programmer.md) | Driving a bank of programmers in parallel — what's ready, and the reset bug to fix first |
@@ -208,8 +221,11 @@ The most valuable contribution is **hardware nobody here has**:
   golden-tested but have never touched silicon. `minipro info`, `detect`, and a
   read of a known chip — reporting what you see — turns "reference-only" into
   "proven."
-- **🔌 Exercise T76 write/erase/NAND/eMMC.** Reads are byte-verified; the rest is
-  not.
+- **🔌 Erase, and write on a rewritable part.** One salvaged 25-series SPI flash
+  (dead motherboard, router, TV mainboard) closes three gaps at once: the erase
+  path, write-buffer chunking beyond the parallel-EPROM case, and the long
+  erase deadline. On flash a verified dump makes the whole loop recoverable —
+  dump, erase, write, verify, compare.
 - **Implement the TL866II+ / TL866A/CS drivers.** The TL866II+ is close to the
   existing T48 and reuses most of the shared wire layer.
 
