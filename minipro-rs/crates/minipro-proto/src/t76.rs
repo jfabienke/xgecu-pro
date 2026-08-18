@@ -1463,24 +1463,13 @@ impl MemoryOps for T76 {
     /// as the read loop so NAND/eMMC are stepped correctly.
     fn blank_check(&mut self, s: &Session, region: Region) -> Result<bool> {
         let step = u64::from(self.block_size(s, region.kind));
-        let mut done = 0u64;
-        // Blank-check streams the region exactly as a read does, so it must
-        // announce the transfer the same way.
-        let blocks = region.len.div_ceil(step).min(u64::from(u32::MAX)) as u32;
-        while done < region.len {
-            let len = step.min(region.len - done) as u32;
-            let req = BlockReq {
-                kind: region.kind,
-                address: region.offset + done,
-                len,
-                init: done == 0,
-                block_count: blocks,
-            };
+        // Blank-check streams the region exactly as a read does; the block
+        // plan (init/block_count) comes from the single source in `Region`.
+        for req in region.blocks(step) {
             let block = self.read_block(s, &req)?;
             if block.iter().any(|&b| b != s.device.blank_value) {
                 return Ok(false);
             }
-            done += u64::from(len);
         }
         Ok(true)
     }

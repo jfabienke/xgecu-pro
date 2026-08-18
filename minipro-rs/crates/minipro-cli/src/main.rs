@@ -568,24 +568,18 @@ fn load_db(dir: Option<&Path>, rep: &mut dyn Reporter) -> Result<Box<dyn ChipDb>
 
 /// Look up a chip and attach its FPGA bitstream from `algorithm.xml` (the DB
 /// stores chip parameters and bitstreams separately; `begin` needs both).
-fn lookup_device(db: &dyn ChipDb, chip: &str) -> Result<minipro_core::device::Device> {
-    use minipro_core::device::chip_type;
+/// Look up a chip and run the capability [`ops::preflight`] for the operation
+/// about to be performed — one call, so no `run_*` can forget the gates.
+fn lookup_device(
+    db: &dyn ChipDb,
+    chip: &str,
+    op: ops::OpKind,
+) -> Result<minipro_core::device::Device> {
     let mut dev = db
         .get(chip)
         .cloned()
         .ok_or(Error::Unsupported("unknown chip (try `minipro search`)"))?;
-    // The catalog lists 30 `@ISP_VGA` parts — monitor EDID EEPROMs and MStar
-    // scaler flash — which are programmed down a display cable rather than
-    // through the ZIF socket. Without that rejection the algorithm resolves and
-    // the socket path runs anyway, failing later with something unrelated to
-    // the real reason. Caught here so every operation reports it the same way;
-    // `search` does not come through here, so they stay discoverable.
-    if dev.chip_type == chip_type::VGA {
-        return Err(Error::Unsupported(
-            "programming over a display's VGA/DDC connection is not implemented \
-             (@ISP_VGA parts: monitor EDID and MStar scaler flash)",
-        ));
-    }
+    ops::preflight(&dev, op)?;
     dev.algorithm = db.load_algorithm(&dev)?;
     Ok(dev)
 }
@@ -674,7 +668,7 @@ fn run_read(
     rep: &mut dyn Reporter,
 ) -> Result<()> {
     let db = load_db(db_dir, rep)?;
-    let dev = lookup_device(&*db, chip)?;
+    let dev = lookup_device(&*db, chip, ops::OpKind::Read)?;
     let mut prog = open_programmer()?;
     warn_firmware(&*prog, &*db, rep);
     let link = prog.info().link;
@@ -726,21 +720,17 @@ fn run_write(
     rep: &mut dyn Reporter,
 ) -> Result<()> {
     let db = load_db(db_dir, rep)?;
-    let dev = lookup_device(&*db, chip)?;
-    // Parts whose write-protect must be lifted before programming (the C's
-    // off_protect_before) need a protect-off / end / begin sequence this write
-    // path does not implement yet. Attempting anyway programs nothing and
-    // surfaces as a verify failure minutes later; refuse with the real reason.
-    // Reads are unaffected — this gate is here, not in lookup.
-    if dev.off_protect_before() && !dry_run {
-        return Err(Error::Unsupported(
-            "this chip needs write-protect lifted before programming, which is \
-             not implemented yet — programming would silently not take",
-        ));
-    }
+    let dev = lookup_device(&*db, chip, ops::OpKind::Write { dry_run })?;
     let image = load_image(file, format, dev.code_size, dev.blank_value)?;
     let mut prog = open_programmer()?;
     warn_firmware(&*prog, &*db, rep);
+
+    // Parts flagged OFF_PROTECT_BEFORE (most SPI NOR included) must have
+    // write-protect lifted in its own transaction first, or programming
+    // silently does nothing. No-op for everything else; skipped on dry runs.
+    if !dry_run {
+        ops::lift_protect(&mut *prog, &dev)?;
+    }
 
     {
         let mut txn = Txn::begin(&mut *prog, &dev)?;
@@ -767,18 +757,7 @@ fn run_write(
 
 fn run_erase(db_dir: Option<&Path>, chip: &str, rep: &mut dyn Reporter) -> Result<()> {
     let db = load_db(db_dir, rep)?;
-    let dev = lookup_device(&*db, chip)?;
-    // The database records whether a part can be erased at all. One-time
-    // programmable chips cannot: an EPROM in a windowless plastic package has
-    // no erase path, and its cells only clear under UV. Energizing the socket
-    // to attempt one anyway is pointless and applies an algorithm the part was
-    // never meant to see, so refuse the way the C tool does.
-    if !dev.can_erase() {
-        return Err(Error::Unsupported(
-            "this chip cannot be erased (the database marks it one-time \
-             programmable; a windowless EPROM clears only under UV)",
-        ));
-    }
+    let dev = lookup_device(&*db, chip, ops::OpKind::Erase)?;
     let mut prog = open_programmer()?;
     warn_firmware(&*prog, &*db, rep);
 
@@ -853,7 +832,7 @@ fn manufacturer_name(id: u8) -> &'static str {
 fn run_detect(db_dir: Option<&Path>, like: &str, mode: Mode) -> Result<()> {
     let mut note = reporter_for(mode);
     let db = load_db(db_dir, note.as_mut())?;
-    let dev = lookup_device(&*db, like)?;
+    let dev = lookup_device(&*db, like, ops::OpKind::Read)?;
     let mut prog = open_programmer()?;
 
     let id = {
@@ -934,7 +913,7 @@ fn run_logic(db_dir: Option<&Path>, chip: &str, mode: Mode) -> Result<()> {
     use minipro_core::device::chip_type;
     let mut note = reporter_for(mode);
     let db = load_db(db_dir, note.as_mut())?;
-    let dev = lookup_device(&*db, chip)?;
+    let dev = lookup_device(&*db, chip, ops::OpKind::Read)?;
     if dev.chip_type != chip_type::LOGIC || dev.vectors.is_empty() {
         return Err(Error::Unsupported(
             "not a logic IC with a vector table (is logicic.xml present?)",
@@ -1074,7 +1053,8 @@ mod tests {
             chip_type: chip_type::VGA,
             ..Device::default()
         });
-        let err = lookup_device(&vga, "EDID_128B@ISP_VGA").expect_err("must be rejected");
+        let err = lookup_device(&vga, "EDID_128B@ISP_VGA", ops::OpKind::Read)
+            .expect_err("must be rejected");
         assert_eq!(err.code(), "unsupported");
         let msg = err.to_string();
         assert!(msg.contains("VGA/DDC"), "must name the interface: {msg}");
@@ -1087,7 +1067,7 @@ mod tests {
             chip_type: chip_type::MEMORY,
             ..Device::default()
         });
-        assert!(lookup_device(&ok, "W25Q64BV@SOIC8").is_ok());
+        assert!(lookup_device(&ok, "W25Q64BV@SOIC8", ops::OpKind::Read).is_ok());
     }
 
     #[test]

@@ -5,10 +5,74 @@
 //! verification — written once here, generic over any `dyn Programmer` and
 //! `dyn Reporter`, so drivers stay small (they only implement `*_block`).
 
-use crate::device::{BlockReq, Image, Region};
+#[cfg(test)]
+use crate::device::BlockReq;
+use crate::device::{Image, Region};
 use crate::error::{Error, Result};
-use crate::programmer::{Programmer, Session};
+use crate::programmer::{Programmer, Session, Txn};
 use crate::report::{Event, Outcome, Reporter};
+
+/// Lift write-protect ahead of programming, for parts whose database entry
+/// carries `OFF_PROTECT_BEFORE` — mainstream SPI NOR included (a W25Q128BV
+/// carries it). Mirrors the C's T76 sequence exactly: protect-off inside its
+/// own transaction, then end it, so the write that follows starts a fresh one.
+/// The C's comment records why the order matters: unprotecting later "is too
+/// late and the program silently does nothing". Protect is NOT re-engaged
+/// afterwards, also matching the C, which only warns unless asked with -P.
+///
+/// **Unverified on silicon**: no protect-carrying part has been on the bench.
+/// The wire sequence is pinned against the C; the behavior is not yet proven.
+pub fn lift_protect(prog: &mut dyn Programmer, dev: &crate::device::Device) -> Result<()> {
+    if !dev.off_protect_before() {
+        return Ok(());
+    }
+    let mut txn = Txn::begin(prog, dev)?;
+    let (p, s) = txn.parts();
+    let prot = p
+        .protect()
+        .ok_or(Error::Unsupported("this chip needs write-protect lifted before programming, and this programmer has no protect support"))?;
+    prot.protect_off(s)
+    // txn drops here -> END_TRANS, the C's end/begin cycle around protect-off.
+}
+
+/// What the caller is about to do, for [`preflight`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpKind {
+    Read,
+    Write { dry_run: bool },
+    Erase,
+}
+
+/// Every capability-based refusal, in one place, so no frontend can miss one.
+///
+/// These gates used to live in the CLI's `run_*` functions — which meant the
+/// TUI, or any future frontend, had to re-derive them or silently lack them.
+/// The refused states are not cosmetic: erasing a one-time-programmable part
+/// runs an algorithm the chip cannot honor, writing a protect-before part
+/// programs nothing, and an `@ISP_VGA` part is not reachable through the
+/// socket at all. A frontend calls this before opening the programmer, so a
+/// refusal costs nothing and no socket is energized.
+pub fn preflight(dev: &crate::device::Device, op: OpKind) -> Result<()> {
+    use crate::device::chip_type;
+    // @ISP_VGA parts are programmed down a display cable, not through the ZIF
+    // socket, for every operation. `search` does not come through here, so
+    // they stay discoverable.
+    if dev.chip_type == chip_type::VGA {
+        return Err(Error::Unsupported(
+            "programming over a display's VGA/DDC connection is not implemented \
+             (@ISP_VGA parts: monitor EDID and MStar scaler flash)",
+        ));
+    }
+    match op {
+        OpKind::Read => Ok(()),
+        OpKind::Write { .. } => Ok(()),
+        OpKind::Erase if !dev.can_erase() => Err(Error::Unsupported(
+            "this chip cannot be erased (the database marks it one-time \
+             programmable; a windowless EPROM clears only under UV)",
+        )),
+        OpKind::Erase => Ok(()),
+    }
+}
 use crate::transport::LinkSpeed;
 
 use sha2::Digest;
@@ -28,18 +92,8 @@ pub fn read_region(
     let mut bytes = Vec::with_capacity(total as usize);
     rep.event(&Event::Progress { done: 0, total });
     let mut done = 0u64;
-    // The device is told the whole transfer once, on the first block; the rest
-    // stream against that setup. See `BlockReq::init`.
-    let blocks = total.div_ceil(step).min(u64::from(u32::MAX)) as u32;
-    while done < total {
-        let len = step.min(total - done) as u32;
-        let req = BlockReq {
-            kind: region.kind,
-            address: region.offset + done,
-            len,
-            init: done == 0,
-            block_count: blocks,
-        };
+    for req in region.blocks(step) {
+        let len = req.len;
         let block = mem.read_block(s, &req)?;
         if block.len() != len as usize {
             // A short/long response means the command stream desynced.
@@ -137,16 +191,8 @@ pub fn write_region(
         let step = u64::from(mem.block_size(s, region.kind));
         rep.event(&Event::Progress { done: 0, total });
         let mut done = 0u64;
-        let blocks = total.div_ceil(step).min(u64::from(u32::MAX)) as u32;
-        while done < total {
-            let len = step.min(total - done) as u32;
-            let req = BlockReq {
-                kind: region.kind,
-                address: region.offset + done,
-                len,
-                init: done == 0,
-                block_count: blocks,
-            };
+        for req in region.blocks(step) {
+            let len = req.len;
             let start = done as usize;
             mem.write_block(s, &req, &image.bytes[start..start + len as usize])?;
             done += u64::from(len);
@@ -559,5 +605,40 @@ mod tests {
         let mut rep = Collect::default();
         let err = read_region(&mut prog, &s, Region::code(&dev), &mut rep).unwrap_err();
         assert_eq!(err.code(), "protocol");
+    }
+
+    /// The refusal matrix, in one place because the gates are in one place.
+    /// Rows are (flags, chip_type); columns are the operations.
+    #[test]
+    fn preflight_refusal_matrix() {
+        use crate::device::{chip_type, Device};
+        let dev = |flags: u32, ct: u8| Device {
+            raw_flags: flags,
+            chip_type: ct,
+            ..Default::default()
+        };
+        let ok = |d: &Device, op| preflight(d, op).is_ok();
+        let wr = OpKind::Write { dry_run: false };
+        let dry = OpKind::Write { dry_run: true };
+
+        // Plain erasable memory: everything allowed.
+        let flash = dev(0x0050_4278, chip_type::MEMORY);
+        for op in [OpKind::Read, wr, dry, OpKind::Erase] {
+            assert!(ok(&flash, op));
+        }
+        // OTP EPROM (MX27C2000 flags): erase refused, the rest allowed.
+        let otp = dev(0x0000_0068, chip_type::MEMORY);
+        assert!(ok(&otp, OpKind::Read) && ok(&otp, wr) && ok(&otp, dry));
+        assert!(!ok(&otp, OpKind::Erase));
+        // Protect-before part (S-34C02B, and mainstream SPI NOR like the
+        // W25Q128BV): allowed — `lift_protect` handles the sequence. Refusing
+        // here would refuse most flash writes.
+        let prot = dev(0x0010_4200, chip_type::MEMORY);
+        assert!(ok(&prot, OpKind::Read) && ok(&prot, dry) && ok(&prot, wr));
+        // VGA part: nothing socket-shaped is allowed.
+        let vga = dev(0, chip_type::VGA);
+        for op in [OpKind::Read, wr, dry, OpKind::Erase] {
+            assert!(!ok(&vga, op), "VGA must refuse {op:?}");
+        }
     }
 }

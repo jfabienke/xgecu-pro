@@ -38,6 +38,35 @@ impl Region {
     }
 }
 
+impl Region {
+    /// The block plan for streaming this region at `step` bytes per block:
+    /// every [`BlockReq`] in order, with `init`/`block_count` computed **here
+    /// and nowhere else**. The invariant this centralizes is the one that broke
+    /// writes: the device is told the whole transfer once, on the first block,
+    /// and re-announcing per block leaves it programming nothing. Five call
+    /// sites used to derive it by hand; a sixth would have gotten it wrong.
+    pub fn blocks(&self, step: u64) -> impl Iterator<Item = BlockReq> + '_ {
+        let step = step.max(1);
+        let count = self.len.div_ceil(step).min(u64::from(u32::MAX)) as u32;
+        let mut done = 0u64;
+        std::iter::from_fn(move || {
+            if done >= self.len {
+                return None;
+            }
+            let len = step.min(self.len - done) as u32;
+            let req = BlockReq {
+                kind: self.kind,
+                address: self.offset + done,
+                len,
+                init: done == 0,
+                block_count: count,
+            };
+            done += u64::from(len);
+            Some(req)
+        })
+    }
+}
+
 /// One block-sized request, as the driver-level `*_block` ops consume.
 #[derive(Clone, Copy, Debug)]
 pub struct BlockReq {
