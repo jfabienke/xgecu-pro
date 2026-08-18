@@ -206,7 +206,7 @@ impl App {
     }
 
     /// Resolve the selected chip and load its FPGA algorithm/bitstream — the
-    /// same lookup the CLI's `lookup_device` performs (main.rs:306). Returns the
+    /// same lookup + `ops::preflight` gate the CLI performs. Returns the
     /// ready-to-`begin` device plus the DB's firmware target for the mismatch
     /// advisory. Borrows `self` immutably only, so the caller can then take the
     /// programmer mutably. On any miss, returns a user-facing message.
@@ -221,6 +221,10 @@ impl App {
             .get(name)
             .cloned()
             .ok_or("selected chip vanished from the database")?;
+        // The shared capability gates: without this the TUI would happily
+        // energize the socket for a part the CLI refuses (@ISP_VGA today).
+        minipro_core::ops::preflight(&dev, minipro_core::ops::OpKind::Read)
+            .map_err(|e| e.to_string())?;
         // Without this the FPGA drivers' `begin()` fails with "no bitstream
         // loaded" — the exact gap the TUI had.
         dev.algorithm = db

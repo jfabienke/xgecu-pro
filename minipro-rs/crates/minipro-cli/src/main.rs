@@ -151,6 +151,9 @@ enum Command {
         /// it is safe on one-time-programmable parts.
         #[arg(long)]
         dry_run: bool,
+        /// Skip the erase that normally precedes programming an erasable chip
+        #[arg(long)]
+        no_erase: bool,
     },
     /// Erase the whole chip
     Erase {
@@ -234,8 +237,10 @@ impl Cli {
                 format: Fmt::Auto,
                 force: false,
                 skip_pincheck: false,
-                // The legacy -p/-w form predates the flag and always commits.
+                // The legacy -p/-w form predates these flags: always commit,
+                // always erase-first where the chip supports it.
                 dry_run: false,
+                no_erase: false,
             })),
             (Some(_), None, None) => Err(Error::Format(
                 "-p needs -r FILE (read) or -w FILE (write)".into(),
@@ -350,6 +355,7 @@ fn main() -> ExitCode {
             force,
             skip_pincheck,
             dry_run,
+            no_erase,
         } => run_write(
             db_dir,
             chip,
@@ -358,6 +364,7 @@ fn main() -> ExitCode {
             *force,
             *skip_pincheck,
             *dry_run,
+            *no_erase,
             &mut *reporter_for(mode),
         ),
         Command::Erase { chip } => run_erase(db_dir, chip, &mut *reporter_for(mode)),
@@ -717,6 +724,7 @@ fn run_write(
     force: bool,
     skip_pincheck: bool,
     dry_run: bool,
+    no_erase: bool,
     rep: &mut dyn Reporter,
 ) -> Result<()> {
     let db = load_db(db_dir, rep)?;
@@ -730,6 +738,17 @@ fn run_write(
     // silently does nothing. No-op for everything else; skipped on dry runs.
     if !dry_run {
         ops::lift_protect(&mut *prog, &dev)?;
+    }
+
+    // The C erases before writing whenever the chip supports it (flash can
+    // only clear bits by erasing, so programming over old content fails
+    // verify). Same gate as the C: can_erase, unless --no-erase. Its own
+    // transaction, like lift_protect. No-op on OTP parts and dry runs.
+    if !dry_run && !no_erase && dev.can_erase() {
+        let mut txn = Txn::begin(&mut *prog, &dev)?;
+        let (p, s) = txn.parts();
+        let mem = p.memory().ok_or(Error::Unsupported("memory ops"))?;
+        mem.erase(s, EraseKind::Chip)?;
     }
 
     {
