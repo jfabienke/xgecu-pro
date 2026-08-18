@@ -757,6 +757,17 @@ fn run_write(
 fn run_erase(db_dir: Option<&Path>, chip: &str, rep: &mut dyn Reporter) -> Result<()> {
     let db = load_db(db_dir, rep)?;
     let dev = lookup_device(&*db, chip)?;
+    // The database records whether a part can be erased at all. One-time
+    // programmable chips cannot: an EPROM in a windowless plastic package has
+    // no erase path, and its cells only clear under UV. Energizing the socket
+    // to attempt one anyway is pointless and applies an algorithm the part was
+    // never meant to see, so refuse the way the C tool does.
+    if !dev.can_erase() {
+        return Err(Error::Unsupported(
+            "this chip cannot be erased (the database marks it one-time \
+             programmable; a windowless EPROM clears only under UV)",
+        ));
+    }
     let mut prog = open_programmer()?;
     warn_firmware(&*prog, &*db, rep);
 

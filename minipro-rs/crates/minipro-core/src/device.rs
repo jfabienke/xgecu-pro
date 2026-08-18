@@ -67,6 +67,17 @@ impl BlockReq {
     }
 }
 
+/// Capability bits packed into the C `flags.raw_flags` word.
+pub mod flags {
+    /// The chip supports an electrical erase. **Clear for one-time-programmable
+    /// parts**: an EPROM in a windowless plastic package has no erase path at
+    /// all — its cells only return to 1 under UV, through a quartz window it
+    /// does not have.
+    pub const CAN_ERASE: u32 = 0x0000_0010;
+    /// The chip reports an electronic id.
+    pub const HAS_CHIP_ID: u32 = 0x0000_0020;
+}
+
 /// What an erase should target.
 #[derive(Clone, Copy, Debug)]
 pub enum EraseKind {
@@ -211,6 +222,17 @@ pub struct Device {
     pub logic_vcc: u8,
 }
 
+impl Device {
+    /// Whether this part can be erased at all — see [`flags::CAN_ERASE`].
+    pub fn can_erase(&self) -> bool {
+        self.raw_flags & flags::CAN_ERASE != 0
+    }
+    /// Whether this part reports an electronic id — see [`flags::HAS_CHIP_ID`].
+    pub fn has_chip_id(&self) -> bool {
+        self.raw_flags & flags::HAS_CHIP_ID != 0
+    }
+}
+
 /// An in-memory dump/image plus the metadata the JSON `Outcome` reports.
 #[derive(Clone, Debug, Default)]
 pub struct Image {
@@ -223,5 +245,31 @@ impl Image {
     }
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod flag_tests {
+    use super::*;
+
+    /// Real `raw_flags` from the vendor database. Attempting an erase on a
+    /// one-time-programmable part is not merely futile — it energizes the
+    /// socket and runs an algorithm the chip was never meant to see.
+    #[test]
+    fn otp_parts_are_not_erasable() {
+        let otp = |f| Device {
+            raw_flags: f,
+            ..Default::default()
+        };
+        // MX27C2000@DIP32 and AT27C256R@DIP28 both read 0x68 - bit 4 clear.
+        assert!(
+            !otp(0x0000_0068).can_erase(),
+            "OTP EPROM must not be erasable"
+        );
+        // ...but they do report an electronic id (bit 5 set), which is how the
+        // MX27C2000 identifies as 0xc220.
+        assert!(otp(0x0000_0068).has_chip_id());
+        // W25Q128BV@SOIC8 reads 0x504278 - bit 4 set.
+        assert!(otp(0x0050_4278).can_erase(), "flash must stay erasable");
     }
 }
