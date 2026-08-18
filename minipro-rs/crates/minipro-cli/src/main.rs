@@ -727,6 +727,17 @@ fn run_write(
 ) -> Result<()> {
     let db = load_db(db_dir, rep)?;
     let dev = lookup_device(&*db, chip)?;
+    // Parts whose write-protect must be lifted before programming (the C's
+    // off_protect_before) need a protect-off / end / begin sequence this write
+    // path does not implement yet. Attempting anyway programs nothing and
+    // surfaces as a verify failure minutes later; refuse with the real reason.
+    // Reads are unaffected — this gate is here, not in lookup.
+    if dev.off_protect_before() && !dry_run {
+        return Err(Error::Unsupported(
+            "this chip needs write-protect lifted before programming, which is \
+             not implemented yet — programming would silently not take",
+        ));
+    }
     let image = load_image(file, format, dev.code_size, dev.blank_value)?;
     let mut prog = open_programmer()?;
     warn_firmware(&*prog, &*db, rep);

@@ -138,8 +138,18 @@ a floating bus as a detected chip.
 
 **How it fared.** Three of this week's fixes were exactly this class, and in two
 of them the C already refused where we did not — the oracle was ahead of us on
-its own database's semantics. The pattern is now named in the code, because
-there are more capability bits than the two we have so far consulted.
+its own database's semantics.
+
+A full audit against the C's decoder followed. It decodes **ten** semantics from
+`raw_flags`; we consulted two. The complete set is now named in
+`device::flags`, and the audit found one live landmine in the unconsumed
+remainder: `OFF_PROTECT_BEFORE`, carried by **10,123 devices** (30% of the
+catalog), whose absence from the write path means — in the C's own words —
+"the program silently does nothing" on protected parallel NOR. Writing such a
+part is now refused with that reason until the protect-off sequence is
+implemented; the other still-unconsumed semantics (16-bit `DATA_BUS_WIDTH`,
+9,256 devices; the data-region offset; write-only lock bits; calibration) are
+documented on their accessors as open rather than left invisible.
 
 ## 7. Typed errors, one event stream, three renderers
 

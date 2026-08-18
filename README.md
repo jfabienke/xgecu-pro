@@ -25,6 +25,7 @@ This is a **young project handling real hardware**. Honest state of play:
 | **T76 write** (parallel EPROM) | ✅ **Hardware-verified** — programs and verifies on an MX27C2000: exactly the intended bits changed, nothing else moved |
 | **T76 erase / NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device**. `write --dry-run` checks the whole setup without programming |
 | **T76 write** (every other chip class) | ⚠️ Only the parallel-EPROM path has touched silicon |
+| **Writing protect-before parts** (10,123 devices, 30% of catalog) | ❌ Refused with a reason — the protect-off sequence isn't implemented, and without it programming silently does nothing |
 | **T56 / T48 (all operations)** | ⚠️ Complete drivers, **never run against real silicon** — no T48/T56 hardware here |
 | **T76 pin-contact check** | ❌ **Removed** — it measured nothing *and corrupted every read*; the T76 no longer advertises it |
 | **Erasing a one-time-programmable part** | ❌ Refused with a reason — the database's erase flag is honoured, as the C tool does |

@@ -67,8 +67,17 @@ impl BlockReq {
     }
 }
 
-/// Capability bits packed into the C `flags.raw_flags` word.
+/// Capability bits packed into the C `flags.raw_flags` word — the complete set
+/// the reference implementation decodes, not just the ones consumed here yet.
+///
+/// This module exists because of a design lesson: the word was carried to the
+/// wire faithfully while its *meaning* went unread, so the tool attempted an
+/// erase on a one-time-programmable part and would have silently under-written
+/// protected NOR. Every bit the C names is named here, so an unconsumed
+/// semantic is at least a visible TODO rather than an invisible one.
 pub mod flags {
+    /// The package is reversed in the socket (decoded by C, consumed nowhere).
+    pub const REVERSED_PACKAGE: u32 = 0x0000_0002;
     /// The chip supports an electrical erase. **Clear for one-time-programmable
     /// parts**: an EPROM in a windowless plastic package has no erase path at
     /// all — its cells only return to 1 under UV, through a quartz window it
@@ -76,6 +85,28 @@ pub mod flags {
     pub const CAN_ERASE: u32 = 0x0000_0010;
     /// The chip reports an electronic id.
     pub const HAS_CHIP_ID: u32 = 0x0000_0020;
+    /// The data region is addressed at an offset (C `has_data_offset`).
+    pub const DATA_MEMORY_ADDRESS: u32 = 0x0000_1000;
+    /// 16-bit data organization (C `data_org`/`word_size`; sizes and buffers
+    /// are in words, not bytes, when set).
+    pub const DATA_BUS_WIDTH: u32 = 0x0000_2000;
+    /// Write-protect must be lifted **before** programming. The C comment is
+    /// blunt about the failure mode on the T76: skip this on protected
+    /// parallel NOR and "the program silently does nothing".
+    pub const OFF_PROTECT_BEFORE: u32 = 0x0000_4000;
+    /// Write-protect is to be restored after programming.
+    pub const PROTECT_AFTER: u32 = 0x0000_8000;
+    /// Lock bits can be written but not read back.
+    pub const LOCK_BIT_WRITE_ONLY: u32 = 0x0004_0000;
+    /// The chip carries calibration data.
+    pub const CALIBRATION: u32 = 0x0008_0000;
+    /// Two-bit field: how the part may be programmed (C `prog_support`).
+    pub const SUPPORTED_PROGRAMMING: u32 = 0x0030_0000;
+    /// `SUPPORTED_PROGRAMMING` value: ICSP only — the C auto-enables ICSP
+    /// rather than refusing.
+    pub const PROG_ICSP_ONLY: u32 = 0x02;
+    /// `SUPPORTED_PROGRAMMING` value: ZIF socket only.
+    pub const PROG_ZIF_ONLY: u32 = 0x00;
 }
 
 /// What an erase should target.
@@ -231,6 +262,29 @@ impl Device {
     pub fn has_chip_id(&self) -> bool {
         self.raw_flags & flags::HAS_CHIP_ID != 0
     }
+    /// Write-protect must be lifted before programming — see
+    /// [`flags::OFF_PROTECT_BEFORE`]. **Not yet consumed by the write path**;
+    /// on protected parallel NOR that means programming would silently do
+    /// nothing, the C's own comment says as much, and the write path refuses
+    /// such parts until the sequence is implemented.
+    pub fn off_protect_before(&self) -> bool {
+        self.raw_flags & flags::OFF_PROTECT_BEFORE != 0
+    }
+    /// Write-protect is restored after programming — see
+    /// [`flags::PROTECT_AFTER`].
+    pub fn protect_after(&self) -> bool {
+        self.raw_flags & flags::PROTECT_AFTER != 0
+    }
+    /// 16-bit data organization — see [`flags::DATA_BUS_WIDTH`]. Sizes are in
+    /// words when set. **Not yet consumed**: 16-bit parts are unvalidated.
+    pub fn wide_data(&self) -> bool {
+        self.raw_flags & flags::DATA_BUS_WIDTH != 0
+    }
+    /// How the part may be programmed (ICSP-only / ZIF-only / both) — the
+    /// two-bit [`flags::SUPPORTED_PROGRAMMING`] field.
+    pub fn prog_support(&self) -> u32 {
+        (self.raw_flags & flags::SUPPORTED_PROGRAMMING) >> 20
+    }
 }
 
 /// An in-memory dump/image plus the metadata the JSON `Outcome` reports.
@@ -271,5 +325,23 @@ mod flag_tests {
         assert!(otp(0x0000_0068).has_chip_id());
         // W25Q128BV@SOIC8 reads 0x504278 - bit 4 set.
         assert!(otp(0x0050_4278).can_erase(), "flash must stay erasable");
+    }
+
+    /// Real flags from the catalog: 10,123 devices carry OFF_PROTECT_BEFORE.
+    /// Writing one without lifting protect programs nothing (the C's own
+    /// comment), so the accessor gating the refusal must decode correctly.
+    #[test]
+    fn protect_and_width_flags_decode() {
+        let d = |f| Device {
+            raw_flags: f,
+            ..Default::default()
+        };
+        // S-34C02B@DFN8 reads 0x00104200: protect-before, not 16-bit.
+        assert!(d(0x0010_4200).off_protect_before());
+        assert!(!d(0x0010_4200).wide_data());
+        // MX27C2000 reads 0x68: neither.
+        assert!(!d(0x0000_0068).off_protect_before());
+        assert!(!d(0x0000_0068).wide_data());
+        assert_eq!(d(0x0010_4200).prog_support(), 0x1);
     }
 }
