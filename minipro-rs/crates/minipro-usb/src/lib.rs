@@ -382,11 +382,20 @@ fn open_device(
     // T76 (0xA466:0x1A86) on macOS: at USB 3.0 SuperSpeed the bulk endpoints
     // often come up unresponsive (kIOReturnNotResponding on the first OUT)
     // even though control transfers and interface-claim succeed. Cycling the
-    // configuration (0 -> 1) re-arms the endpoints. Harmless on other OSes and
-    // guarded to the T76 so it can't disturb the TL866/T48/T56 devices.
+    // configuration (0 -> 1) re-arms the endpoints.
+    //
+    // **Only at SuperSpeed.** It was previously done on every open, and at High
+    // Speed that is not merely unnecessary — it wedges the device. Measured: a
+    // completed session (bitstream upload + BEGIN_TRANS + END_TRANS) followed by
+    // a config cycle leaves the T76 unable to answer the next command at all,
+    // so every other invocation of `detect`/`read`/`write` blocked on EP81 until
+    // its 360 s timeout. Gating on the speed made five consecutive runs clean
+    // where the alternation had been perfectly reproducible. The C tool does no
+    // config cycle and never showed the problem.
+    //
     // The set_configuration return is ignored — it's advisory, and the re-arm
     // is a best-effort workaround.
-    if vid == T76_VID && pid == T76_PID {
+    if vid == T76_VID && pid == T76_PID && link == LinkSpeed::Super {
         let _ = device.set_configuration(0).wait();
         let _ = device.set_configuration(1).wait();
     }
@@ -502,6 +511,11 @@ mod tests {
     /// ```text
     /// cargo test -p minipro-usb -- --ignored --nocapture reset_reenumeration
     /// ```
+    ///
+    /// Run the hardware tests **one at a time**. They share the one attached
+    /// device and each leaves it freshly reset, so running them together is
+    /// flaky — observed failing on one attempt and passing the next with no
+    /// code change. Each passes reliably on its own.
     ///
     /// Enumeration and readiness are timed separately: "visible in the device
     /// list" and "open + interface claimed" are different events, and only the

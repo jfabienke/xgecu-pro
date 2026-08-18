@@ -24,7 +24,7 @@ This is a **young project handling real hardware**. Honest state of play:
 | **T76 reads** | ✅ **Hardware-verified** — byte-identical to known-good dumps, stable over repeated reads |
 | **T76 write / erase / NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device** — `write --dry-run` checks the setup without programming |
 | **T56 / T48 (all operations)** | ⚠️ Complete drivers, **never run against real silicon** — no T48/T56 hardware here |
-| **T76 pin-contact check** | ❌ Wired up but **measures nothing** — the device returns a constant, so it warns and never blocks |
+| **T76 pin-contact check** | ❌ **Removed** — it measured nothing and *corrupted reads*; the T76 no longer advertises it |
 | **`@ISP_VGA` parts** (monitor EDID, MStar scaler flash) | ❌ Not implemented — refused with a reason; the C tool rejects these too |
 | **TL866II+ / TL866A/CS** | ❌ Not implemented |
 
@@ -113,7 +113,7 @@ must-drain guard makes forgetting it a compile error.
 
 `write --dry-run` runs every step up to the moment of programming and stops:
 image and size validation, the FPGA bitstream upload, the per-chip-class
-`BEGIN_TRANS`, the contact check, and the chip-id match. It energizes the socket
+`BEGIN_TRANS`, and the chip-id match. It energizes the socket
 exactly as a read does — `begin()` takes only the device, not the operation — so
 it is safe on parts a bad write would destroy, like an OTP EPROM.
 
@@ -168,9 +168,8 @@ Codes are `usb`, `protocol`, `chip_id_mismatch`, `bad_contact`, `overcurrent`,
 
 **TUI** — a [ratatui](https://ratatui.rs) interface with a searchable chip-DB
 browser, a 40-pin ZIF contact map, an operation progress gauge, a hex view, and a
-log pane. The contact map renders whatever the pin check reports, which on the
-T76 is a constant — treat it as a layout, not a measurement, until that check
-does something (see the status table above).
+log pane. The contact map renders whatever the pin check reports; with the T76's
+check removed it stays a layout rather than a measurement (see the status table).
 
 ## Repo layout
 
@@ -216,7 +215,9 @@ There are also hardware tests that only run when you ask, and they need nothing
 in the socket — no chip, no adapter:
 
 ```sh
-cargo test -p minipro-usb -- --ignored --nocapture     # open, claim, transfer, reset
+# Run one at a time: they share the single attached device, and back-to-back
+# runs are stateful enough to trip each other up.
+cargo test -p minipro-usb -- --ignored --nocapture --test-threads=1 live_command
 ```
 
 Bug reports are most useful with the programmer model, `minipro info` output,
