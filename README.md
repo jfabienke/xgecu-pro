@@ -33,7 +33,7 @@ This is a **young project handling real hardware**. Honest state of play:
 | **TL866II+** | ⚠️ **Reference-only** — full driver pinned against the C (incl. its interlaced dual-endpoint transfers), zero silicon contact so far |
 | **TL866A/CS** | ❌ Not implemented (different, older protocol) |
 
-Every driver is pinned by **byte-exact golden-packet tests** (203 tests, hardware-free,
+Every driver is pinned by **byte-exact golden-packet tests** (214 tests, hardware-free,
 plus 5 `#[ignore]`d ones that need a real device), so the wire output is known-correct
 against captures.
 
@@ -111,7 +111,7 @@ want byte-minimal fetches.
 `read` · `write` · `erase` · `info` · `search` · `detect` · `logic` ·
 `autodetect` · `update` · `tui`
 
-Across the three drivers: memory read/write/erase/blank-check/identify, MCU
+Across the four drivers: memory read/write/erase/blank-check/identify, MCU
 fuses, JEDEC/PLD rows, write-protect, calibration, logic-IC testing, SPI
 autodetect — plus eMMC/NAND and firmware update on the T76.
 Full capability matrix in the [`minipro-rs` README](minipro-rs/README.md).

@@ -5,43 +5,52 @@ A Rust redesign and reimplementation of the [minipro](https://gitlab.com/nmatt0/
 [`docs/rust-trait-model.md`](../docs/rust-trait-model.md), and the three-mode
 output design.
 
-**Status:** working. The T76 driver is fully implemented and **hardware-verified**
-(byte-identical reads from a real T76). The native chip database reads XGecu's
+**Status:** working. The T76 driver is fully implemented and **hardware-verified**:
+byte-identical reads from a real T76, and a parallel-EPROM **write** proven
+bit-exact on an MX27C2000. The native chip database reads XGecu's
 `InfoICT76.dll` directly (no XML needed) and can provision itself from a mirror.
-187 tests pass, clippy clean.
+214 tests pass, clippy clean.
 
-> ⚠️ **The T48 and T56 drivers are untested on hardware.** They are
+> ⚠️ **The T48, T56, and TL866II+ drivers are untested on hardware.** They are
 > reference-only implementations — verified against byte-exact golden
-> packets, but **never run against a real T48 or T56** (we don't have the
+> packets, but **never run against real silicon** (we don't have the
 > hardware). Treat them as unproven until someone confirms them on-device. See
 > [Contributing](#contributing).
 
 ```
-cargo test           # 187 hardware-free protocol/golden/db tests
+cargo test           # 214 hardware-free protocol/golden/db tests
 cargo clippy --all-targets
 ./target/debug/minipro --json info
 ```
 
 ## Driver capability matrix
 
-Three programmer drivers sit behind one `Programmer` trait; `detect()` dispatches
-on the system-info device-type byte (`MP_T56=6`, `MP_T48=7`, `MP_T76=8`).
+Four programmer drivers sit behind one `Programmer` trait; `detect()` dispatches
+on the system-info device-type byte (`MP_TL866II+=5`, `MP_T56=6`, `MP_T48=7`,
+`MP_T76=8`).
 
 Legend: ✅ implemented ・ ⬜ deferred (see below) ・ ➖ N/A for that hardware
 
-| Capability | T76 | T56 | T48 |
-|---|:--:|:--:|:--:|
-| Memory (read / write / erase / blank / identify) | ✅ | ✅ | ✅ |
-| Fuses (user / config / lock) | ✅ | ✅ | ✅ |
-| JEDEC rows (PLD/GAL) | ✅ | ✅ | ✅ |
-| Protect on / off | ✅ | ✅ | ✅ |
-| Calibration readout | ✅ | ✅ | ➖ |
-| Logic-IC test | ✅ | ✅ | ✅ |
-| SPI 25-series autodetect | ✅ | ✅ | ✅ |
-| Firmware update | ✅ | ⬜ | ⬜ |
-| eMMC / NAND | ✅ | ➖ | ➖ |
-| Pin-contact test | ✅ | ➖ | ➖ |
-| Pin-driver / bit-bang | ➖ | ➖ | ⬜ |
+| Capability | T76 | T56 | T48 | TL866II+ |
+|---|:--:|:--:|:--:|:--:|
+| Memory (read / write / erase / blank / identify) | ✅ | ✅ | ✅ | ✅ |
+| Fuses (user / config / lock) | ✅ | ✅ | ✅ | ✅ |
+| JEDEC rows (PLD/GAL) | ✅ | ✅ | ✅ | ✅ |
+| Protect on / off | ✅ | ✅ | ✅ | ✅ |
+| Calibration readout | ✅ | ✅ | ➖ | ⬜ |
+| Logic-IC test | ✅ | ✅ | ✅ | ✅ |
+| SPI 25-series autodetect | ✅ | ✅ | ✅ | ✅ |
+| Firmware update | ✅ | ⬜ | ⬜ | ⬜ |
+| eMMC / NAND | ✅ | ➖ | ➖ | ➖ |
+| Pin-contact test | ❌ | ➖ | ➖ | ➖ |
+| Pin-driver / bit-bang | ➖ | ➖ | ⬜ | ⬜ |
+
+The T76 pin-contact test is ❌ **removed**, not deferred: on real hardware the
+reply is a constant (mostly stale reply-buffer bytes) and issuing the command
+corrupts the read that follows, so the driver no longer advertises it. The
+TL866II+ is the family's odd one out on the wire — bulk transfers larger than
+64 bytes interlace across *two* endpoint pairs, small writes fold into the
+command pipe — and is **reference-only** (never run against real silicon).
 
 The fuse/JEDEC/protect/calibration commands are byte-identical across the lineage
 and run on EP01/EP81 with no bitstream, so they are implemented once in
@@ -58,14 +67,14 @@ Every non-✅ cell is principled, not an oversight:
   T76 implementation is the template); the T48 pin-driver/bit-bang/self-test
   cluster is the shared `bitbang.c` subsystem with no standalone caller yet.
 
-**Not started:** the TL866II+ and TL866A/CS drivers.
+**Not started:** the TL866A/CS driver (the older, different protocol).
 
 ## Workspace
 
 | Crate | Role |
 |---|---|
 | `minipro-core` | Device model, `Transport`/`Programmer` + capability traits, `Reporter`, typed `Error`, op orchestration. Object-safe capability upcasts; the must-drain `Pending` guard. |
-| `minipro-proto` | Per-programmer drivers (`t76.rs`, `t56.rs`, `t48.rs`), the shared `wire.rs` (II+-class header + shared ops), and `detect()`. |
+| `minipro-proto` | Per-programmer drivers (`t76.rs`, `t56.rs`, `t48.rs`, `tl866ii.rs`), the shared `wire.rs` (II+-class header + shared ops), and `detect()`. |
 | `minipro-usb` | `UsbTransport` (over `nusb`) + `MockTransport` for hardware-free tests. |
 | `minipro-db` | `ChipDb` trait with four backends: `XmlDb` (infoic.xml), `DllDb` (parses `InfoICT76.dll` directly), `HttpDb` (`net` feature — provisions the vendor files from a mirror of extracted files, daily version check), and `vendor` (the zero-setup default: downloads XGecu's installer archive once and unpacks the database with a system RAR tool — `bsdtar`/`unar`/`unrar` — so no RAR decoder is linked in). |
 | `minipro-cli` | The `minipro` binary: human / JSON / TUI reporters, mode selection. |
@@ -80,25 +89,30 @@ Every non-✅ cell is principled, not an oversight:
 
 ## How the drivers are verified without hardware
 
-The T76 was validated against a real device. The T56/T48 have no hardware here,
-so correctness rests on a **golden-packet** discipline: the shared BEGIN header
-and every driver's packet builders are frozen as byte-exact fixtures, so any
-change to a byte the device would see fails a test.
-The `wire.rs` extraction that all three drivers share was proven byte-identical
+The T76 was validated against a real device. The T56/T48/TL866II+ have no
+hardware here, so correctness rests on a **golden-packet** discipline: the
+shared BEGIN header and every driver's packet builders are frozen as byte-exact
+fixtures, so any change to a byte the device would see fails a test.
+The `wire.rs` extraction that all four drivers share was proven byte-identical
 against the hardware-verified T76 goldens.
+
+A caution that discipline earned the hard way: the T76 write path passed every
+golden test while programming nothing — the packets were plausible, the cadence
+was wrong, and only a chip could tell. Golden packets pin the wire; silicon
+proves the operation.
 
 ## Remaining work
 
-1. **TL866II+ driver** — II+-class, close to the T48 shape (EP02 bulk,
-   fixed-silicon).
-2. **TL866A/CS driver** — the outlier: 24-bit addressing, alternate opcode space,
+1. **TL866A/CS driver** — the outlier: 24-bit addressing, alternate opcode space,
    latch-based ZIF model, no digital voltage control.
-3. **Firmware update** (per-device, obfuscation-table transcription).
-4. **Remaining DB fidelity**: GAL/PLD `config` (fuse-map geometry) and the
-   host-side `pin_map` package tables. (The `chip_type`/`blank_value` fields,
-   the `logicic.xml` vector parser, and the `chip_type`/`blank_value` fields
-   are done. A compiled/baked-in DB was considered and dropped —
-   direct-to-source via `DllDb`/`HttpDb` is better.)
+2. **Firmware update for the T56/T48/TL866II+** (per-device, obfuscation-table
+   transcription; the T76's is done, exposed as `minipro update`, and gated on
+   verified bootloader entry both ways).
+3. **Remaining DB fidelity**: GAL/PLD `config` (fuse-map geometry), the
+   host-side `pin_map` package tables, and fuse item widths for 16-bit parts
+   (`DATA_BUS_WIDTH` — memory transfers are already byte-correct; the flag
+   matters only for fuses and display). A compiled/baked-in DB was considered
+   and dropped — direct-to-source via `DllDb`/`HttpDb` is better.
 
 The FPGA logic test and SPI autodetect are **done** on T56/T76 — the driver ops
 fetch their utility bitstreams (`TestLgcPull`, `TTL1`, `SPI25F*`) by name from
@@ -125,21 +139,22 @@ the same `algoT76/` source as chip bitstreams, and the CLI exposes them as
 
 Help wanted — especially from anyone with the **hardware we don't have**.
 
-- **🔌 Validate the T48 / T56 on real devices.** These drivers are complete but
-  **untested on hardware** — implemented from the wire protocol and covered by
-  byte-exact golden packets, yet never run against an actual T48 or T56. If you
-  own one, running `minipro info`, `detect`, and a `read` against a known chip
-  (and reporting what you see) is the single most valuable thing you can do. It
-  turns "reference-only" into "proven." The write-buffer-size `TODO(hw)` in
-  `t48.rs`/`t56.rs` can only be settled this way too.
-- **🔌 T76 op coverage on hardware.** T76 *reads* are byte-verified; **write,
-  erase, NAND, eMMC, and firmware-update** are implemented but not yet exercised on a
-  device. Confirmations (or bug reports) welcome.
-- **Implement the TL866II+ and TL866A/CS drivers.** The TL866II+ is II+-class and
-  close to the existing T48 (EP02 bulk, fixed-silicon), so it reuses most of the
-  shared `wire` layer. The TL866A/CS is the outlier (24-bit addressing, an
-  alternate opcode space, a latch-based ZIF model). Both are well-specified in
-  the C fork.
+- **🔌 Validate the T48 / T56 / TL866II+ on real devices.** These drivers are
+  complete but **untested on hardware** — implemented from the wire protocol and
+  covered by byte-exact golden packets, yet never run against real silicon. If
+  you own one, running `minipro info`, `detect`, and a `read` against a known
+  chip (and reporting what you see) is the single most valuable thing you can
+  do. It turns "reference-only" into "proven." The TL866II+'s interlaced
+  dual-endpoint bulk path and the write-buffer-size `TODO(hw)` in
+  `t48.rs`/`t56.rs`/`tl866ii.rs` can only be settled this way.
+- **🔌 T76 op coverage on hardware.** Reads are byte-verified and a
+  parallel-EPROM write is proven bit-exact; **erase, flash-class writes, NAND,
+  eMMC, and firmware-update** are implemented but not yet exercised on a
+  device. One salvaged 25-series SPI flash covers erase, the protect-off
+  sequence, and write chunking in a recoverable loop.
+- **Implement the TL866A/CS driver.** The outlier of the family: 24-bit
+  addressing, an alternate opcode space, a latch-based ZIF model. Well-specified
+  in the C fork.
 - **The roadmap** ([`docs/rust-roadmap.md`](../docs/rust-roadmap.md))
   lists the rest — CLI verbs for fuses/JEDEC/firmware, GAL/PLD `config`, extra
   memory regions — each scoped with effort and dependencies.
