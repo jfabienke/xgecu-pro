@@ -27,6 +27,16 @@ The lesson written into the code and this document: *a divergence from the C
 needs either a capture or a measurement to justify it.* Matching the C is the
 default; beating it requires evidence.
 
+Stated as a project rule: **wire facts come only from the C implementation,
+from USB captures, or from measurements against our own hardware — never from
+guesswork.** Where a fact is missing, the tool refuses or stops rather than
+inventing traffic (the self-test stimulus and ISP-over-VGA are unimplemented
+for exactly this reason). Host-side *policy* may diverge when measured —
+timeouts, refusals, verification — but the bytes on the bus are always
+someone's observed fact. This discipline is also what the MIT license rests
+on: the drivers are independent expression of protocol facts, not of the C's
+code.
+
 ## 1. Pure-Rust USB (`nusb`) instead of libusb
 
 **Decision.** No C dependencies: `nusb` for USB, `flate2`/`miniz_oxide` for the
