@@ -11,7 +11,9 @@ use std::fmt;
 
 /// Firmware version, e.g. `00.1.17`. Placed on both the programmer and the chip
 /// DB so a mismatch is a typed condition, not a `printf`.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+/// Ordering follows the packed integer: `hw.major.minor` occupy descending
+/// byte positions, so numeric order is version order.
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FwVersion(pub u32);
 
 impl fmt::Display for FwVersion {

@@ -262,6 +262,7 @@ mod tests {
                     device_code: String::new(),
                     link: LinkSpeed::High,
                     voltage: 5.0,
+                    bootloader: false,
                 },
                 mem,
                 flaky: false,
@@ -553,6 +554,7 @@ mod tests {
             device_code: String::new(),
             link: LinkSpeed::Full,
             voltage: 0.0,
+            bootloader: false,
         });
         let mut rep = Collect::default();
         let err = read_region(&mut prog, &s, Region::code(&dev), &mut rep).unwrap_err();

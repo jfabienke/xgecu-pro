@@ -304,8 +304,16 @@ impl Device {
     pub fn protect_after(&self) -> bool {
         self.raw_flags & flags::PROTECT_AFTER != 0
     }
-    /// 16-bit data organization — see [`flags::DATA_BUS_WIDTH`]. Sizes are in
-    /// words when set. **Not yet consumed**: 16-bit parts are unvalidated.
+    /// 16-bit data organization — see [`flags::DATA_BUS_WIDTH`].
+    ///
+    /// **Measured against the C, this does not affect memory transfers.**
+    /// `code_memory_size` is bytes for every part (the C's read streams it
+    /// verbatim and divides by `word_size` only when *printing* "Memory: N
+    /// Words"), and `word_size` never reaches the drivers. The read/write/
+    /// erase paths here are therefore already correct for 16-bit parts. What
+    /// it does govern in the C is fuse/config item width (`num_fuses *
+    /// word_size` bytes, values packed per word) and display formatting —
+    /// both of which matter only once fuse operations are surfaced.
     pub fn wide_data(&self) -> bool {
         self.raw_flags & flags::DATA_BUS_WIDTH != 0
     }

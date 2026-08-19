@@ -23,7 +23,7 @@ This is a **young project handling real hardware**. Honest state of play:
 |---|---|
 | **T76 reads** | ✅ **Hardware-verified** — byte-identical across repeated reads on two chip classes (AT27C256R 32 KiB DIP-28, MX27C2000 256 KiB DIP-32) |
 | **T76 write** (parallel EPROM) | ✅ **Hardware-verified** — programs and verifies on an MX27C2000: exactly the intended bits changed, nothing else moved |
-| **T76 erase / NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device**. `write --dry-run` checks the whole setup without programming |
+| **T76 erase / NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device**. `write --dry-run` checks setup without programming; `update` refuses without `--confirm`, verifies bootloader entry both ways, and recovers a bootloader-stuck device |
 | **T76 write** (every other chip class) | ⚠️ Only the parallel-EPROM path has touched silicon |
 | **Writing protect-before parts** (10,123 devices incl. most SPI NOR) | ⚠️ Protect-off sequence implemented per the C's, **not yet verified on silicon** |
 | **T56 / T48 (all operations)** | ⚠️ Complete drivers, **never run against real silicon** — no T48/T56 hardware here |
@@ -108,7 +108,7 @@ want byte-minimal fetches.
 ## What it does
 
 `read` · `write` · `erase` · `info` · `search` · `detect` · `logic` ·
-`autodetect` · `tui`
+`autodetect` · `update` · `tui`
 
 Across the three drivers: memory read/write/erase/blank-check/identify, MCU
 fuses, JEDEC/PLD rows, write-protect, calibration, logic-IC testing, SPI

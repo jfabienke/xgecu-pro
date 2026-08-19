@@ -57,6 +57,8 @@ pub enum Outcome {
         device_code: String,
         link: LinkSpeed,
         vcc: f32,
+        /// Running the bootloader instead of firmware (interrupted update).
+        bootloader: bool,
     },
     /// A generic success with no payload (erase, write).
     Ok { op: &'static str },
@@ -100,6 +102,7 @@ impl serde::Serialize for Outcome {
                 device_code,
                 link,
                 vcc,
+                bootloader,
             } => {
                 let mut m = ser.serialize_map(Some(10))?;
                 m.serialize_entry("op", "info")?;
@@ -112,6 +115,7 @@ impl serde::Serialize for Outcome {
                 m.serialize_entry("device_code", device_code)?;
                 m.serialize_entry("link", link)?;
                 m.serialize_entry("vcc", vcc)?;
+                m.serialize_entry("status", if *bootloader { "bootloader" } else { "normal" })?;
                 m.end()
             }
             Outcome::Ok { op } => {
@@ -179,9 +183,11 @@ mod tests {
             device_code: "T76".into(),
             link: LinkSpeed::Super,
             vcc: 5.0,
+            bootloader: false,
         };
         let v: serde_json::Value = serde_json::to_value(&out).unwrap();
         assert_eq!(v["op"], "info");
+        assert_eq!(v["status"], "normal");
         assert_eq!(v["link"], "ss");
         assert_eq!(v["vcc"], 5.0);
         assert_eq!(v["serial"], "SN123");

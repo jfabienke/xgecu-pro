@@ -80,6 +80,7 @@ impl T56 {
             device_code: String::new(),
             link: LinkSpeed::High,
             voltage: 0.0,
+            bootloader: false,
         };
         T56 {
             tx,
@@ -102,6 +103,7 @@ impl T56 {
             return Err(Error::Unsupported("attached programmer is not a T56"));
         }
         let (minor, major) = (msg[4], msg[5]);
+        let bootloader = minor == 0 && major == 0;
         // T48/T56 voltage: (raw * 0xccf6 / 0x27000) / 100.0.
         // Integer math first, then the float divide.
         let raw = u32::from_le_bytes([msg[56], msg[57], msg[58], msg[59]]);
@@ -114,6 +116,7 @@ impl T56 {
             device_code: ascii_field(&msg[24..32]), // device code @24, 8 B
             link: self.tx.link_speed(),
             voltage,
+            bootloader,
         };
         Ok(())
     }

@@ -506,6 +506,7 @@ impl T76 {
             device_code: String::new(),
             link: LinkSpeed::High,
             voltage: 0.0,
+            bootloader: false,
         };
         T76 {
             tx,
@@ -530,11 +531,16 @@ impl T76 {
         if msg.len() < 63 {
             return Err(Error::Protocol);
         }
-        if msg[6] != MP_T76 {
+        let (minor, major) = (msg[4], msg[5]);
+        // A zero firmware version is the bootloader (C `MP_STATUS_BOOTLOADER`).
+        // What the bootloader reports in the device-type byte is unobserved, so
+        // the type check applies only to normal firmware — the T76's USB id is
+        // unique, which is what selected this driver in the first place.
+        let bootloader = minor == 0 && major == 0;
+        if !bootloader && msg[6] != MP_T76 {
             // Only the T76 is supported by this driver.
             return Err(Error::Unsupported("attached programmer is not a T76"));
         }
-        let (minor, major) = (msg[4], msg[5]);
         let voltage_mv = u32::from_le_bytes([msg[56], msg[57], msg[58], msg[59]]);
         self.info = ProgrammerInfo {
             model: "T76".into(),
@@ -546,6 +552,7 @@ impl T76 {
             device_code: ascii_field(&msg[24..32]), // device code @24, 8 B
             link: self.tx.link_speed(),
             voltage: voltage_mv as f32 / 1000.0,
+            bootloader,
         };
         Ok(())
     }
@@ -1598,7 +1605,7 @@ impl PinTest for T76 {
 const ZIF_POSITIONS: u16 = 40;
 
 const UPDATE_HEADER_LEN: usize = 16;
-const UPDATE_BLOCK_LEN: usize = 0x114; // 284 programmable data bytes per block
+const UPDATE_BLOCK_LEN: usize = 0x114; // 276 programmable data bytes per block
 const UPDATE_MAX_LEN: usize = 1_048_576;
 const UPDATE_ADDR_STEP: u32 = 0x100; // destination address advance per block
 
@@ -1647,6 +1654,16 @@ impl<'a> UpdateFile<'a> {
     }
 }
 
+/// The firmware version an `updateT76.dat` image carries, after full
+/// validation (size, format tag, block accounting, CRC). The low half of the
+/// version word is the firmware version in [`FwVersion`] layout; the high half
+/// is the file-format tag checked by the parser.
+pub fn update_file_firmware(image: &[u8]) -> Result<FwVersion> {
+    UpdateFile::parse(image)?;
+    let version = wire::read_le32(image, 0)?;
+    Ok(FwVersion(version & !UPDATE_FILE_VERS_MASK))
+}
+
 impl FirmwareUpdate for T76 {
     /// Flash a `updateT76.dat` image. The caller supplies the raw file bytes and
     /// has already confirmed the update (no interactive prompt here). The image
@@ -1671,21 +1688,28 @@ impl FirmwareUpdate for T76 {
         // T76 to boot, otherwise minipro_open will fail"); our reset() polls
         // under a 5 s budget, which covers it, but bootloader boot time has
         // never been measured here the way normal re-enumeration has.
-        let mut switch = [0u8; 8];
-        switch[0] = CMD_SWITCH;
-        switch[1] = 0xaa;
-        le32(&mut switch, 4, BTLDR_MAGIC);
-        self.cmd_ok(&switch)?;
-        self.reboot()?;
-
-        // The C reopens here and refuses to continue unless the device is
-        // actually in the bootloader (`status != MP_STATUS_NORMAL`). Mirror
-        // that: firing BOOTLOADER_ERASE at normal firmware — which is what an
-        // unverified switch failure would mean — is an unknown we never take.
+        // The C switches "if necessary": a device already sitting in its
+        // bootloader (an interrupted previous update) is re-flashed directly,
+        // which is the recovery path — and sending SWITCH to a bootloader is
+        // an unknown it never takes either.
         if !self.in_bootloader()? {
-            return Err(Error::Unsupported(
-                "the device did not enter its bootloader; firmware not touched",
-            ));
+            let mut switch = [0u8; 8];
+            switch[0] = CMD_SWITCH;
+            switch[1] = 0xaa;
+            le32(&mut switch, 4, BTLDR_MAGIC);
+            self.cmd_ok(&switch)?;
+            self.reboot()?;
+
+            // The C reopens here and refuses to continue unless the device is
+            // actually in the bootloader (`status != MP_STATUS_NORMAL`).
+            // Firing BOOTLOADER_ERASE at normal firmware — which is what an
+            // unverified switch failure would mean — is an unknown we never
+            // take.
+            if !self.in_bootloader()? {
+                return Err(Error::Unsupported(
+                    "the device did not enter its bootloader; firmware not touched",
+                ));
+            }
         }
 
         // Erase.
@@ -2965,13 +2989,14 @@ mod tests {
     #[test]
     fn firmware_update_sequence() {
         let img = update_image();
-        // System-info replies for the two in_bootloader probes: fw field
-        // ([4..6]) zero = bootloader, nonzero = normal firmware.
+        // System-info replies for the in_bootloader probes: fw field ([4..6])
+        // zero = bootloader, nonzero = normal firmware.
         let mut boot_info = vec![0u8; 64];
         let mut normal_info = vec![0u8; 64];
         normal_info[4] = 0x07;
         normal_info[5] = 0x01;
         let (mut t76, tx) = t76_with(vec![
+            normal_info.clone(),              // pre-check: normal fw -> switch
             vec![0x3d, 0, 0, 0, 0, 0, 0, 0],  // switch ok
             std::mem::take(&mut boot_info),   // after reboot: in bootloader
             vec![0x3c, 0, 0, 0, 0, 0, 0, 0],  // erase ok
@@ -2982,35 +3007,58 @@ mod tests {
         t76.update(&img).unwrap();
 
         let sent = tx.sent();
-        assert_eq!(sent.len(), 9);
+        assert_eq!(sent.len(), 10);
+        // "Switching to boot mode if necessary": the mode probe comes first.
+        assert_eq!(sent[0].1, vec![0u8; 5]);
         // Switch to bootloader: 0x3d aa + magic 0x049000 LE.
-        assert_eq!(sent[0].1, vec![0x3d, 0xaa, 0, 0, 0x00, 0x90, 0x04, 0x00]);
+        assert_eq!(sent[1].1, vec![0x3d, 0xaa, 0, 0, 0x00, 0x90, 0x04, 0x00]);
         // Reboot (XGECU_RESET 0x3f).
-        assert_eq!(sent[1].1, vec![0x3f, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(sent[2].1, vec![0x3f, 0, 0, 0, 0, 0, 0, 0]);
         // Verify the bootloader answered before erasing — the C refuses to
         // continue in normal status, and so do we.
-        assert_eq!(sent[2].1, vec![0u8; 5]);
+        assert_eq!(sent[3].1, vec![0u8; 5]);
         // Erase: 0x3c aa.
-        assert_eq!(sent[3].1, vec![0x3c, 0xaa, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(sent[4].1, vec![0x3c, 0xaa, 0, 0, 0, 0, 0, 0]);
         // Begin write: 0x3b aa, no reply.
-        assert_eq!(sent[4].1, vec![0x3b, 0xaa, 0, 0, 0, 0, 0, 0]);
-        // Block 0: 0x11c bytes, length 0x100, address 0, then the payload
-        //.
-        assert_eq!(sent[5].1.len(), 0x11c);
-        assert_eq!(&sent[5].1[..8], &[0x3b, 0x00, 0x00, 0x01, 0, 0, 0, 0]);
-        assert_eq!(&sent[5].1[8..], &img[16..16 + 0x114]);
-        // Last block: 0x108 bytes with the fixed address + CRC
-        //.
-        assert_eq!(sent[6].1.len(), 0x108);
-        assert_eq!(&sent[6].1[..12], {
+        assert_eq!(sent[5].1, vec![0x3b, 0xaa, 0, 0, 0, 0, 0, 0]);
+        // Block 0: 0x11c bytes, length 0x100, address 0, then the payload.
+        assert_eq!(sent[6].1.len(), 0x11c);
+        assert_eq!(&sent[6].1[..8], &[0x3b, 0x00, 0x00, 0x01, 0, 0, 0, 0]);
+        assert_eq!(&sent[6].1[8..], &img[16..16 + 0x114]);
+        // Last block: 0x108 bytes with the fixed address + CRC.
+        assert_eq!(sent[7].1.len(), 0x108);
+        assert_eq!(&sent[7].1[..12], {
             let mut hdr = vec![0x3b, 0x03, 0x00, 0x01];
             hdr.extend(LAST_BLOCK_ADDR.to_le_bytes());
             hdr.extend(LAST_BLOCK_CRC.to_le_bytes());
             &hdr.clone()[..]
         });
         // Final reboot, then the proof the new firmware came up.
-        assert_eq!(sent[7].1, vec![0x3f, 0, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(sent[8].1, vec![0u8; 5]);
+        assert_eq!(sent[8].1, vec![0x3f, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(sent[9].1, vec![0u8; 5]);
+    }
+
+    /// The recovery path: a device already in its bootloader (interrupted
+    /// update) is reflashed directly — no SWITCH, no reboot first, exactly
+    /// the C's "if necessary" branch.
+    #[test]
+    fn firmware_update_recovers_a_bootloader_stuck_device() {
+        let img = update_image();
+        let boot_info = vec![0u8; 64];
+        let mut normal_info = vec![0u8; 64];
+        normal_info[4] = 0x07;
+        normal_info[5] = 0x01;
+        let (mut t76, tx) = t76_with(vec![
+            boot_info,                       // pre-check: already bootloader
+            vec![0x3c, 0, 0, 0, 0, 0, 0, 0], // erase ok
+            vec![0x3b, 0, 0, 0, 0, 0, 0, 0], // block ok
+            vec![0x3b, 0, 0, 0, 0, 0, 0, 0], // last block ok
+            normal_info,                     // after final reboot: normal fw
+        ]);
+        t76.update(&img).unwrap();
+        let sent = tx.sent();
+        assert!(sent.iter().all(|(_, p)| p[0] != 0x3d), "must not SWITCH");
+        assert_eq!(sent[1].1[0], 0x3c, "goes straight to erase");
     }
 
     /// If the switch does not take and the device reboots into normal
@@ -3023,14 +3071,15 @@ mod tests {
         normal_info[4] = 0x07;
         normal_info[5] = 0x01;
         let (mut t76, tx) = t76_with(vec![
+            normal_info.clone(),             // pre-check: normal fw
             vec![0x3d, 0, 0, 0, 0, 0, 0, 0], // switch "ok"
             normal_info,                     // ...but still normal firmware
         ]);
         let err = t76.update(&img).unwrap_err();
         assert!(err.to_string().contains("did not enter its bootloader"));
-        // Nothing bootloader-shaped was sent: switch, reboot, info probe only.
+        // Nothing bootloader-shaped was sent: probe, switch, reboot, probe.
         let sent = tx.sent();
-        assert_eq!(sent.len(), 3);
+        assert_eq!(sent.len(), 4);
         assert!(sent.iter().all(|(_, p)| p[0] != 0x3c && p[0] != 0x3b));
     }
 

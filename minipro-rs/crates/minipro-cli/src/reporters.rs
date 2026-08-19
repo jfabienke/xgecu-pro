@@ -144,6 +144,7 @@ impl Reporter for HumanReporter {
                 device_code,
                 link,
                 vcc,
+                bootloader,
             } => {
                 let mut table = comfy_table::Table::new();
                 table.load_style(comfy_table::presets::UTF8_FULL_CONDENSED);
@@ -167,7 +168,19 @@ impl Reporter for HumanReporter {
                 }
                 table.add_row(vec!["link", link_label(*link)]);
                 table.add_row(vec!["vcc", &format!("{vcc:.1} V")]);
+                if *bootloader {
+                    table.add_row(vec!["status", "BOOTLOADER"]);
+                }
                 anstream::println!("{table}");
+                if *bootloader {
+                    anstream::eprintln!(
+                        "{} {}",
+                        "warning:".yellow().bold(),
+                        "device is running its bootloader — a firmware update was \
+                         interrupted; normal operations will not work until \
+                         `minipro update` completes one"
+                    );
+                }
                 if firmware != firmware_expected {
                     anstream::eprintln!(
                         "{} {}",

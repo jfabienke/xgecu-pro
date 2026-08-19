@@ -52,6 +52,11 @@ pub struct ProgrammerInfo {
     pub device_code: String,
     pub link: LinkSpeed,
     pub voltage: f32,
+    /// The device is running its bootloader rather than normal firmware
+    /// (system-info firmware field is zero) — a firmware update was
+    /// interrupted or never completed. Normal operations will not work;
+    /// `minipro update` can finish the job.
+    pub bootloader: bool,
 }
 
 /// Per-transaction state returned by [`Programmer::begin`]: the selected

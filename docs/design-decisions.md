@@ -153,7 +153,11 @@ refuse most flash writes, so the actual sequence went in instead:
 tests, honestly marked *unverified on silicon* until a protect-carrying part is
 on the bench. The other still-unconsumed semantics (16-bit `DATA_BUS_WIDTH`,
 9,256 devices; the data-region offset; write-only lock bits; calibration) are
-documented on their accessors as open rather than left invisible.
+documented on their accessors as open rather than left invisible. A follow-up
+audit then *shrank* one of them: tracing every `word_size` consumer in the C
+showed `code_memory_size` is bytes for all parts and the flag never reaches the
+drivers, so 16-bit memory transfers were already correct here — the residue is
+fuse item width and display, relevant only when fuse operations surface.
 
 While consolidating, both gate families moved to where a design can enforce
 them: every capability refusal now lives in `ops::preflight` (one testable

@@ -187,6 +187,18 @@ enum Command {
         /// Logic-IC name, e.g. "7400@DIP14" (from the logic database)
         chip: String,
     },
+    /// Flash new programmer firmware from an updateT76.dat file.
+    ///
+    /// Shows the device's current version against the file's and stops there
+    /// unless --confirm is given. A device stuck in its bootloader from an
+    /// interrupted update is reflashed directly (the recovery path).
+    Update {
+        /// The vendor's updateT76.dat
+        file: PathBuf,
+        /// Actually perform the update (without this, only report versions)
+        #[arg(long)]
+        confirm: bool,
+    },
     /// Autodetect a seated SPI 25-series flash by its JEDEC id
     Autodetect {
         /// Probe a 16-pin (SOIC16) package instead of the 8-pin default
@@ -207,6 +219,7 @@ impl Command {
             Command::Tui => "tui",
             Command::Detect { .. } => "detect",
             Command::Logic { .. } => "logic",
+            Command::Update { .. } => "update",
             Command::Autodetect { .. } => "autodetect",
         }
     }
@@ -371,6 +384,7 @@ fn main() -> ExitCode {
         Command::Info => run_info(db_dir, &mut *reporter_for(mode)),
         Command::Detect { like } => run_detect(db_dir, like, mode),
         Command::Logic { chip } => run_logic(db_dir, chip, mode),
+        Command::Update { file, confirm } => run_update(file, *confirm, &mut *reporter_for(mode)),
         Command::Autodetect { wide } => run_autodetect(db_dir, *wide, mode),
     };
 
@@ -810,6 +824,7 @@ fn run_info(db_dir: Option<&Path>, rep: &mut dyn Reporter) -> Result<()> {
         device_code: info.device_code.clone(),
         link: info.link,
         vcc: info.voltage,
+        bootloader: info.bootloader,
     });
     Ok(())
 }
@@ -822,6 +837,46 @@ fn run_info(db_dir: Option<&Path>, rep: &mut dyn Reporter) -> Result<()> {
 /// vendor" hides the far likelier truth: nothing drove the bus.
 fn responded(id: u32) -> bool {
     id != 0x000000 && id != 0xff_ffff
+}
+
+/// Flash programmer firmware. Mirrors the C's ceremony: report the device's
+/// current version against the file's, and only proceed on an explicit
+/// --confirm — an update is the one operation where a bug costs the
+/// programmer, not a chip.
+fn run_update(file: &Path, confirm: bool, rep: &mut dyn Reporter) -> Result<()> {
+    let image = std::fs::read(file)?;
+    // Full validation (format tag, block accounting, CRC) happens before the
+    // device is touched; this also yields the version the file carries.
+    let file_fw = minipro_proto::t76::update_file_firmware(&image)?;
+    let mut prog = open_programmer()?;
+    let (current, bootloader) = {
+        let info = prog.info();
+        (info.firmware, info.bootloader)
+    };
+    let relation = if bootloader {
+        "device is in bootloader mode; recovery update"
+    } else if file_fw > current {
+        "newer than the device"
+    } else if file_fw < current {
+        "OLDER than the device (downgrade)"
+    } else {
+        "same version as the device"
+    };
+    rep.event(&Event::Note(
+        format!("device firmware {current}, file contains {file_fw} — {relation}").into(),
+    ));
+    if !confirm {
+        return Err(Error::Unsupported(
+            "not updating without --confirm (versions reported above); \
+             do not disconnect the programmer while an update runs",
+        ));
+    }
+    let fw = prog
+        .firmware()
+        .ok_or(Error::Unsupported("this programmer has no firmware update"))?;
+    fw.update(&image)?;
+    rep.finish(&Outcome::Ok { op: "update" });
+    Ok(())
 }
 
 /// Decode a JEDEC manufacturer id byte to a name (common vendors only).
@@ -1416,6 +1471,7 @@ mod tests {
                 device_code: String::new(),
                 link: LinkSpeed::High,
                 voltage: 5.0,
+                bootloader: false,
             },
             mem: (0u8..16).collect(),
         });
