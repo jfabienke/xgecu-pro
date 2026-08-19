@@ -18,6 +18,7 @@
 pub mod t48;
 pub mod t56;
 pub mod t76;
+pub mod tl866ii;
 pub mod wire;
 
 use minipro_core::error::Error;
@@ -39,6 +40,7 @@ use minipro_core::transport::{command, Ep};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DeviceType {
+    Tl866ii,
     T56,
     T48,
     T76,
@@ -49,11 +51,13 @@ impl TryFrom<u8> for DeviceType {
 
     fn try_from(byte: u8) -> minipro_core::Result<DeviceType> {
         match byte {
+            0x05 => Ok(DeviceType::Tl866ii),
             0x06 => Ok(DeviceType::T56),
             0x07 => Ok(DeviceType::T48),
             0x08 => Ok(DeviceType::T76),
             _ => Err(Error::Unsupported(
-                "attached programmer is not a supported model (T48, T56, and T76 are supported)",
+                "attached programmer is not a supported model \
+                 (TL866II+, T48, T56, and T76 are supported)",
             )),
         }
     }
@@ -71,6 +75,11 @@ pub fn detect(
     let report = command(transport.as_mut(), Ep(0x01), Ep(0x81), &[0u8; 5], 64)?.read()?;
     // First contact with an unidentified device: read the type byte totally.
     match DeviceType::try_from(*report.get(6).ok_or(Error::Protocol)?)? {
+        DeviceType::Tl866ii => {
+            let mut p = tl866ii::Tl866ii::new(transport);
+            p.query_info()?;
+            Ok(Box::new(p))
+        }
         DeviceType::T56 => {
             let mut t56 = t56::T56::new(transport);
             t56.query_info()?;

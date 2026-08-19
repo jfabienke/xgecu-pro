@@ -198,6 +198,79 @@ impl UsbTransport {
         }
     }
 
+    /// Claim a *pair* of IN endpoints for a parallel transfer. Endpoints are
+    /// claimed fresh (not from the cache) because the cache hands out one
+    /// `&mut` at a time and a parallel transfer needs both concurrently.
+    fn claim_pair_in(&mut self, a: Ep, b: Ep) -> Result<(Endpoint<Bulk, In>, Endpoint<Bulk, In>)> {
+        // Drop any cached claims first — an endpoint cannot be claimed twice.
+        self.in_eps.remove(&a.0);
+        self.in_eps.remove(&b.0);
+        let iface = self.interface.as_ref().ok_or_else(no_interface)?;
+        let ea = iface
+            .endpoint::<Bulk, In>(a.0)
+            .map_err(|e| Error::Usb(format!("claim bulk IN 0x{:02x}: {e}", a.0)))?;
+        let eb = iface
+            .endpoint::<Bulk, In>(b.0)
+            .map_err(|e| Error::Usb(format!("claim bulk IN 0x{:02x}: {e}", b.0)))?;
+        Ok((ea, eb))
+    }
+
+    /// Claim a pair of OUT endpoints; see [`Self::claim_pair_in`].
+    fn claim_pair_out(
+        &mut self,
+        a: Ep,
+        b: Ep,
+    ) -> Result<(Endpoint<Bulk, Out>, Endpoint<Bulk, Out>)> {
+        self.out_eps.remove(&a.0);
+        self.out_eps.remove(&b.0);
+        let iface = self.interface.as_ref().ok_or_else(no_interface)?;
+        let ea = iface
+            .endpoint::<Bulk, Out>(a.0)
+            .map_err(|e| Error::Usb(format!("claim bulk OUT 0x{:02x}: {e}", a.0)))?;
+        let eb = iface
+            .endpoint::<Bulk, Out>(b.0)
+            .map_err(|e| Error::Usb(format!("claim bulk OUT 0x{:02x}: {e}", b.0)))?;
+        Ok((ea, eb))
+    }
+
+    /// One blocking IN transfer on an owned endpoint (thread-friendly).
+    fn recv_on(mut ep: Endpoint<Bulk, In>, addr: Ep, len: usize) -> Result<Vec<u8>> {
+        let mps = ep.max_packet_size();
+        let request = len.div_ceil(mps) * mps;
+        let completion = ep.transfer_blocking(Buffer::new(request), SHORT_TIMEOUT);
+        completion
+            .status
+            .map_err(|e| Error::Usb(format!("bulk IN 0x{:02x}: {e}", addr.0)))?;
+        if completion.actual_len < len {
+            return Err(Error::Usb(format!(
+                "bulk IN 0x{:02x}: short read {}/{len}",
+                addr.0, completion.actual_len
+            )));
+        }
+        let mut data = completion.buffer.into_vec();
+        data.truncate(len);
+        Ok(data)
+    }
+
+    /// One blocking OUT transfer on an owned endpoint (thread-friendly).
+    fn send_on(mut ep: Endpoint<Bulk, Out>, addr: Ep, data: &[u8]) -> Result<()> {
+        let mut buf = Buffer::new(data.len());
+        buf.extend_from_slice(data);
+        let completion = ep.transfer_blocking(buf, SHORT_TIMEOUT);
+        completion
+            .status
+            .map_err(|e| Error::Usb(format!("bulk OUT 0x{:02x}: {e}", addr.0)))?;
+        if completion.actual_len < data.len() {
+            return Err(Error::Usb(format!(
+                "bulk OUT 0x{:02x}: short write {}/{}",
+                addr.0,
+                completion.actual_len,
+                data.len()
+            )));
+        }
+        Ok(())
+    }
+
     /// Shared body of [`Transport::recv`] / [`Transport::recv_slow`]; the only
     /// difference between them is the deadline.
     fn recv_within(&mut self, ep: Ep, len: usize, timeout: Duration) -> Result<Vec<u8>> {
@@ -261,6 +334,67 @@ impl Transport for UsbTransport {
 
     fn link_speed(&self) -> LinkSpeed {
         self.link
+    }
+
+    /// TL866II+ dual-endpoint receive: halves read in parallel from `ep_a`
+    /// and `ep_b`, then deinterlaced as alternating 64-byte blocks (the C's
+    /// `read_payload2`, `limit = 64`).
+    fn recv_interlaced(&mut self, ep_a: Ep, ep_b: Ep, len: usize) -> Result<Vec<u8>> {
+        if len % 128 != 0 {
+            // The reference's deinterlace copies `len/64` whole blocks from
+            // per-endpoint halves of `len/2`; anything not a multiple of 128
+            // would silently lose the tail, so refuse instead.
+            return Err(Error::Usb(format!(
+                "interlaced read length {len} is not a multiple of 128"
+            )));
+        }
+        let half = len / 2;
+        let (a, b) = self.claim_pair_in(ep_a, ep_b)?;
+        let ra = std::thread::scope(|scope| {
+            let tb = scope.spawn(|| Self::recv_on(b, ep_b, half));
+            let va = Self::recv_on(a, ep_a, half);
+            let vb = tb
+                .join()
+                .map_err(|_| Error::Usb("interlaced read panicked".into()))?;
+            Ok::<_, Error>((va?, vb?))
+        });
+        let (va, vb) = ra?;
+        let mut out = Vec::with_capacity(len);
+        for i in 0..len / 64 {
+            let src = if i % 2 == 0 { &va } else { &vb };
+            let off = (i / 2) * 64;
+            out.extend_from_slice(&src[off..off + 64]);
+        }
+        Ok(out)
+    }
+
+    /// TL866II+ dual-endpoint send: contiguous split per the C's
+    /// `write_payload2` arithmetic (from XGPro), halves written in parallel.
+    fn send_interlaced(&mut self, ep_a: Ep, ep_b: Ep, data: &[u8]) -> Result<()> {
+        let length = data.len();
+        let (ep2_len, _ep3_len) = {
+            let j = length % 128;
+            if j != 0 {
+                let k = (length - j) / 2;
+                if j > 64 {
+                    (k + 64, j + k - 64)
+                } else {
+                    (k, j + k)
+                }
+            } else {
+                (length / 2, length / 2)
+            }
+        };
+        let (first, second) = data.split_at(ep2_len);
+        let (a, b) = self.claim_pair_out(ep_a, ep_b)?;
+        std::thread::scope(|scope| {
+            let tb = scope.spawn(|| Self::send_on(b, ep_b, second));
+            let ra = Self::send_on(a, ep_a, first);
+            let rb = tb
+                .join()
+                .map_err(|_| Error::Usb("interlaced write panicked".into()))?;
+            ra.and(rb)
+        })
     }
 
     fn reset(&mut self) -> Result<()> {

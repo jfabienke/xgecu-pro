@@ -3,7 +3,7 @@
 **A Rust redesign and reimplementation of [minipro](https://gitlab.com/nmatt0/minipro/-/tree/t76-improvements) for XGecu USB chip programmers — plus the reverse-engineering notes behind it.**
 
 The centerpiece is [`minipro-rs/`](minipro-rs/): a Rust CLI that drives the
-**T76**, **T56**, and **T48** through one trait-based driver layer. No libusb, no
+**T76**, **T56**, **T48**, and **TL866II+** through one trait-based driver layer. No libusb, no
 zlib, no XML step — it reads XGecu's `InfoICT76.dll` chip database directly and
 ships human / JSON / TUI output modes.
 
@@ -30,7 +30,8 @@ This is a **young project handling real hardware**. Honest state of play:
 | **T76 pin-contact check** | ❌ **Removed** — it measured nothing *and corrupted every read*; the T76 no longer advertises it |
 | **Erasing a one-time-programmable part** | ❌ Refused with a reason — the database's erase flag is honoured, as the C tool does |
 | **`@ISP_VGA` parts** (monitor EDID, MStar scaler flash) | ❌ Not implemented — refused with a reason; the C tool rejects these too |
-| **TL866II+ / TL866A/CS** | ❌ Not implemented |
+| **TL866II+** | ⚠️ **Reference-only** — full driver pinned against the C (incl. its interlaced dual-endpoint transfers), zero silicon contact so far |
+| **TL866A/CS** | ❌ Not implemented (different, older protocol) |
 
 Every driver is pinned by **byte-exact golden-packet tests** (203 tests, hardware-free,
 plus 5 `#[ignore]`d ones that need a real device), so the wire output is known-correct
@@ -228,8 +229,10 @@ The most valuable contribution is **hardware nobody here has**:
   path, write-buffer chunking beyond the parallel-EPROM case, and the long
   erase deadline. On flash a verified dump makes the whole loop recoverable —
   dump, erase, write, verify, compare.
-- **Implement the TL866II+ / TL866A/CS drivers.** The TL866II+ is close to the
-  existing T48 and reuses most of the shared wire layer.
+- **🔌 Run it against a TL866II+.** The driver is complete and golden-tested —
+  including the interlaced dual-endpoint bulk path, which no other family
+  member uses — but has never touched one. `info` and a read would be telling.
+- **Implement the TL866A/CS driver** (the older, different protocol).
 
 There are also hardware tests that only run when you ask, and they need nothing
 in the socket — no chip, no adapter:

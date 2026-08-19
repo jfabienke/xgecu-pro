@@ -7,7 +7,7 @@
 //! replays capture fixtures. Drivers only ever see `&mut dyn Transport`, which
 //! is what makes the protocol unit-testable without hardware.
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// A USB endpoint address (e.g. `0x01` OUT, `0x81` IN).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +54,31 @@ pub trait Transport: Send {
     fn link_speed(&self) -> LinkSpeed;
     /// Reset the device / re-arm the endpoints.
     fn reset(&mut self) -> Result<()>;
+
+    /// Receive a payload the device splits across **two** IN endpoints — the
+    /// TL866II+ streams reads larger than 64 bytes as alternating 64-byte
+    /// blocks whose halves land contiguously on EP2 and EP3, read in parallel
+    /// and deinterlaced host-side (the C's `read_payload2` with `limit = 64`).
+    /// `len` must be a multiple of 128 — the reference's deinterlace drops the
+    /// tail otherwise, and every real page size in the database qualifies.
+    ///
+    /// Default: unsupported, so single-pipe transports need do nothing.
+    fn recv_interlaced(&mut self, _ep_a: Ep, _ep_b: Ep, _len: usize) -> Result<Vec<u8>> {
+        Err(Error::Unsupported(
+            "this transport has no dual-endpoint interlaced receive",
+        ))
+    }
+
+    /// Send a payload split across **two** OUT endpoints, first part to
+    /// `ep_a`, remainder to `ep_b`, in parallel — the TL866II+ write side
+    /// (the C's `write_payload2` with `limit = 64`; the split arithmetic is
+    /// the transport's, from XGPro). Contiguous halves, not interlaced —
+    /// asymmetric with the read side, faithfully.
+    fn send_interlaced(&mut self, _ep_a: Ep, _ep_b: Ep, _data: &[u8]) -> Result<()> {
+        Err(Error::Unsupported(
+            "this transport has no dual-endpoint interlaced send",
+        ))
+    }
 }
 
 /// A sent command whose response has *not* yet been read.

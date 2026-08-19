@@ -8,7 +8,7 @@ redesign and reimplementation in this repo. It now covers **T48 / T56 / T76**
 
 | Dimension | C minipro (`t76-improvements`) | Rust `minipro-rs` |
 |---|---|---|
-| **Programmers** | TL866CS/A, TL866II+, T48, T56, **T76** | **T48 / T56 / T76** (TL866II+/A/CS not yet) |
+| **Programmers** | TL866CS/A, TL866II+, T48, T56, **T76** | **TL866II+ / T48 / T56 / T76** (TL866A/CS not yet; TL866II+ reference-only) |
 | **Language / safety** | C; manual `malloc`/`free`, fixed `uint8_t` buffers | Rust; `#![forbid(unsafe_code)]`, RAII, `Vec` |
 | **USB backend** | libusb-1.0 (C library) | **nusb** (pure Rust — no libusb) |
 | **Compression** | zlib (C library) | flate2 / miniz_oxide (pure Rust) |
