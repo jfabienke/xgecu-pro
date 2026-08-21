@@ -145,6 +145,87 @@ regardless of whether the A ever lands.
   unlike the II+ the hardware is discontinued — silicon validation depends
   entirely on a contributor with one in a drawer.
 
+## Design, if it is ever built
+
+Every element below is a gathered C fact plus our own expression — the same
+recipe as the TL866II+. Facts cited inline; anything not a fact is marked as
+our policy.
+
+**Placement and shape.** One driver, `minipro-proto/src/tl866a.rs`, serving
+both models (they differ only in the system-info model byte and the
+firmware-update tables, which are out of scope). Structured like `tl866ii.rs`:
+one struct over `Box<dyn Transport>`, capability impl blocks, a `SharedTx`
+golden-test harness. Nothing borrowed from `wire.rs` — the opcode space and
+every layout are different, and pretending otherwise is how accidental
+divergence starts.
+
+**Transport.** Zero new surface. Everything rides EP01/EP81 through the
+existing `send`/`recv`; the interlace machinery is irrelevant. Erase drains
+its reply through `command_slow` (our policy: the reply arrives when the erase
+finishes, and the C's blanket six-minute timeout is the thing we deliberately
+do not copy). New id `(0x04d8, 0xe11c)` appended to `KNOWN_IDS`, and the
+config-cycle re-arm stays T76-gated as it already is.
+
+**The context header, as a builder not a convention.** Fact: `msg_init` puts
+`opcode, protocol_id, variant-low` in bytes 0..3 — and then most ops
+*overwrite* byte 2 (size LE16 in block ops, item count in fuses and erase), so
+the variant actually reaches the wire only in BEGIN and the short commands.
+Encoding that truthfully means two private builders: `ctx_msg(dev, op)` for
+commands that keep the header, and plain `op_msg(op)` for the three that zero
+it (calibration, autodetect 0xFC, TSOP48 unlock). The per-op field writes then
+land wherever the C lands them, byte-2 clobbers included — pinned by tests so
+nobody "fixes" the clobber into a divergence. A local `le24` helper for the
+24-bit addresses; it stays in this file.
+
+**Programmer core.**
+- `begin`: the 48-byte layout from §Packet layouts, followed by the 0xFE
+  status read with overcurrent at byte 9 — same shape our other drivers use
+  for their OVC gate. The voltage fields are *nibbles from the INFOIC
+  section's tables*; this driver refuses to run from a T76-section catalog
+  (preflight-style guard), because feeding T76 nibble encodings to the A's
+  latches is exactly the class of wrong our history warns about.
+- `end`: the 4-byte END. `identify`: send 8 / receive 32, then the family's
+  id-type endianness rule — the decode logic our cleared drivers already
+  express.
+- `query_info`: the shared 5-zero probe; model from byte 6 (1 = A, 2 = CS),
+  status from byte 1 (`2` = bootloader — the A predates the fw==0 rule),
+  device code 7..15, serial 15..39, hardware revision 39 as the version's
+  leading field, no voltage.
+
+**MemoryOps.** Read: 18-byte command (size LE16 @2, address LE24 @4), data on
+EP81 itself — `block_size` = `read_buffer_size` (fact: the C chunks reads by
+it). Write: one inline message, 7-byte header + payload. After **each** write
+block the C polls status and reports a verify-while-write failure with the
+failing address (LE24 @6) — we map that to `Error::Verify { addr }`, which
+means the A gets mid-write verification the newer drivers cannot offer.
+Blank check reuses `Region::blocks` like everyone.
+
+**Fuses / JEDEC / protect / autodetect.** Straight transcriptions: the fuse
+kind→opcode map with data at reply offset 7 and the `code_size − 0x38`
+write-side quirk reproduced (it is wire behavior; our comment explains it in
+our own words). JEDEC rows reuse the code opcodes with row/flags @4/5 and
+bit-packed data — read replies carry the bits at offset **0**, headerless,
+which a test pins because it is the kind of asymmetry that gets "corrected"
+by accident. Autodetect: no context, type @7, id BE24 @2 from a 16-byte
+reply; the idle-bus refusal from `no_device_response` applies unchanged.
+
+**Caps and refusals.** `MEMORY | FUSES | JEDEC | PROTECT | AUTODETECT`, plus
+`CALIBRATION` (the op is ten lines and headerless — cheap to carry). No
+`LOGIC`: on this hardware the logic test is host-driven bit-bang, and the
+driver refuses with exactly that reason rather than advertising a capability
+the deferred subsystem owns. No firmware update; a bootloader-stuck A is
+still *visible* through the status byte in `info`.
+
+**Tests.** Golden fixtures for: the 48-byte BEGIN (nibble packing), block
+read/write (including the byte-2 clobber), the fuse quirk, headerless JEDEC
+reads, BE24 autodetect, the 0xFE status decode, and both info layouts (A and
+CS bytes). Plus the provenance sweep run against `tl866a.c` before first
+commit — the TL866II+ order of operations, kept.
+
+**Prerequisite, restated.** Per-model catalog selection (§The database
+dimension) ships first. Without the INFOIC section the driver would be
+correct wire grammar speaking the wrong vocabulary.
+
 ## Honest recommendation
 
 Implementable any time under the wire-facts rule, but it is the lowest-value
