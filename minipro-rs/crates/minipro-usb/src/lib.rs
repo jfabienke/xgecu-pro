@@ -369,7 +369,7 @@ impl Transport for UsbTransport {
     }
 
     /// TL866II+ dual-endpoint send: a contiguous split written in parallel,
-    /// sized by [`interlaced_split`].
+    /// sized by `interlaced_split` (see its doc for the mapping).
     fn send_interlaced(&mut self, ep_a: Ep, ep_b: Ep, data: &[u8]) -> Result<()> {
         let (len_a, _) = interlaced_split(data.len());
         let (first, second) = data.split_at(len_a);

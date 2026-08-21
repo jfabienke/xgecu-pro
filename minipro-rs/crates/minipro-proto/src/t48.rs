@@ -623,7 +623,7 @@ mod tests {
 
     #[test]
     fn logic_test_two_pass_pass_and_fail() {
-        // 2 pins, 1 vector: pin0 = H (must be 1 in both), pin1 = L (0 in both).
+        // 2 pins, 1 vector: pin0 = H (expects 1 both passes), pin1 = L (0 both).
         let mut dev = device(0x04);
         dev.package.pin_count = 2;
         dev.vector_count = 1;

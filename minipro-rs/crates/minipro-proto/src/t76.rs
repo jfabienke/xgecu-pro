@@ -14,7 +14,7 @@
 //! Every command that produces a response goes through
 //! [`minipro_core::transport::command`], whose `#[must_use]` [`Pending`](minipro_core::transport::Pending) guard
 //! encodes a load-bearing hardware invariant: *an undrained EP81/EP82
-//! response wedges the device until a USB replug*.
+//! reply jams the device and only unplugging it recovers*.
 //!
 //! Endpoint map (341-346, 385-390):
 //! - commands OUT on EP 0x01 (`msg_send`), replies IN on EP 0x81 (`msg_recv`)
@@ -300,8 +300,9 @@ fn ext_nand(msg: &mut [u8; 128], p: &ChipParams) -> bool {
     true
 }
 
-/// eMMC: a 128-byte BEGIN with no `0x40..0x7f` extension; `msg[0x0c]` carries
-/// the bus-mode / CSD byte from the variant high byte.
+/// The eMMC BEGIN is 128 bytes and uses none of the `0x40..0x7f` extension
+/// area; the variant's high byte lands at offset 0x0c as the bus-mode/CSD
+/// selector.
 fn ext_emmc(msg: &mut [u8; 128], p: &ChipParams) -> bool {
     msg[BEGIN_EMMC_BUS_MODE_OFF] = (p.variant >> 8) as u8;
     true
@@ -355,14 +356,14 @@ fn bs_end(last_block: Option<usize>) -> [u8; 8] {
     m
 }
 
-/// Pack the 64-byte opcode-0x02 NAND FPGA-setup prelude sent immediately
-/// before BEGIN_TRANS for NAND chips. Without it the FPGA
-/// never clocks the NAND (READID 00 FF FF, 0x0d timeout).
+/// Build the 64-byte opcode-0x02 packet that precedes BEGIN_TRANS on NAND
+/// parts — the FPGA's NAND setup. Omitting it leaves the NAND unclocked;
+/// the symptoms are a READID of `00 FF FF` and a timeout on the first read.
 pub(crate) fn pack_nand_prelude(p: &ChipParams) -> Result<[u8; 64]> {
     let (wbuf, ppb) = p.nand_geometry()?;
     let page_or_blocks = p.page_size; // desc[0x54]; == page for parallel NAND
 
-    // Real page = largest power of two <= write_buffer_size.
+    // The true page size: round write_buffer_size down to a power of two.
     let mut real_page: u16 = 1;
     while u32::from(real_page) << 1 <= u32::from(wbuf) {
         real_page <<= 1;
@@ -416,8 +417,9 @@ pub(crate) fn pack_nand_prelude(p: &ChipParams) -> Result<[u8; 64]> {
     Ok(pre)
 }
 
-/// The 40-byte eMMC 0x0d (read) / 0x1f (program) region init.
-/// The firmware then streams/accepts `blocks` x 64 KiB on EP82/EP05.
+/// Build the 40-byte region announcement for eMMC — opcode 0x0d when
+/// reading, 0x1f when programming. After it, the firmware moves `blocks`
+/// units of 64 KiB over the bulk pipe (EP82 in, EP05 out).
 pub(crate) fn pack_emmc_io_init(opcode: u8, lba: u32, blocks: u32) -> [u8; 40] {
     let mut init = [0u8; 40];
     init[0] = opcode;
@@ -433,9 +435,9 @@ pub(crate) fn pack_emmc_io_init(opcode: u8, lba: u32, blocks: u32) -> [u8; 40] {
     init
 }
 
-/// The fixed 16-byte 0x27/op00 eMMC timing command that wraps every 0x0d read
-/// / 0x1f program. `post` selects the POST variant; byte [9]
-/// is the JEDEC bus-width code (0=1-bit, 1=4-bit, 2=8-bit).
+/// Build the 16-byte 0x27/op00 timing packet bracketing every eMMC region
+/// transfer (both directions). `post` picks the closing variant, and byte 9
+/// encodes bus width per JEDEC: 0, 1, 2 for 1-, 4-, 8-bit.
 pub(crate) fn pack_emmc_timing(post: bool, variant: u16) -> [u8; 16] {
     let mut pkt: [u8; 16] = if post {
         [
@@ -613,10 +615,11 @@ impl T76 {
         Ok(())
     }
 
-    /// One 0x24 FPGA-register-I/O command. The command word carries the
-    /// response length in msg[2..3]; that many bytes MUST be drained from
-    /// EP81 or the next transfer desyncs — a 0xf0 power-down left undrained
-    /// wedges the device until a USB replug.
+    /// Issue one FPGA register access (opcode 0x24). Bytes 2..3 of the
+    /// command declare how large the reply will be, and exactly that much has
+    /// to be read back from EP81: skip it and the stream desyncs — leave a
+    /// 0xf0 power-down's reply unread and nothing short of unplugging the
+    /// programmer brings it back.
     fn cmd_24(&mut self, pkt: &[u8; 8]) -> Result<()> {
         let mut resp_len = usize::from(u16::from_le_bytes([pkt[2], pkt[3]]));
         if resp_len > 64 {
@@ -637,9 +640,9 @@ impl T76 {
         self.cmd(&pd, 32)
     }
 
-    /// One-time NAND socket-adapter power/init at session start:
-    /// 0x24 power-down (drains 8),
-    /// read-adapter-ID (drains 0x30), power-up, then pin detection run twice.
+    /// Bring up the NAND socket adapter once per session: power it down
+    /// (0x24, 8-byte reply), fetch the adapter id (0x30-byte reply), power
+    /// back up, and finish with two rounds of pin detection.
     fn adapter_init(&mut self) -> Result<()> {
         let pwr_down: [u8; 8] = [CMD_FPGA_REG_IO, 0xf0, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00];
         let read_id: [u8; 8] = [CMD_FPGA_REG_IO, 0xe4, 0x30, 0x00, 0x11, 0x01, 0x08, 0x00];
@@ -654,9 +657,9 @@ impl T76 {
         Ok(())
     }
 
-    /// eMMC socket-adapter power/init,
-    /// byte-exact from the XGPro eMMC READ capture: 0x24 f0 power-down,
-    /// 12-byte 0x24 e0 init (recv 0x28), 0x24 f1 power-up, ONE pin-detect.
+    /// Bring up the eMMC socket adapter, matching the XGPro read capture
+    /// byte for byte: power down (0x24 f0), a 12-byte 0x24 e0 init whose
+    /// reply is 0x28 bytes, power up (0x24 f1), and a single pin-detect.
     fn emmc_adapter_init(&mut self) -> Result<()> {
         let pwr_down: [u8; 8] = [CMD_FPGA_REG_IO, 0xf0, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00];
         let e0_init: [u8; 12] = [CMD_FPGA_REG_IO, 0xe0, 0x28, 0x00, 0, 0, 0, 0, 0, 0, 0, 0];
@@ -688,8 +691,8 @@ impl T76 {
     /// [`bs_begin`], a run of [`bs_block`] packets, [`bs_end`] — skipping the
     /// upload if the same algorithm is already resident this session.
     ///
-    /// `finalize_last_block` states the true length of the final (partial)
-    /// block in the END packet. Some FPGA configurations (NAND) commit their
+    /// `finalize_last_block` puts the real byte count of the trailing
+    /// short block into the END packet. Some FPGA configurations (NAND) commit their
     /// last config word only when END carries that length; a zero there leaves
     /// the word uncommitted, observable as READID / reads returning all-0xFF.
     fn write_bitstream_named(
@@ -759,8 +762,8 @@ impl T76 {
         Ok(resp[12])
     }
 
-    /// 0x27 Form A: simple eMMC command, no payload; send 8 / recv 8;
-    /// resp[1] != 0 is an error.
+    /// The payload-less shape of 0x27: eight bytes out, eight back, with a
+    /// nonzero second reply byte meaning the card refused.
     fn emmc_cmd27(&mut self, op: u8, arg: u32) -> Result<Vec<u8>> {
         let mut msg = [0u8; 8];
         msg[0] = CMD_EMMC_SEND_CMD;
@@ -784,9 +787,9 @@ impl T76 {
             self.cmd(&cmd, resp_len)?;
         }
 
-        // EXT_CSD via opcode 0x08. The device returns exactly 520 bytes (a
-        // 512-byte full packet + an 8-byte short packet) on EP82: an 8-byte
-        // header + EXT_CSD, so EXT_CSD[N] is at buf[8+N].
+        // Opcode 0x08 fetches EXT_CSD. EP82 delivers 520 bytes — the
+        // register's 512 preceded by an 8-byte header (arriving as one full
+        // USB packet plus a short one) — which puts field N at buf[8 + N].
         let cmd: [u8; 8] = [CMD_READ_CFG, 0x48, 0x00, 0x02, 0, 0, 0, 0];
         let ext = command(self.tx.as_mut(), EP_MSG_OUT, EP_DAT_IN, &cmd, 520)?.read()?;
         if ext.len() < 235 {
@@ -831,8 +834,8 @@ impl T76 {
     /// 40-byte 0x1f init, data on EP05, then the 0x39 / POST-timing / 0x39
     /// commit. Per-call granularity as with `emmc_read` (TODO(hw) above).
     fn emmc_write(&mut self, p: &ChipParams, req: &BlockReq, data: &[u8]) -> Result<()> {
-        // 0x27 op 0x50 program-setup, ARG 0x20000; reply drained unchecked
-        //.
+        // Program setup: 0x27 op 0x50 with argument 0x20000; the reply
+        // carries nothing we act on but must still be read.
         let mut op50 = [0u8; 8];
         op50[0] = CMD_EMMC_SEND_CMD;
         op50[1] = 0x50;
@@ -854,9 +857,10 @@ impl T76 {
         Ok(())
     }
 
-    /// NAND block read: one erase-block (data + spare) per 0x0d with the
-    /// 16-bit block index in msg[2..3] and the fixed read-parameter header in
-    /// msg[4..0xf]; the block streams raw on EP82.
+    /// NAND reads move a whole erase-block per request: each 0x0d names the block by a
+    /// 16-bit index at bytes 2..3, carries the constant read-parameter bytes
+    /// at 4..0xf, and the whole block (pages with their spare areas) then
+    /// arrives raw over EP82.
     fn nand_read(&mut self, req: &BlockReq) -> Result<Vec<u8>> {
         const NAND_READ_HDR: [u8; 12] = [
             0x10, 0x00, 0x04, 0x00, // msg[4..7]
@@ -882,11 +886,12 @@ impl T76 {
         .read()
     }
 
-    /// NAND block program: 16-byte 0x1f init, then each
-    /// page (page + spare) as a separate EP05 packet prefixed by a 16-byte
-    /// header, then a plain 0x39 REQUEST_STATUS commit. The firmware
-    /// cache-programs, so without the 0x39 the block's last page reads back
-    /// erased.
+    /// Program one NAND block: open with a 16-byte 0x1f init, ship every
+    /// page (including its spare bytes) over EP05 — one packet per page, each
+    /// led by its own 16-byte header — and close with a bare 0x39 status
+    /// request. That closing 0x39 is load-bearing: the firmware programs one
+    /// page behind the stream, and skipping it leaves the final page
+    /// unwritten.
     fn nand_write(&mut self, p: &ChipParams, req: &BlockReq, data: &[u8]) -> Result<()> {
         let (page_full, ppb) = p.nand_geometry()?;
         let block_size = u32::from(page_full) * u32::from(ppb);
@@ -913,7 +918,8 @@ impl T76 {
         le32(&mut init, 12, u32::from(page_full));
         self.send(&init)?;
 
-        // Per page: [16-byte header (hdr[0]=0x1f) | page+spare] -> EP05.
+        // Each page goes to EP05 as: 16 header bytes (leading 0x1f), then
+        // the page and its spare area.
         let mut pkt = vec![0u8; 16 + usize::from(page_full)];
         for page in data.chunks(usize::from(page_full)) {
             pkt[..16].fill(0);
@@ -948,8 +954,8 @@ impl T76 {
     /// Erase one NAND block. Returns `Ok(None)` when the block is factory-
     /// marked bad and was skipped, leaving its bad-block marker intact.
     fn nand_erase_block(&mut self, blk: u32) -> Result<Option<()>> {
-        // 0x3a bad-block check: send 8 / recv 8; resp[1] != 0 => bad
-        //.
+        // Ask 0x3a whether the block is bad: eight bytes each way, nonzero
+        // second reply byte marks it.
         let mut chk = [0u8; 8];
         chk[0] = CMD_NAND_BAD_BLOCK_CHECK;
         le16(&mut chk, 2, blk.min(u32::from(u16::MAX)) as u16);
@@ -968,9 +974,9 @@ impl T76 {
         Ok(Some(()))
     }
 
-    /// eMMC erase: per 0x20000-sector
-    /// group, a 16-byte 0x0e with start/end LBA, then poll 0x27 op 0x4d until
-    /// the card returns to ready (resp[5] != 0x0e busy).
+    /// Erase eMMC in 0x20000-sector spans: each span gets a 16-byte 0x0e
+    /// naming its first and last LBA, followed by 0x27/op-0x4d polling until
+    /// byte 5 of the reply stops reading 0x0e (busy).
     fn emmc_erase(&mut self, code_size: u64) -> Result<()> {
         const POLL: [u8; 8] = [0x27, 0x4d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00];
         let total = if self.emmc_capacity != 0 {
@@ -1505,7 +1511,7 @@ impl EmmcOps for T76 {
         Ok(())
     }
 
-    /// Real capacity from EXT_CSD SEC_COUNT, per the
+    /// True capacity taken from the SEC_COUNT field of EXT_CSD, per the
     /// currently selected partition.
     fn capacity(&self) -> u64 {
         self.emmc_capacity
@@ -1684,12 +1690,14 @@ impl FirmwareUpdate for T76 {
         // where the in_bootloader() gate below comes from. Reference-level
         // evidence, not yet observed on this bench.
         //
-        // TODO(hw): the C sleeps a full second before reopening ("Wait for
-        // T76 to boot, otherwise minipro_open will fail"); our reset() polls
-        // under a 5 s budget, which covers it, but bootloader boot time has
-        // never been measured here the way normal re-enumeration has.
-        // The C switches "if necessary": a device already sitting in its
-        // bootloader (an interrupted previous update) is re-flashed directly,
+        // TODO(hw): before reopening, the C sleeps a fixed second — its
+        // comment warns the reopen fails without the pause. Our reset()
+        // polls under a 5 s budget, which covers that, but bootloader boot
+        // time has never been measured here the way normal re-enumeration
+        // has.
+        // The C only switches when the device is in normal mode: one
+        // already sitting in its bootloader (an interrupted previous update)
+        // is re-flashed directly,
         // which is the recovery path — and sending SWITCH to a bootloader is
         // an unknown it never takes either.
         if !self.in_bootloader()? {
@@ -3008,7 +3016,7 @@ mod tests {
 
         let sent = tx.sent();
         assert_eq!(sent.len(), 10);
-        // "Switching to boot mode if necessary": the mode probe comes first.
+        // The mode probe comes first — switching happens only when needed.
         assert_eq!(sent[0].1, vec![0u8; 5]);
         // Switch to bootloader: 0x3d aa + magic 0x049000 LE.
         assert_eq!(sent[1].1, vec![0x3d, 0xaa, 0, 0, 0x00, 0x90, 0x04, 0x00]);
@@ -3040,7 +3048,7 @@ mod tests {
 
     /// The recovery path: a device already in its bootloader (interrupted
     /// update) is reflashed directly — no SWITCH, no reboot first, exactly
-    /// the C's "if necessary" branch.
+    /// the C's conditional-switch branch.
     #[test]
     fn firmware_update_recovers_a_bootloader_stuck_device() {
         let img = update_image();

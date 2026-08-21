@@ -370,7 +370,7 @@ const LOGIC_L: u8 = 2;
 const LOGIC_H: u8 = 3;
 const LOGIC_Z: u8 = 5;
 
-/// One logic-test pass: `pull` = 0 pull-up, 1 pull-down. Sends a
+/// One logic-test pass; `pull` selects the direction (0 up, 1 down). Sends a
 /// 32-byte `0x28` command per vector (VCC + pull in `[1]`, pin count at `[2]`,
 /// vector index at `[4]`, the row packed two pins per byte from `[8]`), reads
 /// the pin status back, and returns `pin_count * vector_count` unpacked states.

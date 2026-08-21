@@ -155,8 +155,8 @@ A full audit against the C's decoder followed. It decodes **ten** semantics from
 `device::flags`, and the audit found one live landmine in the unconsumed
 remainder: `OFF_PROTECT_BEFORE`, carried by **10,123 devices** (30% of the
 catalog, **mainstream SPI NOR included** — a W25Q128BV carries it), whose
-absence from the write path means — in the C's own words — "the program
-silently does nothing" on protected parallel NOR. The first response was a
+absence from the write path means — as the C's own comment warns — that on
+protected parallel NOR a program pass completes without changing anything. The first response was a
 refusal; a test against real catalog flag words immediately showed that would
 refuse most flash writes, so the actual sequence went in instead:
 `ops::lift_protect` mirrors the C's protect-off / end / begin cycle, pinned by

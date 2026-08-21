@@ -16,8 +16,8 @@ use crate::report::{Event, Outcome, Reporter};
 /// carries `OFF_PROTECT_BEFORE` — mainstream SPI NOR included (a W25Q128BV
 /// carries it). Mirrors the C's T76 sequence exactly: protect-off inside its
 /// own transaction, then end it, so the write that follows starts a fresh one.
-/// The C's comment records why the order matters: unprotecting later "is too
-/// late and the program silently does nothing". Protect is NOT re-engaged
+/// The C's comment records why the order matters: lift protect any later and
+/// programming completes without changing a single cell. Protect is NOT re-engaged
 /// afterwards, also matching the C, which only warns unless asked with -P.
 ///
 /// **Unverified on silicon**: no protect-carrying part has been on the bench.

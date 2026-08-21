@@ -747,9 +747,9 @@ fn run_write(
     let mut prog = open_programmer()?;
     warn_firmware(&*prog, &*db, rep);
 
-    // Parts flagged OFF_PROTECT_BEFORE (most SPI NOR included) must have
-    // write-protect lifted in its own transaction first, or programming
-    // silently does nothing. No-op for everything else; skipped on dry runs.
+    // Parts flagged OFF_PROTECT_BEFORE (most SPI NOR included) need
+    // write-protect lifted in its own transaction first — otherwise the
+    // program pass changes nothing. No-op elsewhere; skipped on dry runs.
     if !dry_run {
         ops::lift_protect(&mut *prog, &dev)?;
     }

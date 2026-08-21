@@ -79,7 +79,7 @@ pub trait SpiAutodetect {
 /// eMMC-specific operations (T76).
 pub trait EmmcOps {
     fn select_partition(&mut self, s: &Session, part: Partition) -> Result<()>;
-    /// Real capacity from EXT_CSD SEC_COUNT; 64-bit because eMMC exceeds u32.
+    /// True capacity, read out of EXT_CSD's SEC_COUNT field; 64-bit because eMMC exceeds u32.
     fn capacity(&self) -> u64;
 }
 

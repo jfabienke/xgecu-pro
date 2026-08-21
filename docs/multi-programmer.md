@@ -37,7 +37,7 @@ workspace is a `OnceLock<ureq::Agent>` in `minipro-db/src/net.rs`, which is
 thread-safe and only touched while fetching the database.
 
 The must-drain `Pending` guard is per-transport, so the hazard it protects
-against — *an undrained EP81 response wedges the device until replug* — cannot
+against — *a T76 left holding an unread EP81 reply stops responding until unplugged* — cannot
 propagate between units.
 
 **The database is shareable for free.** `DllDb` is

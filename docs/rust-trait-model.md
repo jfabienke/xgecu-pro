@@ -36,11 +36,11 @@ pub trait Transport: Send {
 
 Drivers hold a `Box<dyn Transport>`, so the identical driver runs over real USB
 (`nusb`) or a `MockTransport` replaying capture fixtures. The C code's load-bearing
-hazard — *an undrained EP response wedges the device until replug* — is lifted
+hazard — *a reply left unread on the wire hangs the device until it is unplugged* — is lifted
 into a type you cannot forget to consume:
 
 ```rust
-#[must_use = "the T76 wedges until USB replug if this response is not drained"]
+#[must_use = "drain this reply: a T76 left holding one stops responding until unplugged"]
 pub struct Pending<'t> { tx: &'t mut dyn Transport, ep: Ep, len: usize }
 impl<'t> Pending<'t> {
     pub fn read(self) -> Result<Vec<u8>> { self.tx.recv(self.ep, self.len) }

@@ -71,7 +71,7 @@ not `int`.
 ## The transport trait — and the two bugs it should make unrepresentable
 
 The C driver has a load-bearing comment: *an undrained `0xf0` response wedges the
-device until a USB replug.* Encode that invariant in the type system.
+device, recoverable only by unplugging it.* Encode that invariant in the type system.
 
 ```rust
 pub trait Transport {

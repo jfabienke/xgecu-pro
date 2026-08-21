@@ -118,7 +118,7 @@ Full capability matrix in the [`minipro-rs` README](minipro-rs/README.md).
 
 Design notes worth knowing: reads are **verified by default** (re-read stability
 plus crc32/sha256 in the outcome), and the type system encodes the T76's nastiest
-hardware quirk — an undrained USB response wedges the device until replug, so the
+hardware quirk — a reply left unread hangs the device until it is unplugged, so the
 must-drain guard makes forgetting it a compile error.
 
 Deadlines are **per command, not per endpoint**: an ordinary reply gets seconds,

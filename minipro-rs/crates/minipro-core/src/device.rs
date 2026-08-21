@@ -119,9 +119,9 @@ pub mod flags {
     /// 16-bit data organization (C `data_org`/`word_size`; sizes and buffers
     /// are in words, not bytes, when set).
     pub const DATA_BUS_WIDTH: u32 = 0x0000_2000;
-    /// Write-protect must be lifted **before** programming. The C comment is
-    /// blunt about the failure mode on the T76: skip this on protected
-    /// parallel NOR and "the program silently does nothing".
+    /// Write-protect must be lifted **before** programming. The C's comment
+    /// is blunt about what happens otherwise on protected parallel NOR: the
+    /// whole program pass runs and not one cell changes.
     pub const OFF_PROTECT_BEFORE: u32 = 0x0000_4000;
     /// Write-protect is to be restored after programming.
     pub const PROTECT_AFTER: u32 = 0x0000_8000;

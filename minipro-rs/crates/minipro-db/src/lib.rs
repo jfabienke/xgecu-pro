@@ -427,13 +427,14 @@ fn parse_ic(e: &BytesStart<'_>, devices: &mut Vec<Device>) -> Result<()> {
         }
     }
 
-    // XGecu SPI-NAND geometry fix-up: those descriptors
-    // pack block_count into page_size, real pages-per-block into the low 24
-    // bits of pages_per_block (flags in the top byte), and page+spare into
-    // write_buffer_size, leaving code_memory_size = 0. Reconstruct the real
-    // chip size; the signature is deliberately tight so parallel NAND and
-    // everything else is untouched. page_size is left in place — the T76
-    // BEGIN prelude needs it verbatim.
+    // SPI-NAND descriptors in the vendor data encode geometry rather than a
+    // size: page_size actually holds the block count, the low 24 bits of
+    // pages_per_block hold the true pages-per-block (its high byte is flag
+    // bits), write_buffer_size holds page+spare, and code_memory_size sits at
+    // zero. Multiply the pieces back into a real chip size — matching only
+    // this exact shape; parallel NAND and all remaining classes pass through
+    // unmodified. page_size keeps its packed value: the T76's BEGIN prelude
+    // wants it exactly as stored.
     const ALG_NAND: u8 = 0x2d; // NAND algorithm id
     if protocol_id == ALG_NAND && code_size == 0 && pages_per_block & 0xff00_0000 != 0 {
         let ppb = pages_per_block & 0x00ff_ffff;
@@ -1004,8 +1005,9 @@ mod tests {
 
     #[test]
     fn spi_nand_geometry_fixup_derives_size_from_packed_geometry() {
-        // MX35LF1GE4AB-shaped descriptor: packed geometry, code_memory_size 0,
-        // flag bits in the top byte of pages_per_block.
+        // A descriptor shaped like the MX35LF1GE4AB: geometry packed as
+        // above, zero code_memory_size, pages_per_block carrying flags in its
+        // high byte.
         let xml = r#"<infoic><database type="INFOICT76"><manufacturer name="MACRONIX">
             <ic name="MX35LF1GE4AB" protocol_id="0x2d" code_memory_size="0"
                 page_size="0x400" pages_per_block="0x04000040"

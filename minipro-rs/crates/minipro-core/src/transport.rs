@@ -86,7 +86,7 @@ pub trait Transport: Send {
 /// The T76 wedges (needs a USB replug) if a command's response is left
 /// undrained, so this guard is `#[must_use]` and can only be resolved by
 /// consuming it — turning "forgot to read EP81" into a compile-time warning.
-#[must_use = "the T76 wedges until USB replug if this response is not drained"]
+#[must_use = "drain this reply: a T76 left holding one stops responding until unplugged"]
 pub struct Pending<'t> {
     tx: &'t mut dyn Transport,
     ep: Ep,
