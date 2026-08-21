@@ -88,7 +88,7 @@ pub fn read_region(
 ) -> Result<Image> {
     let mem = prog.memory().ok_or(Error::Unsupported("memory ops"))?;
     let total = region.len;
-    let step = u64::from(mem.block_size(s, region.kind));
+    let step = u64::from(mem.block_size(s, region.kind, crate::caps::TransferDir::Read));
     let mut bytes = Vec::with_capacity(total as usize);
     rep.event(&Event::Progress { done: 0, total });
     let mut done = 0u64;
@@ -188,7 +188,7 @@ pub fn write_region(
     {
         let mem = prog.memory().ok_or(Error::Unsupported("memory ops"))?;
         let total = region.len;
-        let step = u64::from(mem.block_size(s, region.kind));
+        let step = u64::from(mem.block_size(s, region.kind, crate::caps::TransferDir::Write));
         rep.event(&Event::Progress { done: 0, total });
         let mut done = 0u64;
         for req in region.blocks(step) {

@@ -23,7 +23,7 @@
 
 use minipro_core::caps::{
     Calibration, EmmcOps, FirmwareUpdate, FuseOps, JedecOps, LoadBitstream, LogicTest, MemoryOps,
-    PinTest, Protect, SpiAutodetect, DEFAULT_BLOCK,
+    PinTest, Protect, SpiAutodetect, TransferDir, DEFAULT_BLOCK,
 };
 use minipro_core::device::{
     BlockReq, ChipId, Device, EraseKind, FuseKind, MemoryKind, Partition, Region,
@@ -1464,7 +1464,7 @@ impl MemoryOps for T76 {
     /// block/LBA index from `req.len`. Feeding page-sized requests would
     /// mis-index and short-read, so those spaces override the default page-size
     /// stepping (NAND/eMMC read paths).
-    fn block_size(&self, s: &Session, kind: MemoryKind) -> u32 {
+    fn block_size(&self, s: &Session, kind: MemoryKind, _dir: TransferDir) -> u32 {
         const EMMC_UNIT: u32 = 0x1_0000; // 64 KiB
         match (s.device.protocol_id, kind) {
             (ALG_NAND, MemoryKind::Code) => {
@@ -1488,7 +1488,7 @@ impl MemoryOps for T76 {
     /// region back and compares host-side. Uses the same operation-specific block size
     /// as the read loop so NAND/eMMC are stepped correctly.
     fn blank_check(&mut self, s: &Session, region: Region) -> Result<bool> {
-        let step = u64::from(self.block_size(s, region.kind));
+        let step = u64::from(self.block_size(s, region.kind, TransferDir::Read));
         // Blank-check streams the region exactly as a read does; the block
         // plan (init/block_count) comes from the single source in `Region`.
         for req in region.blocks(step) {
@@ -3135,7 +3135,10 @@ mod tests {
             device: dev,
             emmc_capacity: 0,
         };
-        assert_eq!(t76.block_size(&s, MemoryKind::Code), 0x100);
+        assert_eq!(
+            t76.block_size(&s, MemoryKind::Code, TransferDir::Read),
+            0x100
+        );
 
         // NAND: page(+spare) x pages/block, NOT the page size.
         let mut dev = device(ALG_NAND, Vec::new());
@@ -3146,7 +3149,10 @@ mod tests {
             device: dev,
             emmc_capacity: 0,
         };
-        assert_eq!(t76.block_size(&s, MemoryKind::Code), 0x840 * 64);
+        assert_eq!(
+            t76.block_size(&s, MemoryKind::Code, TransferDir::Read),
+            0x840 * 64
+        );
 
         // eMMC: a fixed 64 KiB unit.
         let dev = device(ALG_EMMC, Vec::new());
@@ -3154,7 +3160,10 @@ mod tests {
             device: dev,
             emmc_capacity: 0,
         };
-        assert_eq!(t76.block_size(&s, MemoryKind::Code), 0x1_0000);
+        assert_eq!(
+            t76.block_size(&s, MemoryKind::Code, TransferDir::Read),
+            0x1_0000
+        );
     }
 
     /// Dropping a T76 that uploaded a bitstream resets the FPGA;

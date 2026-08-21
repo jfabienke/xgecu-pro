@@ -21,19 +21,29 @@ pub trait MemoryOps {
     fn erase(&mut self, s: &Session, kind: EraseKind) -> Result<()>;
     fn blank_check(&mut self, s: &Session, region: Region) -> Result<bool>;
 
-    /// The transfer unit the block loop should step by for `kind`. The default
-    /// is the device page size (or [`DEFAULT_BLOCK`]) — correct for byte- and
-    /// page-addressed memory. Drivers whose hardware needs an operation-specific
-    /// unit override this: e.g. the T76 streams one NAND *erase block*
-    /// (page+spare × pages/block) or one eMMC 64 KiB unit per request, and
-    /// derives its block index from that size — so feeding it page-sized
-    /// requests would mis-address and short-read.
-    fn block_size(&self, s: &Session, _kind: MemoryKind) -> u32 {
+    /// The transfer unit the block loop should step by, for `kind` and
+    /// direction. The default is the device page size (or [`DEFAULT_BLOCK`]) —
+    /// correct for byte- and page-addressed memory, and the shape the
+    /// hardware-verified T76 paths keep. Drivers override it where the wire
+    /// demands otherwise: the T76 streams one NAND *erase block* or one eMMC
+    /// 64 KiB unit per request and derives block indexes from the size, and
+    /// the fixed-silicon family chunks reads by `read_buffer_size` and writes
+    /// by `write_buffer_size` — two different numbers, which is why the
+    /// direction is part of the question.
+    fn block_size(&self, s: &Session, _kind: MemoryKind, _dir: TransferDir) -> u32 {
         match s.device.page_size {
             0 => DEFAULT_BLOCK,
             n => n,
         }
     }
+}
+
+/// Which way a block transfer moves, for [`MemoryOps::block_size`]. Reads and
+/// writes may step by different units on the same chip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransferDir {
+    Read,
+    Write,
 }
 
 /// MCU fuse/config/lock bits. `length` is how many bytes to read back;
@@ -112,4 +122,61 @@ pub trait FirmwareUpdate {
 /// T48 or T76). `len` is how many bytes the caller expects back.
 pub trait Calibration {
     fn read_calibration(&mut self, len: usize) -> Result<Vec<u8>>;
+}
+
+#[cfg(test)]
+mod step_tests {
+    use super::*;
+    use crate::device::Device;
+    use crate::programmer::Session;
+
+    /// The default step is direction-blind (page-based); a driver that
+    /// overrides it per direction must see reads and writes step differently
+    /// when the catalog says so — the C chunks reads by read_buffer_size and
+    /// writes by write_buffer_size, and on an MX27C2000 those are 4096 vs 128.
+    #[test]
+    fn default_step_is_page_based_both_ways() {
+        struct M;
+        impl MemoryOps for M {
+            fn read_block(
+                &mut self,
+                _s: &Session,
+                _r: &crate::device::BlockReq,
+            ) -> crate::error::Result<Vec<u8>> {
+                Ok(vec![])
+            }
+            fn write_block(
+                &mut self,
+                _s: &Session,
+                _r: &crate::device::BlockReq,
+                _d: &[u8],
+            ) -> crate::error::Result<()> {
+                Ok(())
+            }
+            fn erase(
+                &mut self,
+                _s: &Session,
+                _k: crate::device::EraseKind,
+            ) -> crate::error::Result<()> {
+                Ok(())
+            }
+            fn blank_check(
+                &mut self,
+                _s: &Session,
+                _r: crate::device::Region,
+            ) -> crate::error::Result<bool> {
+                Ok(true)
+            }
+        }
+        let s = Session {
+            device: Device {
+                page_size: 256,
+                ..Default::default()
+            },
+            emmc_capacity: 0,
+        };
+        let m = M;
+        assert_eq!(m.block_size(&s, MemoryKind::Code, TransferDir::Read), 256);
+        assert_eq!(m.block_size(&s, MemoryKind::Code, TransferDir::Write), 256);
+    }
 }

@@ -36,7 +36,7 @@
 //! this project's record says first hardware contact finds a bug.
 
 use minipro_core::caps::{
-    FuseOps, JedecOps, LoadBitstream, LogicTest, MemoryOps, Protect, SpiAutodetect,
+    FuseOps, JedecOps, LoadBitstream, LogicTest, MemoryOps, Protect, SpiAutodetect, TransferDir,
 };
 use minipro_core::device::{BlockReq, ChipId, Device, EraseKind, FuseKind, MemoryKind, Region};
 use minipro_core::error::{Error, FwVersion, Result};
@@ -423,12 +423,28 @@ impl MemoryOps for Tl866ii {
         command(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, &msg, 64)?.discard()
     }
 
-    /// Blank check by reading the region back.
-    fn blank_check(&mut self, s: &Session, region: Region) -> Result<bool> {
-        let step = u64::from(match s.device.page_size {
+    /// Fixed-silicon chunking, per the C: reads step by `read_buffer_size`,
+    /// writes by `write_buffer_size` — two different numbers on many parts
+    /// (page size stands in when the catalog carries no buffer size).
+    fn block_size(&self, s: &Session, _kind: MemoryKind, dir: TransferDir) -> u32 {
+        let fallback = match s.device.page_size {
             0 => 4096,
             n => n,
-        });
+        };
+        let buf = match dir {
+            TransferDir::Read => u32::from(s.device.read_buffer_size),
+            TransferDir::Write => u32::from(s.device.write_buffer_size),
+        };
+        if buf == 0 {
+            fallback
+        } else {
+            buf
+        }
+    }
+
+    /// Blank check by reading the region back.
+    fn blank_check(&mut self, s: &Session, region: Region) -> Result<bool> {
+        let step = u64::from(self.block_size(s, region.kind, TransferDir::Read));
         for req in region.blocks(step) {
             if self
                 .read_block(s, &req)?

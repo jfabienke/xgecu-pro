@@ -30,6 +30,7 @@
 
 use minipro_core::caps::{
     Calibration, FuseOps, JedecOps, LoadBitstream, LogicTest, MemoryOps, Protect, SpiAutodetect,
+    TransferDir,
 };
 use minipro_core::device::{BlockReq, ChipId, Device, EraseKind, FuseKind, MemoryKind, Region};
 use minipro_core::error::{Error, FwVersion, Result};
@@ -449,10 +450,9 @@ impl MemoryOps for T56 {
         le16(&mut msg, 2, req.len.min(u32::from(u16::MAX)) as u16);
         le32(&mut msg, 4, req.address.min(u64::from(u32::MAX)) as u32);
         self.send(&msg)?;
-        // TODO(hw): send exactly `device->write_buffer_size` bytes
-        //; the block loop drives page-sized blocks, so this
-        // matches when write_buffer_size == page_size. Reconcile the two
-        // granularities when validating writes on hardware.
+        // The write step now follows the C (write_buffer_size per block via
+        // block_size), so each `data` here is one buffer-sized chunk.
+        // TODO(hw): still unvalidated on silicon — no T56 here.
         self.send(data)
     }
 
@@ -469,13 +469,29 @@ impl MemoryOps for T56 {
         command(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, &msg, 64)?.discard()
     }
 
+    /// Fixed-silicon chunking, per the C: reads step by `read_buffer_size`,
+    /// writes by `write_buffer_size` — two different numbers on many parts
+    /// (page size stands in when the catalog carries no buffer size).
+    fn block_size(&self, s: &Session, _kind: MemoryKind, dir: TransferDir) -> u32 {
+        let fallback = match s.device.page_size {
+            0 => 4096,
+            n => n,
+        };
+        let buf = match dir {
+            TransferDir::Read => u32::from(s.device.read_buffer_size),
+            TransferDir::Write => u32::from(s.device.write_buffer_size),
+        };
+        if buf == 0 {
+            fallback
+        } else {
+            buf
+        }
+    }
+
     /// Blank check by reading the region back and testing for erased flash
     /// (0xff); the T56 has no dedicated blank-check opcode, same as the T76.
     fn blank_check(&mut self, s: &Session, region: Region) -> Result<bool> {
-        let step = u64::from(match s.device.page_size {
-            0 => 4096,
-            n => n,
-        });
+        let step = u64::from(self.block_size(s, region.kind, TransferDir::Read));
         // Blank-check streams the region exactly as a read does; the block
         // plan (init/block_count) comes from the single source in `Region`.
         for req in region.blocks(step) {
