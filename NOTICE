@@ -14,13 +14,17 @@ Matt Brown (nmatt0) — minipro `t76-improvements` fork
 -----------------------------------------------------
     https://gitlab.com/nmatt0/minipro/-/tree/t76-improvements  (GPL-3.0)
 
-The reverse-engineering of the T48/T56/T76 USB protocols, the T76's
+The reverse-engineering of the TL866II+/T48/T56/T76 USB protocols, the T76's
 FPGA/bitstream lifecycle, the firmware-update transport, and the `InfoICT76.dll`
 field/variant transforms is Matt Brown's work. This project's drivers
-(`minipro-rs/crates/minipro-proto/{t48,t56,t76}.rs`) and DLL parser
+(`minipro-rs/crates/minipro-proto/{tl866ii,t48,t56,t76}.rs`) and DLL parser
 (`minipro-rs/crates/minipro-db/src/dll.rs`) are independent Rust
 implementations of those reverse-engineered facts — not a translation of his
-C source, which is not vendored in this repository.
+C source, which is not vendored in this repository. That includes the
+TL866II+'s dual-endpoint payload distribution: the byte counts each endpoint
+must receive are a device requirement his tool's behavior documents, and this
+project restates the mapping from the observed values rather than transcribing
+his arithmetic.
 
 radiomanV — Xgecu_T76 — FPGA-side tooling
 -----------------------------------------

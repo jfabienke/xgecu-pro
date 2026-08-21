@@ -368,24 +368,11 @@ impl Transport for UsbTransport {
         Ok(out)
     }
 
-    /// TL866II+ dual-endpoint send: contiguous split per the C's
-    /// `write_payload2` arithmetic (from XGPro), halves written in parallel.
+    /// TL866II+ dual-endpoint send: a contiguous split written in parallel,
+    /// sized by [`interlaced_split`].
     fn send_interlaced(&mut self, ep_a: Ep, ep_b: Ep, data: &[u8]) -> Result<()> {
-        let length = data.len();
-        let (ep2_len, _ep3_len) = {
-            let j = length % 128;
-            if j != 0 {
-                let k = (length - j) / 2;
-                if j > 64 {
-                    (k + 64, j + k - 64)
-                } else {
-                    (k, j + k)
-                }
-            } else {
-                (length / 2, length / 2)
-            }
-        };
-        let (first, second) = data.split_at(ep2_len);
+        let (len_a, _) = interlaced_split(data.len());
+        let (first, second) = data.split_at(len_a);
         let (a, b) = self.claim_pair_out(ep_a, ep_b)?;
         std::thread::scope(|scope| {
             let tb = scope.spawn(|| Self::send_on(b, ep_b, second));
@@ -447,6 +434,27 @@ impl Transport for UsbTransport {
             }
         }
     }
+}
+
+/// How many bytes of a TL866II+ outbound payload belong to the first endpoint
+/// of the pair, versus the second.
+///
+/// The distribution is a device requirement (observed behaviorally: XGPro and
+/// the C tool both produce it, and the firmware expects it), restated here from
+/// the mapping itself rather than transcribed: every full 128-byte *pair*
+/// contributes 64 bytes to each endpoint; a trailing partial pair puts its
+/// first 64 bytes on the first endpoint only if it has more than 64, and the
+/// rest — or all of a short remainder — on the second.
+///
+/// ```text
+///  96 -> (64, 32)    160 -> (64, 96)    200 -> (128, 72)
+/// 128 -> (64, 64)    256 -> (128, 128)
+/// ```
+fn interlaced_split(length: usize) -> (usize, usize) {
+    let pairs = length / 128;
+    let remainder = length % 128;
+    let first = pairs * 64 + if remainder > 64 { 64 } else { 0 };
+    (first, length - first)
 }
 
 /// The transport lost its interface claim — only reachable if a [`Transport::reset`]
@@ -798,6 +806,25 @@ mod tests {
             "round-trip ok before and after reset; link = {:?}",
             tx.link_speed()
         );
+    }
+
+    /// The TL866II+ outbound split is a device requirement; these values are
+    /// the observed mapping (cross-checked against the reference tool's output
+    /// for every length up to 4 KiB). 160 is the telling case: the split is
+    /// per-128-pair with remainder placement, *not* alternating 64-blocks.
+    #[test]
+    fn interlaced_split_matches_the_device_requirement() {
+        for (len, want) in [
+            (96, (64, 32)),
+            (100, (64, 36)),
+            (128, (64, 64)),
+            (160, (64, 96)),
+            (200, (128, 72)),
+            (256, (128, 128)),
+            (4096, (2048, 2048)),
+        ] {
+            assert_eq!(interlaced_split(len), want, "length {len}");
+        }
     }
 
     #[test]
