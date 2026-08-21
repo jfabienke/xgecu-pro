@@ -111,6 +111,24 @@ version at `0x0256`.
   256+1024-byte tables for A and CS), ~600 lines with the tables. Same
   deferral class as the other non-T76 updates.
 
+## The database dimension (found after the driver research)
+
+The vendor catalog is **three databases, selected by programmer model**: the
+generated `infoic.xml` carries `INFOIC` (TL866A/CS), `INFOIC2PLUS`
+(TL866II+/T48/T56), and `INFOICT76` (T76) sections, and the C picks the
+section — and a per-generation **voltage table** (`tl866a_vcc_voltages` etc.)
+— from the attached model. The A's BEGIN carries voltage *nibbles* resolved
+through its own tables.
+
+Two consequences. For the A: a driver alone is not enough — it needs the
+`INFOIC` catalog section and the A's voltage-nibble mapping, which raises the
+real effort from M toward L. And a finding that matters **today**: our own
+database layer reads only the T76 catalog, so chips selected for the
+T48/T56/TL866II+ drivers are currently served T76-section parameters. The
+families are close, but the C deliberately keeps separate sections — per-model
+catalog selection is work worth doing for the drivers we already ship,
+regardless of whether the A ever lands.
+
 ## What a Rust driver would look like
 
 - **Fits the existing traits cleanly**: `Programmer` + Memory/Fuse/Jedec/
