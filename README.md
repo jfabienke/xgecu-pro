@@ -215,6 +215,7 @@ Reverse-engineering and analysis, useful independently of the Rust code:
 | [`design-decisions.md`](docs/design-decisions.md) | The decisions in retrospect — what was chosen over the C's way, why, and how each fared against real silicon |
 | [`minipro-vs-rust.md`](docs/minipro-vs-rust.md) | Honest comparison with the C tool |
 | [`multi-programmer.md`](docs/multi-programmer.md) | Driving a bank of programmers in parallel — what's ready, and the reset bug to fix first |
+| [`tl866a-cs-notes.md`](docs/tl866a-cs-notes.md) | The TL866A/CS protocol, researched from the C — the last unimplemented driver, scoped |
 
 ## Contributing
 
