@@ -332,6 +332,24 @@ impl Transport for UsbTransport {
         self.recv_within(ep, len, SLOW_READ_TIMEOUT)
     }
 
+    fn recv_slow_upto(&mut self, ep: Ep, max: usize) -> Result<Vec<u8>> {
+        // One transfer, the long deadline, and the device chooses the length —
+        // the libusb semantics the reference relies on for erase replies.
+        if max == 0 {
+            return Ok(Vec::new());
+        }
+        let endpoint = self.in_ep(ep.0)?;
+        let mps = endpoint.max_packet_size();
+        let request = max.div_ceil(mps) * mps;
+        let completion = endpoint.transfer_blocking(Buffer::new(request), SLOW_READ_TIMEOUT);
+        completion
+            .status
+            .map_err(|e| Error::Usb(format!("bulk IN 0x{:02x}: {e}", ep.0)))?;
+        let mut data = completion.buffer.into_vec();
+        data.truncate(completion.actual_len.min(max));
+        Ok(data)
+    }
+
     fn link_speed(&self) -> LinkSpeed {
         self.link
     }

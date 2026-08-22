@@ -55,6 +55,17 @@ pub trait Transport: Send {
     /// Reset the device / re-arm the endpoints.
     fn reset(&mut self) -> Result<()>;
 
+    /// Receive **up to** `max` bytes with the extended deadline, returning
+    /// whatever single transfer arrives. For replies whose length the device
+    /// decides: the T76 answers a chip-erase command with 8 bytes where the
+    /// request allows 64 (measured on a W27C512 — the first hardware erase),
+    /// and the reference implementation tolerates that silently because
+    /// libusb treats a short bulk read as success. Exact-length `recv` stays
+    /// the default everywhere else, where a short reply *is* a desync.
+    fn recv_slow_upto(&mut self, ep: Ep, max: usize) -> Result<Vec<u8>> {
+        self.recv_slow(ep, max)
+    }
+
     /// Receive a payload the device splits across **two** IN endpoints — the
     /// TL866II+ streams reads larger than 64 bytes as alternating 64-byte
     /// blocks whose halves land contiguously on EP2 and EP3, read in parallel

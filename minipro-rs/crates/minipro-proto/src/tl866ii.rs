@@ -420,7 +420,11 @@ impl MemoryOps for Tl866ii {
         }
         let mut msg = [0u8; 15];
         msg[0] = CMD_ERASE;
-        command(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, &msg, 64)?.discard()
+        // Erase blocks until the chip finishes, and the reply length is the
+        // device's choice (the T76 answers 8 of an allowed 64) — slow,
+        // short-tolerant drain, matching the reference's libusb semantics.
+        self.send(&msg)?;
+        self.tx.recv_slow_upto(EP_MSG_IN, 64).map(|_| ())
     }
 
     /// Fixed-silicon chunking, per the C: reads step by `read_buffer_size`,

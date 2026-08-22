@@ -30,7 +30,7 @@ use minipro_core::device::{
 };
 use minipro_core::error::{Error, FwVersion, Result};
 use minipro_core::programmer::{Caps, Programmer, ProgrammerInfo, Session};
-use minipro_core::transport::{command, command_slow, Ep, LinkSpeed, Transport};
+use minipro_core::transport::{command, Ep, LinkSpeed, Transport};
 
 use crate::wire::{
     self, ascii_field, le16, le32, pack_begin64, ChipParams, CMD_END_TRANS, CMD_ERASE, CMD_READID,
@@ -496,6 +496,13 @@ pub struct T76 {
     uploaded_algo: Option<String>,
     emmc_geom: EmmcGeometry,
     emmc_capacity: u64,
+    /// Blocks remaining in the current generic write region. The firmware
+    /// programs one block behind the stream — block N commits when block N+1
+    /// arrives — so the region's final block only commits when a status
+    /// request flushes it. Measured on a W27C512: without the flush, exactly
+    /// the last 4096-byte block reads back erased. Set from `BlockReq`'s
+    /// `init`/`block_count`, counted down per block, flush at zero.
+    write_flush_left: Option<u32>,
 }
 
 impl T76 {
@@ -516,6 +523,7 @@ impl T76 {
             uploaded_algo: None,
             emmc_geom: EmmcGeometry::default(),
             emmc_capacity: 0,
+            write_flush_left: None,
         }
     }
 
@@ -739,6 +747,40 @@ impl T76 {
             return Err(Error::Protocol);
         }
         Ok(())
+    }
+
+    /// Track a generic write region and flush its tail. The reference sends
+    /// one status request after its write loop; the firmware commits the
+    /// final cached block on it. Counted from `BlockReq::init`/`block_count`
+    /// so the flush lands exactly once, after the region's last block — and
+    /// the reply doubles as the post-write overcurrent check, as in the
+    /// reference.
+    fn after_write_block(&mut self, req: &BlockReq) -> Result<()> {
+        if req.init {
+            self.write_flush_left = Some(req.block_count);
+        }
+        if let Some(left) = self.write_flush_left {
+            let left = left.saturating_sub(1);
+            if left == 0 {
+                self.write_flush_left = None;
+                let ovc = self.request_status_plain()?;
+                if ovc != 0 {
+                    return Err(Error::Overcurrent);
+                }
+            } else {
+                self.write_flush_left = Some(left);
+            }
+        }
+        Ok(())
+    }
+
+    /// A bare 0x39 REQUEST_STATUS (zeroed header), 32-byte reply; returns the
+    /// overcurrent byte at offset 12.
+    fn request_status_plain(&mut self) -> Result<u8> {
+        let mut msg = [0u8; 8];
+        msg[0] = CMD_REQUEST_STATUS;
+        let resp = self.cmd(&msg, 32)?;
+        wire::at(&resp, 12)
     }
 
     /// 0x39 REQUEST_STATUS; returns the OVC byte. For NAND/eMMC the
@@ -1394,7 +1436,8 @@ impl MemoryOps for T76 {
                 let mut pkt = Vec::with_capacity(16 + data.len());
                 pkt.extend_from_slice(&msg); // header with [8..11] zeroed
                 pkt.extend_from_slice(data);
-                self.tx.send(EP_DAT_OUT, &pkt)
+                self.tx.send(EP_DAT_OUT, &pkt)?;
+                self.after_write_block(req)
             }
             // MP_DATA: 16-byte 0x11 init, raw data on EP05.
             MemoryKind::Data => {
@@ -1404,7 +1447,8 @@ impl MemoryOps for T76 {
                 le32(&mut msg, 4, req.address.min(u64::from(u32::MAX)) as u32);
                 le32(&mut msg, 12, req.len);
                 self.send(&msg)?;
-                self.tx.send(EP_DAT_OUT, data)
+                self.tx.send(EP_DAT_OUT, data)?;
+                self.after_write_block(req)
             }
             // MP_USER: single 16+len packet on EP01.
             MemoryKind::User => {
@@ -1436,9 +1480,12 @@ impl MemoryOps for T76 {
                     // drain the 64-byte reply.
                     let mut msg = [0u8; 16];
                     msg[0] = CMD_ERASE;
-                    // A full-chip erase can take minutes; this is one of the
-                    // few replies that legitimately needs the long deadline.
-                    command_slow(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, &msg, 64)?.discard()
+                    // A full-chip erase can take minutes, and the reply length
+                    // is the device's choice — 8 bytes measured on a W27C512
+                    // against the 64 the request allows — so the drain is the
+                    // slow, short-tolerant one.
+                    self.send(&msg)?;
+                    self.tx.recv_slow_upto(EP_MSG_IN, 64).map(|_| ())
                 }
             },
             EraseKind::Sector { address } => {
@@ -1454,7 +1501,8 @@ impl MemoryOps for T76 {
             EraseKind::Fuses => {
                 let mut msg = [0u8; 16];
                 msg[0] = CMD_ERASE;
-                command_slow(self.tx.as_mut(), EP_MSG_OUT, EP_MSG_IN, &msg, 64)?.discard()
+                self.send(&msg)?;
+                self.tx.recv_slow_upto(EP_MSG_IN, 64).map(|_| ())
             }
         }
     }
@@ -2602,12 +2650,14 @@ mod tests {
     fn write_block_code_init_then_payload() {
         let dev = device(0x07, vec![]);
         let data = vec![0xabu8; 0x40];
-        let (mut t76, tx) = t76_with(vec![]);
+        // A single-block region flushes immediately: the trailing 0x39 needs a
+        // scripted 32-byte status reply (offset 12 = no overcurrent).
+        let (mut t76, tx) = t76_with(vec![vec![0u8; 32]]);
         let req = BlockReq::single(MemoryKind::Code, 0x200, 0x40);
         t76.write_block(&session(&dev), &req, &data).unwrap();
 
         let sent = tx.sent();
-        assert_eq!(sent.len(), 2);
+        assert_eq!(sent.len(), 3);
         // Init on EP01: 0x0c with size/address/block_count/size.
         assert_eq!(sent[0].0, 0x01);
         assert_eq!(
@@ -2622,6 +2672,35 @@ mod tests {
             &[0x0c, 0, 0x40, 0x00, 0x00, 0x02, 0x00, 0x00, 0, 0, 0, 0, 0x40, 0, 0, 0]
         );
         assert_eq!(&sent[1].1[16..], &data[..]);
+        // The region flush: a bare 0x39, its reply drained — the firmware
+        // commits the cached final block on it (measured: without this the
+        // last block reads back erased).
+        assert_eq!(sent[2].1, vec![0x39, 0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    /// Multi-block regions flush exactly once, after the announced count —
+    /// mid-region blocks must NOT be followed by a status request, matching
+    /// the reference's "no status during T76 writes" rule.
+    #[test]
+    fn write_region_flushes_once_after_the_last_block() {
+        let dev = device(0x07, vec![]);
+        let (mut t76, tx) = t76_with(vec![vec![0u8; 32]]);
+        let s = session(&dev);
+        let mk = |addr, init| BlockReq {
+            kind: MemoryKind::Code,
+            address: addr,
+            len: 0x40,
+            init,
+            block_count: 3,
+        };
+        let data = vec![0x5au8; 0x40];
+        t76.write_block(&s, &mk(0, true), &data).unwrap();
+        t76.write_block(&s, &mk(0x40, false), &data).unwrap();
+        let before: usize = tx.sent().iter().filter(|(_, p)| p[0] == 0x39).count();
+        assert_eq!(before, 0, "no flush mid-region");
+        t76.write_block(&s, &mk(0x80, false), &data).unwrap();
+        let after: usize = tx.sent().iter().filter(|(_, p)| p[0] == 0x39).count();
+        assert_eq!(after, 1, "exactly one flush, after the final block");
     }
 
     #[test]
@@ -2883,6 +2962,17 @@ mod tests {
         msg[0] = 0x0e;
         assert_eq!(tx.sent(), vec![(0x01, msg)]);
         assert_eq!(tx.recv_log(), vec![(0x81, 64)]);
+    }
+
+    /// The erase reply's length is the device's choice: a real W27C512 erase
+    /// answers 8 bytes where the request allows 64, and the reference tool
+    /// tolerates that because libusb treats short bulk reads as success. The
+    /// first hardware erase this project ever ran failed on exactly this.
+    #[test]
+    fn generic_chip_erase_tolerates_a_short_reply() {
+        let dev = device(0x07, vec![]);
+        let (mut t76, _tx) = t76_with(vec![vec![0u8; 8]]); // 8 of an allowed 64
+        t76.erase(&session(&dev), EraseKind::Chip).unwrap();
     }
 
     #[test]
