@@ -21,9 +21,9 @@ This is a **young project handling real hardware**. Honest state of play:
 
 | Path | Status |
 |---|---|
-| **T76 reads** | ✅ **Hardware-verified** — byte-identical across repeated reads on three chip classes (AT27C256R, MX27C2000, W27C512) |
-| **T76 write** (parallel EPROM/EEPROM) | ✅ **Hardware-verified** — bit-exact on an MX27C2000, and three full 64 KB write→verify cycles on a W27C512 with distinct data each time |
-| **T76 erase** | ✅ **Hardware-verified** — three erase→blank-check cycles on a W27C512, chip verifiably all-0xFF after each |
+| **T76 reads** | ✅ **Hardware-verified** — byte-identical across repeated reads on four parts (AT27C256R, MX27C2000, W27C512, W27C257) |
+| **T76 write** (parallel EPROM/EEPROM) | ✅ **Hardware-verified** — bit-exact on an MX27C2000, plus three full write→verify cycles each on a W27C512 (64 KB) and W27C257 (32 KB), distinct data every cycle |
+| **T76 erase** | ✅ **Hardware-verified** — three erase→blank-check cycles each on a W27C512 and a W27C257, chip verifiably all-0xFF after every one |
 | **T76 NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device**. `write --dry-run` checks setup without programming; `update` refuses without `--confirm`, verifies bootloader entry both ways, and recovers a bootloader-stuck device |
 | **T76 write** (every other chip class) | ⚠️ Only the parallel-EPROM path has touched silicon |
 | **Writing protect-before parts** (10,123 devices incl. most SPI NOR) | ⚠️ Protect-off sequence implemented per the C's, **not yet verified on silicon** |
