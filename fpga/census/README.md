@@ -280,6 +280,49 @@ thread for decoding the command encoding:
 (around 60-78), consistent with a command field in the middle lines while the
 extremes carry something near-static.
 
+## Erase parameter sweep — measured 2026-08-24
+
+Four chips from one family, same maker, varying only in capacity, each erased
+with the census resident. `erase` does not wedge, so all four ran back to back
+with no replug.
+
+| chip | size | bursts per erase | words |
+|---|--:|--:|--:|
+| `W27C257@DIP28` | 32 KiB | 21 | 147 |
+| `W27C512@DIP28` | 64 KiB | 21 | 147 |
+| `W27C010` | 128 KiB | 21 | 147 |
+| `W27C02` | 256 KiB | 21 | 147 |
+
+**Command volume is independent of chip size.** Identical at every capacity, so
+erase does not iterate over the device -- it hands the FPGA a parameter block
+and the FPGA does the work.
+
+**A methodology note that nearly produced a wrong result.** `bursts` and
+`capwords` are cumulative: they saturate but never reset. Read naively across a
+sweep they appear to scale with size (84, 105, 126, 147) and invite a tidy
+story about address bits. The deltas are a flat +21 every time. Per-pin edge
+counters *do* reset per frame, so they must be summed across a run rather than
+maxed, or an operation spanning a frame boundary is undercounted.
+
+**The bus partitions into framing and payload:**
+
+| class | lines | across all four chips |
+|---|---|---|
+| framing | `HTREQ`, `HTVLD`, `HTACK`, `HD3`, `HD4` | constant (38-42, 30-32) |
+| payload | `HD0`-`HD2`, `HD5`-`HD13` | vary 20-fold, non-monotonically |
+| near-static | `HD19`, `BD7` (R5) | 2 transitions |
+
+The variation is **not** size-correlated -- `HD8` runs 364, 36, 1556, 324 and
+`HD2` runs 1486, 84, 84, 76 -- so those lines carry per-chip parameter values
+(algorithm, voltages, timings) whose bit patterns differ arbitrarily between
+parts, not capacity.
+
+**The ceiling of this technique.** Transition count is a proxy for activity, not
+for value: two different values of equal Hamming weight are indistinguishable.
+It identifies *which* lines carry parameters and cannot say *what* they carry.
+Reading the encoding needs actual captured words, which is the packet capture
+that has not worked since `a93f729`.
+
 ## Next: differential operation mapping
 
 Planned, and it needs **no rebuild** — the committed census already measures
