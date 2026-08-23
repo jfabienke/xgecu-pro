@@ -230,6 +230,56 @@ Also worth noting: `cso_b`/`cclk`/`mosi`/`miso`/`dout` (T3/R11/T10/P10/M14) and
 `done` (P13) are configuration pins set to **gpio** mode, so they *are*
 observable — several of them carry `HD` nets.
 
+## Differential operation map — measured 2026-08-24
+
+Each operation run with `MINIPRO_KEEP_BITSTREAM=1` so the census stayed
+resident, capturing the frames throughout. Counts are the peak reported in any
+frame of the run.
+
+| operation | bursts | words | HD lines active | our replies | HTACK | completes | wedges |
+|---|--:|--:|--:|--:|--:|---|---|
+| idle | 0 | 0 | 0 | 0 | 0 | — | no |
+| `info` | **0** | **0** | **0** | 0 | 0 | yes | no |
+| `detect` | 23 | 161 | 17 | 22 | 22 | no | yes |
+| `read` | 23 | 161 | 18 | 21 | 21 | no | yes |
+| **`erase`** | 21 | 147 | 17 | 21 | 21 | **yes** | **no** |
+| `write` | 44 | 308 | 18 | 42 | 40 | no | yes |
+
+**`erase` completes, and does not wedge.** Run three times consecutively, every
+one exiting 0 with the T76 answering normally afterwards. It is the only
+operation that finishes with an instrument in the FPGA instead of a programmer,
+which says it never needs data back from the FPGA -- it issues its sequence and
+takes a status. That makes it the stimulus to build future experiments on:
+real HSPI traffic, repeatable, at no cost in replugs.
+
+**`info` produces literally zero HSPI traffic** -- not one burst, not one word,
+no pin moving but `HTCLK`. It is answered by the MCU alone, which makes it a
+clean negative control: activity in any other operation is operation-specific
+rather than background.
+
+**`detect` and `read` are indistinguishable here** -- both 23 bursts and 161
+words. They share an opening sequence and diverge only past the point where our
+FPGA stops satisfying the MCU.
+
+**`write` is almost exactly double** `detect`/`read` (44/308 against 23/161),
+which suggests a second pass of the same setup rather than payload.
+
+**None of these counts include bulk data.** 161 words is nowhere near 64 KiB, so
+everything measured is command traffic. Whatever carries payload happens past
+the point our FPGA can sustain.
+
+**The per-pin signature differs by operation**, which is the most promising
+thread for decoding the command encoding:
+
+| operation | busiest HD lines (transitions) |
+|---|---|
+| `detect` | `HD6` 1377, `HD11` 963, `HD7` 941, `HD13` 821, `HD10` 773 |
+| `erase` | `HD8` 3562, `HD11` 1973, `HD13` 1783, `HD9` 1669, `HD6` 1037 |
+
+`HD0`/`HD1` stay low in both (225/112 and 241/120) and `HD14`/`HD15` barely move
+(around 60-78), consistent with a command field in the middle lines while the
+extremes carry something near-static.
+
 ## Next: differential operation mapping
 
 Planned, and it needs **no rebuild** — the committed census already measures
