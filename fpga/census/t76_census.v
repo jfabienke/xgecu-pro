@@ -43,13 +43,17 @@ module t76_census #(
 
 `include "census_params.vh"
 `include "census_obs.vh"
+`include "census_hd_bus.vh"
 
 localparam integer CLK_HZ    = 20_000_000;
 localparam integer BAUD      = 115200;
 localparam integer BAUD_DIV  = CLK_HZ / BAUD;          // 173.6 -> 174, 0.2% error
-localparam integer HDR       = 7;                      // preamble+version+npins+ndetail
-localparam integer EDGE_OFF  = HDR + 3*NBYTES;         // where the counters start
-localparam integer FRAME_LEN = EDGE_OFF + 2*NDETAIL + 2;
+localparam integer CAPN      = 32;                     // captured HSPI words
+localparam integer HDR       = 8;                      // preamble+version+npins+ndetail+capn
+localparam integer EDGE_OFF  = HDR + 3*NBYTES;         // transition counters
+localparam integer STAT_OFF  = EDGE_OFF + 2*NDETAIL;   // capwords, bursts
+localparam integer CAP_OFF   = STAT_OFF + 4;           // captured words, 4 bytes each
+localparam integer FRAME_LEN = CAP_OFF + 4*CAPN + 2;
 
 // --- rail control: static, safe, never floating ----------------------------
 assign ser_clk = 1'b0;
@@ -101,6 +105,66 @@ initial for (ei = 0; ei < NDETAIL; ei = ei + 1) begin
     edges[ei]  = 16'd0;
     f_edge[ei] = 16'd0;
 end
+
+// --- HTRDY: the receiver-ready handshake -----------------------------------
+// CH569 Table 10-1: HTRDY is a pull-down INPUT on the MCU ("Detect the status of
+// reception end"), so the receiving end drives it. Section 10.2.3: the MCU
+// raises HTREQ, "if transmission is allowed at the lower end, its hardware will
+// drive HTRDY to high level output", and only then does it assert HTVLD and
+// clock the packet out.
+//
+// Without this the MCU raises HTREQ and waits forever -- measured: HTREQ took
+// exactly one transition and every HD line stayed static.
+//
+// HTACK is deliberately NOT driven. It is the MCU's own push-pull OUTPUT; the
+// FPGA driving it would be direct contention.
+reg htreq_s0 = 1'b0, htreq_s1 = 1'b0;
+always @(posedge i_clock_20M) begin
+    htreq_s0 <= HTREQ;
+    htreq_s1 <= htreq_s0;
+end
+assign htrdy = htreq_s1;   // ready whenever asked
+
+// --- capture the packet in the MCU's own clock domain -----------------------
+// HD[] is only meaningful on HTCLK edges while HTVLD is high, and HTCLK runs far
+// faster than our 20 MHz sampling clock -- sampling it here would alias, exactly
+// as the HTCLK transition counter does. So the capture runs on HTCLK itself,
+// which is what a real HSPI receiver does.
+reg [31:0] capbuf [0:CAPN-1];
+reg [7:0]  capcnt   = 8'd0;    // words captured in the current burst
+reg [15:0] capwords = 16'd0;   // total valid words seen, saturating
+reg [15:0] bursts   = 16'd0;   // HTVLD rising edges, saturating
+reg        htvld_d  = 1'b0;
+integer ci;
+initial for (ci = 0; ci < CAPN; ci = ci + 1) capbuf[ci] = 32'd0;
+
+always @(posedge HTCLK) begin
+    htvld_d <= HTVLD;
+    if (HTVLD && !htvld_d) begin
+        capcnt <= 8'd0;
+        if (bursts != 16'hFFFF) bursts <= bursts + 16'd1;
+    end
+    if (HTVLD) begin
+        if (capcnt < CAPN[7:0]) begin
+            capbuf[capcnt] <= {8'd0, hd_bus};
+            capcnt <= capcnt + 8'd1;
+        end
+        if (capwords != 16'hFFFF) capwords <= capwords + 16'd1;
+    end
+end
+
+// Frame-side copies. Refreshed only while HTVLD is low, so a burst in flight is
+// never latched half-written -- the clock-domain crossing is resolved by only
+// reading data that has stopped changing.
+reg [31:0] f_cap [0:CAPN-1];
+reg [15:0] f_capwords = 16'd0;
+reg [15:0] f_bursts   = 16'd0;
+reg        htvld_s0 = 1'b0, htvld_s1 = 1'b0;
+always @(posedge i_clock_20M) begin
+    htvld_s0 <= HTVLD;
+    htvld_s1 <= htvld_s0;
+end
+initial for (ci = 0; ci < CAPN; ci = ci + 1) f_cap[ci] = 32'd0;
 
 // --- frame timer -----------------------------------------------------------
 reg [22:0] gap = 23'd0;
@@ -170,9 +234,10 @@ function [7:0] frame_byte;
     begin
         if      (i == 8'd0 || i == 8'd2) frame_byte = 8'h55;
         else if (i == 8'd1 || i == 8'd3) frame_byte = 8'hAA;
-        else if (i == 8'd4)              frame_byte = 8'h02;               // version
+        else if (i == 8'd4)              frame_byte = 8'h03;               // version
         else if (i == 8'd5)              frame_byte = NPINS[7:0];
         else if (i == 8'd6)              frame_byte = NDETAIL[7:0];
+        else if (i == 8'd7)              frame_byte = CAPN[7:0];
         else if (i <  HDR +   NBYTES)    frame_byte = f_snap[(i-HDR)*8            +: 8];
         else if (i <  HDR + 2*NBYTES)    frame_byte = f_lo  [(i-HDR-NBYTES)*8     +: 8];
         else if (i <  HDR + 3*NBYTES)    frame_byte = f_hi  [(i-HDR-2*NBYTES)*8   +: 8];
@@ -180,7 +245,17 @@ function [7:0] frame_byte;
                                          frame_byte = (i[0] == (EDGE_OFF[0]))
                                              ? f_edge[(i-EDGE_OFF)>>1][7:0]
                                              : f_edge[(i-EDGE_OFF)>>1][15:8];
-        else if (i == EDGE_OFF + 2*NDETAIL) frame_byte = crc[15:8];
+        else if (i == STAT_OFF)             frame_byte = f_capwords[7:0];
+        else if (i == STAT_OFF + 1)         frame_byte = f_capwords[15:8];
+        else if (i == STAT_OFF + 2)         frame_byte = f_bursts[7:0];
+        else if (i == STAT_OFF + 3)         frame_byte = f_bursts[15:8];
+        else if (i <  CAP_OFF + 4*CAPN)
+                                            // Byte lane must come from the offset
+                                            // WITHIN the capture region: CAP_OFF
+                                            // is not a multiple of 4, so i[1:0]
+                                            // skews every word by CAP_OFF mod 4.
+                                            frame_byte = f_cap[(i-CAP_OFF)>>2][((i-CAP_OFF)&8'd3)*8 +: 8];
+        else if (i == CAP_OFF + 4*CAPN)     frame_byte = crc[15:8];
         else                                frame_byte = crc[7:0];
     end
 endfunction
@@ -213,6 +288,11 @@ always @(posedge i_clock_20M) begin
                 ever_hi  <= {NPINS{1'b0}};
                 ever_lo  <= {NPINS{1'b0}};
                 for (ei = 0; ei < NDETAIL; ei = ei + 1) f_edge[ei] <= edges[ei];
+                if (!htvld_s1) begin
+                    f_capwords <= capwords;
+                    f_bursts   <= bursts;
+                    for (ci = 0; ci < CAPN; ci = ci + 1) f_cap[ci] <= capbuf[ci];
+                end
                 gap      <= 23'd0;
                 byte_idx <= 8'd0;
                 crc      <= 16'hFFFF;
@@ -227,7 +307,7 @@ always @(posedge i_clock_20M) begin
                 tx_data <= frame_byte(byte_idx);
                 tx_load <= 1'b1;
                 // CRC covers the version byte through the last payload byte.
-                if (byte_idx >= 8'd4 && byte_idx < (EDGE_OFF + 2*NDETAIL))
+                if (byte_idx >= 8'd4 && byte_idx < (CAP_OFF + 4*CAPN))
                     crc <= crc16_step(crc, frame_byte(byte_idx));
                 if (byte_idx == FRAME_LEN - 1) state <= S_ARM;
                 else byte_idx <= byte_idx + 8'd1;

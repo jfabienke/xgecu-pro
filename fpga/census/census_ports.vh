@@ -19,6 +19,7 @@
     output wire j_vcc_24,
     output wire j_vpp_24,
     output wire j_vpp_26,
+    output wire htrdy,   // receiver-ready, driven to the MCU
 
     // Observed pins: INPUT ONLY. Never declared inout, so the
     // toolchain cannot infer a driver and contend with the MCU.
@@ -50,7 +51,6 @@
     input  wire HRVLD         ,  // L7    Cpu: 14
     input  wire HTACK         ,  // C8    Cpu: 55
     input  wire HTCLK         ,  // E8    Cpu: 56
-    input  wire HTRDY         ,  // T4    Cpu: 18
     input  wire HTREQ         ,  // C9    Cpu: 54
     input  wire HTVLD         ,  // C11   Cpu: 52
     input  wire cpu_p13       ,  // R5    Cpu: 13

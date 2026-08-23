@@ -5,7 +5,7 @@ pin: its level when the frame was latched, whether it was ever low during the
 preceding window, and whether it was ever high. That is enough to separate
 *tied low*, *tied high* and *active* without decoding any protocol.
 
-**Status: running on hardware; first inventory captured 2026-08-23.** The RTL passes a
+**Status: running on hardware. Stage 2 complete: the link is plaintext and 16-bit.** The RTL passes a
 testbench that decodes the UART exactly as the host decoder does and checks the
 classification semantics, and Anlogic TD 4.6.116866 takes it through to a
 placed, routed bitstream for `eagle_20` / `BGA256X` using **549 LUTs and 727
@@ -136,6 +136,41 @@ ground from any `ISP:GND` pin. **115200 8N1.** A frame arrives every 250 ms.
   ruled out: `HD23`–`HD30` exist on the QFN68 package but are not wired.
 - **HSPI vs BUS** — a free-running clock on `HTCLK` says HSPI; strobe-driven
   activity on `BWR#` with changing address lines says BUS.
+
+## The encryption question, answered — measured 2026-08-23
+
+**The MCU↔FPGA HSPI link carries plaintext. It is not AES or SM4 encrypted.**
+
+Captured by asserting `HTRDY` and recording `HD[23:0]` in the `HTCLK` domain
+while `HTVLD` was high, during a 64 KiB uniform write driven by `minipro-rs`
+with `MINIPRO_KEEP_BITSTREAM=1`:
+
+| Measurement | write of `0x00` | write of `0xFF` | AES/SM4 would give |
+|---|---|---|---|
+| words captured | 1440 | 896 | |
+| **Shannon entropy of the 16-bit data** | **2.78 bits** | **2.65 bits** | **~16.0 bits** |
+| distinct values seen | 40 | 15 | ~65536 |
+| words exactly `0x0000` | 810 (56%) | 504 (56%) | ~0 |
+
+Ciphertext is indistinguishable from random by construction. A link carrying it
+cannot produce 2.7 bits of entropy, cannot repeat one value 810 times out of
+1440, and cannot confine 1440 samples to 40 distinct values. The ECDC module
+(CH569 datasheet Chapter 15) is not enabled on this path, so the risk that would
+have ended the reverse-engineering effort does not exist.
+
+**The bus is 16-bit.** `HD16`–`HD22` and `HD31` held the constant `0x2D`
+across *every* captured word in both runs, so they are wired but carry no data;
+the payload is `HD0`–`HD15`. That is consistent with the T76 wiring only 23
+of the 32 available `HD` lines, and it rules out the 32-bit mode outright.
+
+**The handshake is confirmed end to end**: `HTREQ` → (we drive) `HTRDY`
+→ `HTVLD` → packet, exactly as CH569 §10.2.3 describes. Before the
+responder existed the MCU raised `HTREQ` and stalled forever; with it, 44 bursts
+and 308 words crossed the link.
+
+This also settles HSPI versus the 8080-style BUS reading. A BUS write strobes
+`BWR#` and puts data out unconditionally; what we measured waits on a ready line
+and then streams packets under a valid signal.
 
 ## First hardware run — measured 2026-08-23
 

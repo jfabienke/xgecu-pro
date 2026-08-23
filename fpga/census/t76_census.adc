@@ -31,6 +31,9 @@ set_pin_assignment	{ j_vcc_24 }	{ LOCATION = A14; IOSTANDARD = LVCMOS33; DRIVEST
 set_pin_assignment	{ j_vpp_24 }	{ LOCATION = A11; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
 set_pin_assignment	{ j_vpp_26 }	{ LOCATION = B12; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
 
+# HTRDY: the one MCU-facing pin this design drives (see CH569 Table 10-1)
+set_pin_assignment	{ htrdy }	{ LOCATION = T4; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
+
 # Observed pins (net name for each is in pinmap.json)
 set_pin_assignment	{ HD0 }	{ LOCATION = L8; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ HD1 }	{ LOCATION = P5; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
@@ -60,7 +63,6 @@ set_pin_assignment	{ HRCLK }	{ LOCATION = R7; IOSTANDARD = LVCMOS33; PULLTYPE = 
 set_pin_assignment	{ HRVLD }	{ LOCATION = L7; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ HTACK }	{ LOCATION = C8; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ HTCLK }	{ LOCATION = E8; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
-set_pin_assignment	{ HTRDY }	{ LOCATION = T4; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ HTREQ }	{ LOCATION = C9; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ HTVLD }	{ LOCATION = C11; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ cpu_p13 }	{ LOCATION = R5; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }

@@ -37,10 +37,10 @@ def crc16(data):
 
 
 def frames(stream, nbytes, ndetail):
-    """Yield (snapshot, ever_low, ever_high, edges) from a byte stream."""
-    HDR = 7
+    """Yield (snapshot, ever_low, ever_high, edges, stats) from a byte stream."""
+    HDR = 8
     edge_off = HDR + 3 * nbytes
-    flen = edge_off + 2 * ndetail + 2
+    stat_off = edge_off + 2 * ndetail
     buf = bytearray()
     for chunk in stream:
         buf.extend(chunk)
@@ -49,14 +49,20 @@ def frames(stream, nbytes, ndetail):
             if i < 0:
                 del buf[:max(0, len(buf) - 3)]
                 break
+            if len(buf) - i < HDR:
+                del buf[:i]
+                break
+            capn = buf[i + 7]
+            cap_off = stat_off + 4
+            flen = cap_off + 4 * capn + 2
             if len(buf) - i < flen:
                 del buf[:i]
                 break
             f = bytes(buf[i:i + flen])
             del buf[:i + flen]
-            if f[4] != 0x02:
+            if f[4] != 0x03:
                 continue
-            if crc16(f[4:edge_off + 2 * ndetail]) != (f[flen - 2] << 8 | f[flen - 1]):
+            if crc16(f[4:cap_off + 4 * capn]) != (f[flen - 2] << 8 | f[flen - 1]):
                 print("  (frame with bad CRC skipped)", file=sys.stderr)
                 continue
             npins = f[5]
@@ -66,7 +72,14 @@ def frames(stream, nbytes, ndetail):
 
             edges = [f[edge_off + 2 * k] | (f[edge_off + 2 * k + 1] << 8)
                      for k in range(f[6])]
-            yield bits(0), bits(nbytes), bits(2 * nbytes), edges
+            stats = {
+                "capwords": f[stat_off] | (f[stat_off + 1] << 8),
+                "bursts":   f[stat_off + 2] | (f[stat_off + 3] << 8),
+                "words":    [f[cap_off + 4 * k] | (f[cap_off + 4 * k + 1] << 8)
+                             | (f[cap_off + 4 * k + 2] << 16)
+                             for k in range(capn)],
+            }
+            yield bits(0), bits(nbytes), bits(2 * nbytes), edges, stats
 
 
 # Header positions 11, 21, 26, 27 and 28 are switched to ground by this design
@@ -117,7 +130,7 @@ def main():
     else:
         stream = iter([Path(src).read_bytes()])
 
-    for snap, lo, hi, edges in frames(stream, nbytes, ndetail):
+    for snap, lo, hi, edges, stats in frames(stream, nbytes, ndetail):
         print("=" * 72)
         if raw:
             for p in pins:
@@ -159,6 +172,17 @@ def main():
                                   % (p["signal"], p["ball"], e, sat))
                     else:
                         print("  transitions: none on any MCU-link pin")
+        print()
+        print("HSPI capture")
+        print("  bursts seen        : %d" % stats["bursts"])
+        print("  valid words seen   : %d%s"
+              % (stats["capwords"], " (saturated)" if stats["capwords"] == 0xFFFF else ""))
+        if stats["bursts"]:
+            print("  first words on HD[23:0] (HD17 is program_b, always 0):")
+            for k, w in enumerate(stats["words"][:16]):
+                print("     [%2d] %06X   %s" % (k, w, format(w, "024b")))
+        else:
+            print("  no packet has crossed the link since power-up")
         break   # one frame is a census; use --raw or re-run for more
     return 0
 
