@@ -4,8 +4,7 @@
 `default_nettype none
 
 module tb_census;
-    localparam integer NPINS = 113;
-    localparam integer NBYTES = 15;
+`include "census_params.vh"
     localparam integer FRAME_LEN = 6 + 3*NBYTES + 2;
     localparam integer BIT_NS = 174*50;   // 174 clocks of 50 ns
 

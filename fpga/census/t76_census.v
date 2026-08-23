@@ -41,6 +41,7 @@ module t76_census #(
 `include "census_ports.vh"
 );
 
+`include "census_params.vh"
 `include "census_obs.vh"
 
 localparam integer CLK_HZ    = 20_000_000;
@@ -59,11 +60,15 @@ assign vpp_oe  = 1'b0;
 assign vcc_oe  = 1'b0;
 assign gnd_oe  = 1'b0;
 
-// --- power-on reset --------------------------------------------------------
-reg [15:0] rst_cnt = 16'd0;
-wire       rst = ~rst_cnt[15];
-always @(posedge i_clock_20M)
-    if (!rst_cnt[15]) rst_cnt <= rst_cnt + 16'd1;
+// No reset network. Every register carries a declared initial value, which the
+// bitstream loads at configuration -- the idiomatic approach on an SRAM FPGA,
+// and the one radiomanV's working T76 design uses.
+//
+// This is not merely a simplification. An outer `if (rst)` makes TD infer a
+// dedicated set/reset pin on each flop, and it then refuses to pack any flop
+// that would need both (a constant-1 load is a set, the reset is a reset),
+// aborting with SYN-8700 in pack::SeqSetReset. Without the wrapper the same
+// logic becomes ordinary data-path muxing, which packs cleanly.
 
 // --- two-flop synchroniser on every observed pin ---------------------------
 reg [NPINS-1:0] sync_a = {NPINS{1'b0}};
@@ -87,21 +92,27 @@ reg [NBYTES*8-1:0] f_lo   = {(NBYTES*8){1'b0}};
 reg [NBYTES*8-1:0] f_hi   = {(NBYTES*8){1'b0}};
 
 // --- UART transmitter ------------------------------------------------------
-reg [9:0]  tx_sr   = 10'h3FF;   // idle high; {stop, data[7:0], start}
-reg [3:0]  tx_bit  = 4'd0;
+// The framing bits are produced by an output mux instead of being shifted
+// through the register. Loading a constant 1 into a flop (the UART stop bit)
+// makes TD infer a set alongside the reset, which the Eagle fabric does not
+// support -- it rejects the design with SYN-8700. Holding only real data in
+// registers avoids the whole class of problem.
+reg [7:0]  tx_byte = 8'd0;
+reg [3:0]  tx_bit  = 4'd0;   // 0 = start, 1..8 = data LSB first, 9 = stop
 reg [8:0]  tx_div  = 9'd0;
 reg        tx_busy = 1'b0;
 reg [7:0]  tx_data = 8'd0;
 reg        tx_load = 1'b0;
 
-assign uart_tx = tx_sr[0];
+assign uart_tx = (!tx_busy)       ? 1'b1 :                       // idle
+                 (tx_bit == 4'd0) ? 1'b0 :                       // start
+                 (tx_bit <= 4'd8) ? tx_byte[tx_bit - 4'd1] :     // data
+                                    1'b1;                        // stop
 
 always @(posedge i_clock_20M) begin
-    if (rst) begin
-        tx_sr <= 10'h3FF; tx_busy <= 1'b0; tx_div <= 9'd0; tx_bit <= 4'd0;
-    end else if (tx_load && !tx_busy) begin
-        tx_sr   <= {1'b1, tx_data, 1'b0};
-        tx_bit  <= 4'd10;
+    if (tx_load && !tx_busy) begin
+        tx_byte <= tx_data;
+        tx_bit  <= 4'd0;
         tx_div  <= BAUD_DIV[8:0] - 9'd1;
         tx_busy <= 1'b1;
     end else if (tx_busy) begin
@@ -109,9 +120,8 @@ always @(posedge i_clock_20M) begin
             tx_div <= tx_div - 9'd1;
         end else begin
             tx_div <= BAUD_DIV[8:0] - 9'd1;
-            tx_sr  <= {1'b1, tx_sr[9:1]};
-            tx_bit <= tx_bit - 4'd1;
-            if (tx_bit == 4'd1) tx_busy <= 1'b0;
+            if (tx_bit == 4'd9) tx_busy <= 1'b0;
+            else                tx_bit  <= tx_bit + 4'd1;
         end
     end
 end
@@ -130,7 +140,7 @@ function [15:0] crc16_step;
     end
 endfunction
 
-reg [15:0] crc = 16'hFFFF;
+reg [15:0] crc = 16'd0;   // seeded to 16'hFFFF at each frame start
 
 // --- frame byte selection --------------------------------------------------
 reg [7:0] byte_idx = 8'd0;
@@ -157,14 +167,7 @@ reg state = S_ARM;
 always @(posedge i_clock_20M) begin
     tx_load <= 1'b0;
 
-    if (rst) begin
-        state    <= S_ARM;
-        gap      <= 23'd0;
-        byte_idx <= 8'd0;
-        ever_hi  <= {NPINS{1'b0}};
-        ever_lo  <= {NPINS{1'b0}};
-        crc      <= 16'hFFFF;
-    end else begin
+    begin
         // Accumulate activity continuously; it is only ever cleared at the
         // moment a frame is latched, so each frame describes exactly the
         // window since the previous one.

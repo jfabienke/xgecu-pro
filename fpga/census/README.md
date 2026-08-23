@@ -5,10 +5,22 @@ pin: its level when the frame was latched, whether it was ever low during the
 preceding window, and whether it was ever high. That is enough to separate
 *tied low*, *tied high* and *active* without decoding any protocol.
 
-**Status: verified in simulation, never synthesised, never run on hardware.**
-Building it needs Anlogic TD, which we do not yet have. The RTL passes a
+**Status: builds to a real bitstream; never run on hardware.** The RTL passes a
 testbench that decodes the UART exactly as the host decoder does and checks the
-classification semantics; that is the whole of its provenance so far.
+classification semantics, and Anlogic TD 4.6.116866 takes it through to a
+placed, routed bitstream for `eagle_20` / `BGA256X` using **549 LUTs and 727
+flip-flops, about 5% of the device**. It has never been loaded onto a T76.
+
+Three independent cross-checks say the bitstream is the right shape:
+
+| Quantity | prjtang `devices.json` | our TD build |
+|---|---|---|
+| frames | 1259 | 1259 |
+| bits per frame | 3904 (488 B) | 3904 (488 B) |
+| idcode | `0x00014c35` | `0x014C35` |
+
+and after `gen_bit.py` conversion the T76-format file is **622,130 bytes —
+exactly the length of radiomanV's known-working `out.bit`**.
 
 ## Why this instead of a targeted sniffer
 
@@ -65,14 +77,46 @@ be trusted to name the right ball.
 ```sh
 python3 gen_census.py                       # regenerate after any pinout fix
 
-# simulate (this machine's iverilog needs an explicit -B; see note below)
+# simulate (this machine's iverilog needs an explicit -B; see notes below)
 iverilog -B /opt/zb/lib/ivl -g2005 -o /tmp/tb.vvp tb_census.v t76_census.v
 vvp /tmp/tb.vvp
 
-# synthesise with Anlogic TD, then convert and upload
-python3 gen_bit.py T76.bit out.bit          # from radiomanV/Xgecu_T76
-python3 t76_uploader.py out.bit
+# synthesise (TD 4.6.8 lives in the td-x86 OrbStack machine; see fpga/TOOLCHAIN.md)
+orb -m td-x86 bash -lc 'cd ~/census && TD_HOME=/opt/TD /opt/TD/bin/td < build.tcl'
+
+# convert to T76 format and upload
+python3 gen_bit.py t76_census.bit t76_census_out.bit   # radiomanV/Xgecu_T76
+python3 t76_uploader.py t76_census_out.bit
 ```
+
+`t76_census_out.bit` is committed, so a T76 owner can run the census without
+Anlogic TD at all.
+
+### What TD needed, that cost time
+
+Recorded because none of it is documented and all of it recurs:
+
+- **`elaborate` segfaults.** `elaborate -top <name>` dies in
+  `FeToRtl::SetData`. It is also unnecessary: `read_verilog` already reports
+  `HDL-1200 : Current top model is t76_census`.
+- **Use prjtang's flow, not `map`/`pack`.** The working order is
+  `optimize_rtl` → `optimize_gate` → `legalize_phy_inst` → `place` → `route` →
+  `bitgen`. Going through `map`/`pack` instead leaves adders and comparators
+  with "missing physical model" at placement.
+- **`bitgen` wants `-version 0X00 -g ucode:000000000000000000000000`.**
+- **No reset network.** An outer `if (rst)` makes TD infer a dedicated
+  set/reset pin per flop, and it then refuses to pack any flop needing both —
+  a constant-1 load is a *set*, the reset is a *reset* — aborting with
+  `SYN-8700` inside `pack::SeqSetReset`. Rely on declared initial values, which
+  the bitstream loads at configuration. radiomanV's working design does the
+  same.
+- **`/bin/sh` must be bash.** TD shells out with bash-isms and Ubuntu's dash
+  emits `sh: Syntax error: Bad fd number` throughout.
+- **The licence goes at `/opt/TD/license/Anlogic.lic`** — that exact path and
+  filename. The `license.lic` published under *TD License* works despite naming
+  its feature `FD`, and carries `HOST_ID = ANY`.
+- **TD is a TCL shell that reads stdin.** There is no `-f script` flag; `td -f
+  build.tcl` silently waits on stdin forever. Use `td < build.tcl`.
 
 Wire `ISP:J19` (ball `E13`) to a 3.3 V USB-serial adapter's RX, with a common
 ground from any `ISP:GND` pin. **115200 8N1.** A frame arrives every 250 ms.
@@ -85,8 +129,6 @@ ground from any `ISP:GND` pin. **115200 8N1.** A frame arrives every 250 ms.
 ## What it should settle
 
 - **`M0` (T11) / `M1` (N11)** — the FPGA configuration-mode straps, read directly.
-- **`TCK`/`TDI`/`TDO`/`TMS`** — the ball map annotates all four `(nc)`. If they
-  are in fact wired, JTAG is a far better debug channel than anything we build.
 - **`? ro5 ?` at ball `C4`** — unidentified in the pinout. Static or active is
   the first thing worth knowing about it.
 - **How many of the 24 wired `HD` lines actually move** — which gives the bus
@@ -94,6 +136,25 @@ ground from any `ISP:GND` pin. **115200 8N1.** A frame arrives every 250 ms.
   ruled out: `HD23`–`HD30` exist on the QFN68 package but are not wired.
 - **HSPI vs BUS** — a free-running clock on `HTCLK` says HSPI; strobe-driven
   activity on `BWR#` with changing address lines says BUS.
+
+## What TD told us before the bitstream even built
+
+`import_device` prints the device's dedicated-pin map, and it settled two
+questions for free:
+
+- **Ball `T2` is `program_b`.** Our ball map calls that net `Cpu: 33`, which
+  mapped to `HD17` through the CH569 pinout — but on the FPGA side it is the
+  configuration-reset input. So that wire is the MCU's **FPGA-reconfiguration
+  control line, not a bus data line**, and the count of wired HSPI data lines
+  drops from 24 to **23**. It is excluded from the census because TD refuses to
+  place user IO there (`USR-8027`).
+- **`TCK`/`TDI`/`TDO`/`TMS` (C14/C12/E14/A15) are dedicated JTAG pins.** User
+  logic cannot observe them at all, so the census cannot say whether the T76
+  routes them. That question needs continuity testing on the board instead.
+
+Also worth noting: `cso_b`/`cclk`/`mosi`/`miso`/`dout` (T3/R11/T10/P10/M14) and
+`done` (P13) are configuration pins set to **gpio** mode, so they *are*
+observable — several of them carry `HD` nets.
 
 ## Known discrepancy
 

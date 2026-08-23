@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+t76_census.bit
+*.pnl
+*_bit.log

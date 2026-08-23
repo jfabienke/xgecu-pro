@@ -20,7 +20,6 @@
     input  wire HD14          ,  // E7    Cpu: 30
     input  wire HD15          ,  // A7    Cpu: 31
     input  wire HD16          ,  // P13   Cpu: 32
-    input  wire HD17          ,  // T2    Cpu: 33
     input  wire HD18          ,  // R3    Cpu: 34
     input  wire HD19          ,  // R11   Cpu: 35
     input  wire HD2           ,  // C10   Cpu: 53
@@ -46,10 +45,6 @@
     input  wire cpu_p13       ,  // R5    Cpu: 13
     input  wire m0            ,  // T11   M0
     input  wire m1            ,  // N11   M1
-    input  wire tck           ,  // C14   TCK(nc)
-    input  wire tdi           ,  // C12   TDI(nc)
-    input  wire tdo           ,  // E14   TDO(nc)
-    input  wire tms           ,  // A15   TMS(nc)
     input  wire unknown_c4    ,  // C4    ? ro5 ?
     input  wire zif_01        ,  // B15   ZIF01
     input  wire zif_02        ,  // B16   ZIF02

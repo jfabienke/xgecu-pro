@@ -28,7 +28,6 @@ set_pin_assignment	{ HD13 }	{ LOCATION = E6; IOSTANDARD = LVCMOS33; PULLTYPE = N
 set_pin_assignment	{ HD14 }	{ LOCATION = E7; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ HD15 }	{ LOCATION = A7; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ HD16 }	{ LOCATION = P13; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
-set_pin_assignment	{ HD17 }	{ LOCATION = T2; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ HD18 }	{ LOCATION = R3; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ HD19 }	{ LOCATION = R11; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ HD2 }	{ LOCATION = C10; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
@@ -54,10 +53,6 @@ set_pin_assignment	{ HTVLD }	{ LOCATION = C11; IOSTANDARD = LVCMOS33; PULLTYPE =
 set_pin_assignment	{ cpu_p13 }	{ LOCATION = R5; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ m0 }	{ LOCATION = T11; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ m1 }	{ LOCATION = N11; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
-set_pin_assignment	{ tck }	{ LOCATION = C14; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
-set_pin_assignment	{ tdi }	{ LOCATION = C12; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
-set_pin_assignment	{ tdo }	{ LOCATION = E14; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
-set_pin_assignment	{ tms }	{ LOCATION = A15; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ unknown_c4 }	{ LOCATION = C4; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ zif_01 }	{ LOCATION = B15; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ zif_02 }	{ LOCATION = B16; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
