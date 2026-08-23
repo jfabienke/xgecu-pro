@@ -8,6 +8,17 @@
     output wire vpp_oe,
     output wire vcc_oe,
     output wire gnd_oe,
+    output wire j_gnd_11,
+    output wire j_gnd_21,
+    output wire j_gnd_26,
+    output wire j_gnd_27,
+    output wire j_gnd_28,
+    output wire j_vcc_04,
+    output wire j_vcc_20,
+    output wire j_vcc_22,
+    output wire j_vcc_24,
+    output wire j_vpp_24,
+    output wire j_vpp_26,
 
     // Observed pins: INPUT ONLY. Never declared inout, so the
     // toolchain cannot infer a driver and contend with the MCU.

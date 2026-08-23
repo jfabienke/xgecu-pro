@@ -18,6 +18,19 @@ set_pin_assignment	{ vpp_oe }	{ LOCATION = A9; IOSTANDARD = LVCMOS33; DRIVESTREN
 set_pin_assignment	{ vcc_oe }	{ LOCATION = A8; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
 set_pin_assignment	{ gnd_oe }	{ LOCATION = B6; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
 
+# ISP header power/ground switches (27, 28 -> ground)
+set_pin_assignment	{ j_gnd_11 }	{ LOCATION = T7; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
+set_pin_assignment	{ j_gnd_21 }	{ LOCATION = P7; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
+set_pin_assignment	{ j_gnd_26 }	{ LOCATION = T8; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
+set_pin_assignment	{ j_gnd_27 }	{ LOCATION = T9; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
+set_pin_assignment	{ j_gnd_28 }	{ LOCATION = R9; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
+set_pin_assignment	{ j_vcc_04 }	{ LOCATION = T3; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
+set_pin_assignment	{ j_vcc_20 }	{ LOCATION = A12; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
+set_pin_assignment	{ j_vcc_22 }	{ LOCATION = A13; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
+set_pin_assignment	{ j_vcc_24 }	{ LOCATION = A14; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
+set_pin_assignment	{ j_vpp_24 }	{ LOCATION = A11; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
+set_pin_assignment	{ j_vpp_26 }	{ LOCATION = B12; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
+
 # Observed pins (net name for each is in pinmap.json)
 set_pin_assignment	{ HD0 }	{ LOCATION = L8; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ HD1 }	{ LOCATION = P5; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }

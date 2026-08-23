@@ -60,6 +60,8 @@ assign vpp_oe  = 1'b0;
 assign vcc_oe  = 1'b0;
 assign gnd_oe  = 1'b0;
 
+`include "census_isp_power.vh"
+
 // No reset network. Every register carries a declared initial value, which the
 // bitstream loads at configuration -- the idiomatic approach on an SRAM FPGA,
 // and the one radiomanV's working T76 design uses.

@@ -62,6 +62,12 @@ def frames(stream, nbytes):
             yield bits(0), bits(nbytes), bits(2 * nbytes)
 
 
+# Header pins 27 and 28 are switched to ground by this design (see
+# census_isp_power.vh), so they read low because of us, not because of the
+# board. Flag them rather than let the reading be taken at face value.
+SELF_GROUNDED = {"j_27", "j_28"}
+
+
 def classify(lo, hi):
     if lo and hi:
         return "ACTIVE"
@@ -126,8 +132,11 @@ def main():
                            if classify(lo[p["index"]], hi[p["index"]]) == state]
                     if not sel:
                         continue
-                    names = ", ".join("%s(%s)" % (p["signal"] if p["signal"] != p["net"]
-                                                  else p["name"], p["ball"]) for p in sel)
+                    names = ", ".join(
+                        "%s(%s)%s" % (p["signal"] if p["signal"] != p["net"] else p["name"],
+                                      p["ball"],
+                                      " [grounded by us]" if p["name"] in SELF_GROUNDED else "")
+                        for p in sel)
                     print("  %-16s %2d  %s" % (state, len(sel), names))
                 if g.startswith("MCU link"):
                     hd = [p for p in act if p["signal"].startswith("HD")]
