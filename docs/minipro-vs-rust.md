@@ -1,6 +1,6 @@
 # minipro (C) vs. minipro-rs (Rust) — comparison
 
-*As of 2026-08-18. C = nmatt0's `t76-improvements` fork; Rust = the `minipro-rs/`
+*As of 2026-08-23. C = nmatt0's `t76-improvements` fork; Rust = the `minipro-rs/`
 redesign and reimplementation in this repo. It now covers **T48 / T56 / T76**
 (the TL866II+ and TL866A/CS drivers are not yet done).*
 
@@ -19,7 +19,7 @@ redesign and reimplementation in this repo. It now covers **T48 / T56 / T76**
 | **Errors** | `int` 0/1 returns; some silent | typed `Result` + `thiserror`, `code()` + `hint()` |
 | **Verification** | manual (single read) | **`read_verified`**: two-read stability + crc32/sha256 in the outcome |
 | **Wedge safety** | "drain the response" is a code comment | **type-enforced** `#[must_use] Pending` |
-| **Tests** | ~none | **203** (golden-packet + MockTransport wire tests) + 5 hardware tests; clippy-clean |
+| **Tests** | ~none | **218** (golden-packet + MockTransport wire tests) + 5 hardware tests; clippy-clean |
 | **Chip detect** | `-a` SPI autodetect + id check | `detect` (id → DB match) + `autodetect` (SPI JEDEC id) |
 | **Identity query** | fw / serial / mfg-date / device-code / voltage | fw / serial / mfg-date / device-code / voltage |
 | **LOC** | ~19,500 (all programmers) | ~14,500 (T48 / T56 / T76) |
@@ -34,8 +34,9 @@ redesign and reimplementation in this repo. It now covers **T48 / T56 / T76**
 | **Read** (EPROM) | ✅ (produced the reference dumps) | ✅ **byte-identical**, stable over 10× |
 | SPI autodetect (`autodetect`) | ✅ | ✅ path exercised live (uploads SPI25F, probes; matches `detect`) |
 | Overcurrent detection / abort | ✅ | ✅ (read OVC status, aborts with a typed error) |
-| Write (parallel EPROM) | ✅ | ✅ **bit-exact on an MX27C2000** — intended bits changed, nothing else |
-| Write (other classes) / erase | ✅ | implemented, not hardware-run |
+| Write (parallel EPROM/EEPROM) | ✅ | ✅ **bit-exact on an MX27C2000**, plus six full-chip write→verify cycles across W27C512 + W27C257 |
+| **Erase** | ✅ | ✅ **six erase→blank cycles across W27C512 + W27C257** |
+| Write (flash classes, protect-off path) | ✅ | implemented, not hardware-run |
 | NAND / eMMC | ✅ | implemented (byte-tested vs captures), not hardware-run |
 | Logic test / firmware update | ✅ | implemented (logic wired end-to-end; both un-hardware-run) |
 
@@ -63,6 +64,6 @@ hardware-proven. It is a **safer, more ergonomic, better-tested reimplementation
 whose value is the
 architecture (traits + typed transport), the agent/human/TUI output story, and
 built-in verified reads — with T76 reads *and* parallel-EPROM writes now proven
-bit-exact on hardware. Reaching parity means erase/NAND/eMMC on silicon and the
+bit-exact on hardware. Reaching parity means NAND/eMMC on silicon and the
 remaining programmer families behind the same traits. For the decision-level
 retrospective, see [`design-decisions.md`](design-decisions.md).

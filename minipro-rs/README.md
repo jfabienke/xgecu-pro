@@ -5,11 +5,13 @@ A Rust redesign and reimplementation of the [minipro](https://gitlab.com/nmatt0/
 [`docs/rust-trait-model.md`](../docs/rust-trait-model.md), and the three-mode
 output design.
 
-**Status:** working. The T76 driver is fully implemented and **hardware-verified**:
-byte-identical reads from a real T76, and a parallel-EPROM **write** proven
-bit-exact on an MX27C2000. The native chip database reads XGecu's
-`InfoICT76.dll` directly (no XML needed) and can provision itself from a mirror.
-214 tests pass, clippy clean.
+**Status:** working. The T76 driver is fully implemented and **hardware-verified**
+across the read/write/erase core: byte-identical reads on four parts, a write
+proven bit-exact on an MX27C2000, and full write→verify→erase→blank cycles run
+three times each on two electrically-erasable Winbond parts (W27C512 64 KB,
+W27C257 32 KB) with distinct data every cycle. The native chip database reads
+XGecu's `InfoICT76.dll` directly (no XML needed) and can provision itself from
+a mirror. 218 tests pass, clippy clean.
 
 > ⚠️ **The T48, T56, and TL866II+ drivers are untested on hardware.** They are
 > reference-only implementations — verified against byte-exact golden
@@ -18,7 +20,7 @@ bit-exact on an MX27C2000. The native chip database reads XGecu's
 > [Contributing](#contributing).
 
 ```
-cargo test           # 214 hardware-free protocol/golden/db tests
+cargo test           # 218 hardware-free protocol/golden/db tests
 cargo clippy --all-targets
 ./target/debug/minipro --json info
 ```
@@ -147,11 +149,11 @@ Help wanted — especially from anyone with the **hardware we don't have**.
   do. It turns "reference-only" into "proven." The TL866II+'s interlaced
   dual-endpoint bulk path and the write-buffer-size `TODO(hw)` in
   `t48.rs`/`t56.rs`/`tl866ii.rs` can only be settled this way.
-- **🔌 T76 op coverage on hardware.** Reads are byte-verified and a
-  parallel-EPROM write is proven bit-exact; **erase, flash-class writes, NAND,
-  eMMC, and firmware-update** are implemented but not yet exercised on a
-  device. One salvaged 25-series SPI flash covers erase, the protect-off
-  sequence, and write chunking in a recoverable loop.
+- **🔌 T76 op coverage on hardware.** Reads, writes, and erase are verified on
+  parallel EPROM/EEPROM parts; **flash-class writes (the protect-off
+  sequence), NAND, eMMC, and firmware-update** are implemented but not yet
+  exercised on a device. One salvaged 25-series SPI flash covers the protect
+  path and flash write chunking in a recoverable loop.
 - **Implement the TL866A/CS driver.** The outlier of the family: 24-bit
   addressing, an alternate opcode space, a latch-based ZIF model. Well-specified
   in the C fork.
