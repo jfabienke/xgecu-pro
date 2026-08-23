@@ -280,6 +280,48 @@ thread for decoding the command encoding:
 (around 60-78), consistent with a command field in the middle lines while the
 extremes carry something near-static.
 
+## Reading the command words — measured 2026-08-24
+
+Reverting the capture to exactly `a93f729` restored it. Everything added after
+that commit -- the one-shot `capfull` gate, the deeper buffer, the shift
+register, the windowed readout, the bidirectional HD -- was mechanism layered on
+a working design, and somewhere in it the capture stopped working. Three
+diagnoses in a row were wrong. A straight revert took one build.
+
+Paired with `erase`, which completes and does not wedge, the parameter block is
+now directly readable. Four chips from one family, differing only in capacity:
+
+| idx | W27C257 (32K) | W27C512 (64K) | W27C010 (128K) | W27C02 (256K) | |
+|---|---|---|---|---|---|
+| 0 | `C000` | `D000` | `F400` | `C400` | differs |
+| 1 | `0000` | `0000` | `0000` | `0100` | differs |
+| 2-4 | `0000` | `0000` | `0000` | `0000` | constant |
+| 5 | `B487` | `4C72` | `4DD9` | `8899` | differs, noise-like |
+| 6 | `0001` | `0035` | `0027` | `0027` | differs |
+| 7 | `C400` | `D400` | `E400` | `C800` | differs |
+| 8-11 | `0000` | `0000` | `0000` | `0000` | constant |
+
+Upper byte is the constant `0x2D` on `HD16`-`HD22`/`HD31` throughout, consistent
+with the 16-bit bus measured earlier.
+
+**Structure, inferred rather than proven.** Datasheet 10.2.2 specifies a 32-bit
+header transmitted low half first, then payload, then CRC16. Word 5 behaving
+like noise while 2-4 are zeros is what a CRC closing a packet looks like, which
+puts the framing at **2 header + 3 payload + 1 CRC = 6 words**, word 6 opening
+the next packet. Reading words 0/1 as that header places the chip-specific value
+in **USDF**, the 26-bit field the datasheet reserves for the user's "command
+word, address field and time stamp information" -- exactly where a vendor
+command would live. None of this is confirmed against a computed CRC yet.
+
+**One partial regularity.** Word 7 runs `C400`, `D400`, `E400` across 32K, 64K
+and 128K -- **+0x1000 per doubling** -- then breaks to `C800` at 256K. Suggestive
+of a size or address field; three points and an exception is not a conclusion.
+
+**Operational notes.** The first erase after a bitstream upload reports zero
+bursts; subsequent ones are reliable, so discard the first. `bursts` and
+`capwords` are cumulative across runs while per-pin edge counters reset per
+frame -- read deltas for the former, sums for the latter.
+
 ## Erase parameter sweep — measured 2026-08-24
 
 Four chips from one family, same maker, varying only in capacity, each erased
