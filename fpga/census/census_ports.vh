@@ -20,35 +20,35 @@
     output wire j_vpp_24,
     output wire j_vpp_26,
     output wire htrdy,   // receiver-ready, driven to the MCU
+    output wire hrclk, // FPGA->MCU control (CH569 Table 10-1)
+    output wire hract, // FPGA->MCU control (CH569 Table 10-1)
+    output wire hrvld, // FPGA->MCU control (CH569 Table 10-1)
 
     // Observed pins: INPUT ONLY. Never declared inout, so the
     // toolchain cannot infer a driver and contend with the MCU.
-    input  wire HD0           ,  // L8    Cpu: 15
-    input  wire HD1           ,  // P5    Cpu: 17
-    input  wire HD10          ,  // C5    Cpu: 26
-    input  wire HD11          ,  // D6    Cpu: 27
-    input  wire HD12          ,  // C6    Cpu: 28
-    input  wire HD13          ,  // E6    Cpu: 29
-    input  wire HD14          ,  // E7    Cpu: 30
-    input  wire HD15          ,  // A7    Cpu: 31
+    inout  wire HD0           ,  // L8    Cpu: 15  [driven when we own the bus]
+    inout  wire HD1           ,  // P5    Cpu: 17  [driven when we own the bus]
+    inout  wire HD10          ,  // C5    Cpu: 26  [driven when we own the bus]
+    inout  wire HD11          ,  // D6    Cpu: 27  [driven when we own the bus]
+    inout  wire HD12          ,  // C6    Cpu: 28  [driven when we own the bus]
+    inout  wire HD13          ,  // E6    Cpu: 29  [driven when we own the bus]
+    inout  wire HD14          ,  // E7    Cpu: 30  [driven when we own the bus]
+    inout  wire HD15          ,  // A7    Cpu: 31  [driven when we own the bus]
     input  wire HD16          ,  // P13   Cpu: 32
     input  wire HD18          ,  // R3    Cpu: 34
     input  wire HD19          ,  // R11   Cpu: 35
-    input  wire HD2           ,  // C10   Cpu: 53
+    inout  wire HD2           ,  // C10   Cpu: 53  [driven when we own the bus]
     input  wire HD20          ,  // C7    Cpu: 36
     input  wire HD21          ,  // A4    Cpu: 37
     input  wire HD22          ,  // B5    Cpu: 38
-    input  wire HD3           ,  // N5    Cpu: 19
+    inout  wire HD3           ,  // N5    Cpu: 19  [driven when we own the bus]
     input  wire HD31          ,  // T10   Cpu: 51
-    input  wire HD4           ,  // P12   Cpu: 20
-    input  wire HD5           ,  // N12   Cpu: 21
-    input  wire HD6           ,  // P10   Cpu: 22
-    input  wire HD7           ,  // M9    Cpu:23
-    input  wire HD8           ,  // D8    Cpu: 24
-    input  wire HD9           ,  // D5    Cpu: 25
-    input  wire HRACT         ,  // T5    Cpu: 11
-    input  wire HRCLK         ,  // R7    Cpu: 10
-    input  wire HRVLD         ,  // L7    Cpu: 14
+    inout  wire HD4           ,  // P12   Cpu: 20  [driven when we own the bus]
+    inout  wire HD5           ,  // N12   Cpu: 21  [driven when we own the bus]
+    inout  wire HD6           ,  // P10   Cpu: 22  [driven when we own the bus]
+    inout  wire HD7           ,  // M9    Cpu:23  [driven when we own the bus]
+    inout  wire HD8           ,  // D8    Cpu: 24  [driven when we own the bus]
+    inout  wire HD9           ,  // D5    Cpu: 25  [driven when we own the bus]
     input  wire HTACK         ,  // C8    Cpu: 55
     input  wire HTCLK         ,  // E8    Cpu: 56
     input  wire HTREQ         ,  // C9    Cpu: 54

@@ -55,7 +55,7 @@ localparam integer NWIN      = CAPDEPTH / CAPN;        // frames to ship it all
 localparam integer HDR       = 8;                      // preamble+version+npins+ndetail+capn
 localparam integer EDGE_OFF  = HDR + 3*NBYTES;         // transition counters
 localparam integer STAT_OFF  = EDGE_OFF + 2*NDETAIL;   // capwords, bursts, win, flags
-localparam integer CAP_OFF   = STAT_OFF + 6;           // captured words, 4 bytes each
+localparam integer CAP_OFF   = STAT_OFF + 10;           // captured words, 4 bytes each
 localparam integer FRAME_LEN = CAP_OFF + 4*CAPN + 2;
 
 // --- rail control: static, safe, never floating ----------------------------
@@ -169,11 +169,142 @@ reg [15:0] f_capwords = 16'd0;
 reg [15:0] f_bursts   = 16'd0;
 reg [7:0]  f_win      = 8'd0;
 reg        f_full     = 1'b0;
+reg [3:0]  f_state    = 4'd0;
+reg [15:0] f_txcount  = 16'd0;
+reg [15:0] f_htack    = 16'd0;
 reg [7:0]  win        = 8'd0;
 reg        capfull_s0 = 1'b0, capfull_s1 = 1'b0;
 always @(posedge i_clock_20M) begin
     capfull_s0 <= capfull;
     capfull_s1 <= capfull_s0;
+end
+
+// --- FPGA -> MCU transmitter -------------------------------------------------
+// The MCU sends command packets and waits for replies. With no reply it stalls,
+// the host's USB transfer is cancelled, and the T76 wedges until it is replugged
+// -- measured repeatedly. This makes the FPGA an actual HSPI endpoint rather
+// than a listener: it answers each packet the MCU sends.
+//
+// Roles come from CH569 Table 10-1. For FPGA->MCU the FPGA is the transmit end,
+// so it drives HRCLK (sampling reference), HRACT (request) and HRVLD (valid),
+// and reads HTACK (the MCU's ready). Sequence mirrors 10.2.3 with the roles
+// swapped: raise HRACT, wait for HTACK, raise HRVLD, clock the packet.
+//
+// Packet layout is 10.2.2: 32-bit header (TLL2B[31:30], TSQN[29:26], USDF[25:0])
+// low half first, then payload, then CRC16 with polynomial 0x8005 for 8/16-bit
+// modes. The bus measured 16-bit, so each word is one HD[15:0] sample.
+
+// HRCLK is inverted from the sampling clock so tx_word is already settled at
+// every HRCLK rising edge.
+assign hrclk = ~i_clock_20M;
+
+localparam integer TXLEN = 5;     // header(2) + payload(2) + crc(1), 16-bit words
+
+reg  [2:0]  tx_state  = 3'd0;     // 0 idle, 1 request, 2 data, 3 recover
+reg  [3:0]  tx_idx    = 4'd0;
+reg  [3:0]  tx_seq    = 4'd0;
+reg  [15:0] tx_word   = 16'd0;
+reg  [15:0] tx_crc    = 16'd0;
+reg  [15:0] tx_count  = 16'd0;    // packets we have sent, saturating
+reg  [15:0] htack_hi  = 16'd0;    // times the MCU raised HTACK, saturating
+reg  [11:0] tx_wait   = 12'd0;
+reg         tx_req    = 1'b0;
+reg         tx_vld    = 1'b0;
+reg         htvld_p   = 1'b0;
+reg         htack_p   = 1'b0;
+reg         want_tx   = 1'b0;
+
+assign hract = tx_req;
+assign hrvld = tx_vld;
+
+// The bus interlock. HD is shared, so it is driven only while we are in the data
+// phase AND the MCU is not asserting HTVLD -- the raw pin, not a synchronised
+// copy, so the release is immediate if the MCU takes the bus back. Contention
+// here is the one way this design could damage the board.
+wire hd_drive = (tx_state == 3'd2) && !HTVLD;
+`include "census_tx_data.vh"
+
+function [15:0] crc16_8005;
+    input [15:0] c;
+    input [15:0] d;
+    integer k;
+    reg [15:0] x;
+    begin
+        x = c ^ d;
+        for (k = 0; k < 16; k = k + 1)
+            x = x[15] ? ((x << 1) ^ 16'h8005) : (x << 1);
+        crc16_8005 = x;
+    end
+endfunction
+
+// header: TLL2B=0, TSQN=tx_seq, USDF=0
+wire [31:0] tx_hdr = {2'd0, tx_seq, 26'd0};
+
+always @(posedge i_clock_20M) begin
+    htvld_p <= HTVLD;
+    htack_p <= HTACK;
+    if (HTACK && !htack_p && htack_hi != 16'hFFFF) htack_hi <= htack_hi + 16'd1;
+
+    // A falling HTVLD means the MCU finished a packet; answer it.
+    if (htvld_p && !HTVLD) want_tx <= 1'b1;
+
+    case (tx_state)
+    3'd0: begin                                  // idle
+        tx_req <= 1'b0;
+        tx_vld <= 1'b0;
+        if (want_tx && !HTVLD && !HTREQ) begin
+            tx_req   <= 1'b1;
+            tx_wait  <= 12'd0;
+            tx_state <= 3'd1;
+        end
+    end
+    3'd1: begin                                  // requested, wait for HTACK
+        tx_wait <= tx_wait + 12'd1;
+        if (HTACK) begin
+            tx_idx   <= 4'd0;
+            tx_crc   <= 16'd0;
+            tx_word  <= tx_hdr[15:0];
+            tx_vld   <= 1'b1;
+            tx_state <= 3'd2;
+        end else if (tx_wait == 12'hFFF) begin   // no ack: give up, do not hang
+            tx_req   <= 1'b0;
+            want_tx  <= 1'b0;
+            tx_state <= 3'd3;
+        end
+    end
+    3'd2: begin                                  // clocking the packet out
+        if (HTVLD) begin                         // MCU took the bus: abandon
+            tx_vld   <= 1'b0;
+            tx_req   <= 1'b0;
+            tx_state <= 3'd3;
+        end else begin
+            if (tx_idx < TXLEN[3:0] - 4'd1) tx_crc <= crc16_8005(tx_crc, tx_word);
+            case (tx_idx)
+            4'd0: tx_word <= tx_hdr[31:16];
+            // A recognisable signature rather than zeros: on a hardware capture
+            // it distinguishes "the FPGA replied" from "the bus was idle".
+            4'd1: tx_word <= 16'hA55A;           // payload word 0
+            4'd2: tx_word <= 16'h5AA5;           // payload word 1
+            4'd3: tx_word <= crc16_8005(tx_crc, tx_word);
+            default: tx_word <= 16'd0;
+            endcase
+            if (tx_idx == TXLEN[3:0] - 4'd1) begin
+                tx_vld   <= 1'b0;
+                tx_req   <= 1'b0;
+                tx_seq   <= tx_seq + 4'd1;
+                want_tx  <= 1'b0;
+                if (tx_count != 16'hFFFF) tx_count <= tx_count + 16'd1;
+                tx_state <= 3'd3;
+            end else begin
+                tx_idx <= tx_idx + 4'd1;
+            end
+        end
+    end
+    default: begin                               // brief recovery gap
+        tx_wait <= tx_wait + 12'd1;
+        if (tx_wait[5]) begin tx_wait <= 12'd0; tx_state <= 3'd0; end
+    end
+    endcase
 end
 
 // --- frame timer -----------------------------------------------------------
@@ -283,7 +414,11 @@ function [7:0] frame_byte;
         else if (i == STAT_OFF + 2)         frame_byte = f_bursts[7:0];
         else if (i == STAT_OFF + 3)         frame_byte = f_bursts[15:8];
         else if (i == STAT_OFF + 4)         frame_byte = f_win;
-        else if (i == STAT_OFF + 5)         frame_byte = {7'd0, f_full};
+        else if (i == STAT_OFF + 5)         frame_byte = {4'd0, f_state};
+        else if (i == STAT_OFF + 6)         frame_byte = f_txcount[7:0];
+        else if (i == STAT_OFF + 7)         frame_byte = f_txcount[15:8];
+        else if (i == STAT_OFF + 8)         frame_byte = f_htack[7:0];
+        else if (i == STAT_OFF + 9)         frame_byte = f_htack[15:8];
         else if (i <  CAP_OFF + 4*CAPN) begin
             // Byte lane must come from the offset WITHIN the capture region:
             // CAP_OFF is not a multiple of 4, so i[1:0] would skew every word
@@ -327,6 +462,9 @@ always @(posedge i_clock_20M) begin
                 f_capwords <= capwords;
                 f_bursts   <= bursts;
                 f_full     <= capfull_s1;
+                f_state    <= {capfull_s1, tx_state};
+                f_txcount  <= tx_count;
+                f_htack    <= htack_hi;
                 f_win      <= win;
                 win        <= (win == NWIN[7:0] - 8'd1) ? 8'd0 : win + 8'd1;
                 gap      <= 23'd0;

@@ -9,7 +9,7 @@ module tb_census;
     localparam integer HDR       = 8;
     localparam integer EDGE_OFF  = HDR + 3*NBYTES;
     localparam integer STAT_OFF  = EDGE_OFF + 2*NDETAIL;
-    localparam integer CAP_OFF   = STAT_OFF + 6;
+    localparam integer CAP_OFF   = STAT_OFF + 10;
     localparam integer FRAME_LEN = CAP_OFF + 4*CAPN + 2;
     localparam integer BIT_NS = 174*50;   // 174 clocks of 50 ns
 
@@ -17,6 +17,9 @@ module tb_census;
     always #25 clk = ~clk;                // 20 MHz
 
     reg [NPINS-1:0] tb_obs = {NPINS{1'b0}};
+    reg             mcu_drive = 1'b1;
+    wire [NPINS-1:0] obs_net;
+`include "census_tb_net.vh"
     wire uart_tx, htrdy;
     wire ser_clk, ser_data, vpp_le, vcc_le, gnd_le, vpp_oe, vcc_oe, gnd_oe;
 

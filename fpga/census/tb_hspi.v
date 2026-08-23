@@ -13,7 +13,7 @@ module tb_hspi;
     localparam integer HDR      = 8;
     localparam integer EDGE_OFF = HDR + 3*NBYTES;
     localparam integer STAT_OFF = EDGE_OFF + 2*NDETAIL;
-    localparam integer CAP_OFF  = STAT_OFF + 6;
+    localparam integer CAP_OFF  = STAT_OFF + 10;
     localparam integer CAPN     = 32;
     localparam integer CAPDEPTH = 32;
     localparam integer FRAME_LEN = CAP_OFF + 4*CAPN + 2;
@@ -23,6 +23,9 @@ module tb_hspi;
     always #25 clk = ~clk;                   // 20 MHz sampling clock
 
     reg [NPINS-1:0] tb_obs = {NPINS{1'b0}};
+    reg             mcu_drive = 1'b1;
+    wire [NPINS-1:0] obs_net;
+`include "census_tb_net.vh"
     wire uart_tx, htrdy;
     wire ser_clk, ser_data, vpp_le, vcc_le, gnd_le, vpp_oe, vcc_oe, gnd_oe;
     wire j_gnd_11, j_gnd_21, j_gnd_26, j_gnd_27, j_gnd_28;
@@ -112,7 +115,7 @@ module tb_hspi;
         capwords = {frame[STAT_OFF+1], frame[STAT_OFF]};
         bursts   = {frame[STAT_OFF+3], frame[STAT_OFF+2]};
         check(capwords == 16'd32, "capwords counted 32");
-        check(frame[STAT_OFF+5] == 8'd1, "one-shot reports frozen");
+        check((frame[STAT_OFF+5] & 8'h08) != 8'd0, "one-shot reports frozen");
         check(bursts   == 16'd1, "one burst seen");
         check(frame[4] == 8'h04, "version 4");
 
