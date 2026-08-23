@@ -11,7 +11,7 @@ proven bit-exact on an MX27C2000, and full write→verify→erase→blank cycles
 three times each on two electrically-erasable Winbond parts (W27C512 64 KB,
 W27C257 32 KB) with distinct data every cycle. The native chip database reads
 XGecu's `InfoICT76.dll` directly (no XML needed) and can provision itself from
-a mirror. 218 tests pass, clippy clean.
+a mirror. 219 tests pass, clippy clean.
 
 > ⚠️ **The T48, T56, and TL866II+ drivers are untested on hardware.** They are
 > reference-only implementations — verified against byte-exact golden
@@ -20,7 +20,7 @@ a mirror. 218 tests pass, clippy clean.
 > [Contributing](#contributing).
 
 ```
-cargo test           # 218 hardware-free protocol/golden/db tests
+cargo test           # 219 hardware-free protocol/golden/db tests
 cargo clippy --all-targets
 ./target/debug/minipro --json info
 ```

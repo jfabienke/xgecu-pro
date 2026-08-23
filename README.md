@@ -21,7 +21,7 @@ This is a **young project handling real hardware**. Honest state of play:
 
 | Path | Status |
 |---|---|
-| **T76 reads** | ✅ **Hardware-verified** — byte-identical across repeated reads on four parts (AT27C256R, MX27C2000, W27C512, W27C257) |
+| **T76 reads** | ✅ **Hardware-verified** — byte-identical across repeated reads on four parts (AT27C256R, MX27C2000, W27C512, W27C257), and re-verified after block stepping moved onto the catalog's `read_buffer_size`: a 32 KB read now issues 64 × 1024-byte transfers instead of 16 × 4096 and still re-read-verifies stable |
 | **T76 write** (parallel EPROM/EEPROM) | ✅ **Hardware-verified** — bit-exact on an MX27C2000, plus three full write→verify cycles each on a W27C512 (64 KB) and W27C257 (32 KB), distinct data every cycle |
 | **T76 erase** | ✅ **Hardware-verified** — three erase→blank-check cycles each on a W27C512 and a W27C257, chip verifiably all-0xFF after every one |
 | **T76 NAND / eMMC / firmware update** | ⚠️ Implemented, **never exercised on a device**. `write --dry-run` checks setup without programming; `update` refuses without `--confirm`, verifies bootloader entry both ways, and recovers a bootloader-stuck device |
@@ -34,7 +34,7 @@ This is a **young project handling real hardware**. Honest state of play:
 | **TL866II+** | ⚠️ **Reference-only** — full driver pinned against the C (incl. its interlaced dual-endpoint transfers), zero silicon contact so far |
 | **TL866A/CS** | ❌ Not implemented (different, older protocol) |
 
-Every driver is pinned by **byte-exact golden-packet tests** (218 tests, hardware-free,
+Every driver is pinned by **byte-exact golden-packet tests** (219 tests, hardware-free,
 plus 5 `#[ignore]`d ones that need a real device), so the wire output is known-correct
 against captures.
 
