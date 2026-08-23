@@ -9,7 +9,7 @@ module tb_census;
     localparam integer HDR       = 8;
     localparam integer EDGE_OFF  = HDR + 3*NBYTES;
     localparam integer STAT_OFF  = EDGE_OFF + 2*NDETAIL;
-    localparam integer CAP_OFF   = STAT_OFF + 4;
+    localparam integer CAP_OFF   = STAT_OFF + 6;
     localparam integer FRAME_LEN = CAP_OFF + 4*CAPN + 2;
     localparam integer BIT_NS = 174*50;   // 174 clocks of 50 ns
 
@@ -105,7 +105,7 @@ module tb_census;
         $display("T76 census testbench");
         check(frame[0]==8'h55 && frame[1]==8'hAA &&
               frame[2]==8'h55 && frame[3]==8'hAA, "preamble");
-        check(frame[4]==8'h03, "version == 3");
+        check(frame[4]==8'h04, "version == 4");
         check(frame[5]==NPINS, "pin count matches");
         check(frame[6]==NDETAIL, "detail count matches");
         check(frame[7]==CAPN, "capture depth matches");

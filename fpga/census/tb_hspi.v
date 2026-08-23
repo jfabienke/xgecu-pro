@@ -13,8 +13,9 @@ module tb_hspi;
     localparam integer HDR      = 8;
     localparam integer EDGE_OFF = HDR + 3*NBYTES;
     localparam integer STAT_OFF = EDGE_OFF + 2*NDETAIL;
-    localparam integer CAP_OFF  = STAT_OFF + 4;
+    localparam integer CAP_OFF  = STAT_OFF + 6;
     localparam integer CAPN     = 32;
+    localparam integer CAPDEPTH = 32;
     localparam integer FRAME_LEN = CAP_OFF + 4*CAPN + 2;
     localparam integer BIT_NS   = 174*50;
 
@@ -27,7 +28,7 @@ module tb_hspi;
     wire j_gnd_11, j_gnd_21, j_gnd_26, j_gnd_27, j_gnd_28;
     wire j_vcc_04, j_vcc_20, j_vcc_22, j_vcc_24, j_vpp_24, j_vpp_26;
 
-    t76_census #(.FRAME_GAP(200_000)) dut (
+    t76_census #(.FRAME_GAP(200_000), .CAPDEPTH(CAPDEPTH)) dut (
 `include "census_tb_connect.vh"
         .i_clock_20M(clk), .uart_tx(uart_tx), .htrdy(htrdy),
         .ser_clk(ser_clk), .ser_data(ser_data), .vpp_le(vpp_le), .vcc_le(vcc_le),
@@ -53,7 +54,7 @@ module tb_hspi;
         end
     endtask
 
-    reg [23:0] sent [0:7];
+    reg [23:0] sent [0:31];
     integer n;
 
     reg [7:0]  frame [0:FRAME_LEN-1];
@@ -73,13 +74,13 @@ module tb_hspi;
         check(htrdy === 1'b1, "htrdy asserts after HTREQ");
 
         // known payload: a header-ish word then a counting pattern
-        sent[0] = 24'h0000A5; sent[1] = 24'h000001; sent[2] = 24'h000002;
-        sent[3] = 24'h000003; sent[4] = 24'hFFFFFF; sent[5] = 24'h555555;
+        for (n = 0; n < 32; n = n + 1) sent[n] = 24'h010000 + n*24'h010101;
+        sent[0] = 24'h0000A5; sent[4] = 24'hFFFFFF; sent[5] = 24'h555555;
         sent[6] = 24'hAAAAAA; sent[7] = 24'h123456;
 
         @(negedge tb_obs[IDX_HTCLK]);
         tb_obs[IDX_HTVLD] = 1'b1;
-        for (n = 0; n < 8; n = n + 1) begin
+        for (n = 0; n < 32; n = n + 1) begin
             drive_hd(sent[n]);
             @(posedge tb_obs[IDX_HTCLK]);    // the DUT samples here
             #1;
@@ -91,13 +92,13 @@ module tb_hspi;
         check(htrdy === 1'b0, "htrdy releases when HTREQ drops");
         $display("  [probe] capcnt=%0d capwords=%0d bursts=%0d",
                  dut.capcnt, dut.capwords, dut.bursts);
-        for (n = 0; n < 8; n = n + 1)
+        for (n = 0; n < 4; n = n + 1)
             $display("  [probe] capbuf[%0d]=%06h  sent=%06h",
                      n, dut.capbuf[n][23:0], sent[n]);
 
         // --- read the frame back over the UART -------------------------------
         read_frame;
-        for (n = 0; n < 8; n = n + 1) begin
+        for (n = 0; n < 32; n = n + 1) begin
             capw = {frame[CAP_OFF+4*n+3], frame[CAP_OFF+4*n+2],
                     frame[CAP_OFF+4*n+1], frame[CAP_OFF+4*n]};
             // HD17 is program_b and permanently tied low in hd_bus, so it can
@@ -110,9 +111,10 @@ module tb_hspi;
         end
         capwords = {frame[STAT_OFF+1], frame[STAT_OFF]};
         bursts   = {frame[STAT_OFF+3], frame[STAT_OFF+2]};
-        check(capwords == 16'd8, "capwords counted 8");
+        check(capwords == 16'd32, "capwords counted 32");
+        check(frame[STAT_OFF+5] == 8'd1, "one-shot reports frozen");
         check(bursts   == 16'd1, "one burst seen");
-        check(frame[4] == 8'h03, "version 3");
+        check(frame[4] == 8'h04, "version 4");
 
         if (errors == 0) $display("  HSPI capture: all checks passed (%0d-byte frame)", FRAME_LEN);
         else             $display("  %0d FAILURES", errors);
