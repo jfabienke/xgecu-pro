@@ -65,7 +65,7 @@ def frames(stream, nbytes):
 # Header pins 27 and 28 are switched to ground by this design (see
 # census_isp_power.vh), so they read low because of us, not because of the
 # board. Flag them rather than let the reading be taken at face value.
-SELF_GROUNDED = {"j_27", "j_28"}
+SELF_GROUNDED = {"j_11", "j_21", "j_26", "j_27", "j_28"}
 
 
 def classify(lo, hi):

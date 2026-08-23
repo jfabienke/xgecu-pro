@@ -6,7 +6,7 @@
 set_pin_assignment	{ i_clock_20M }	{ LOCATION = E10; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; PCICLAMP = ON; }
 
 # UART out to the ISP header
-set_pin_assignment	{ uart_tx }	{ LOCATION = E13; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
+set_pin_assignment	{ uart_tx }	{ LOCATION = M4; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
 
 # Rail control driven to a static safe state (socket MUST be empty)
 set_pin_assignment	{ ser_clk }	{ LOCATION = B10; IOSTANDARD = LVCMOS33; DRIVESTRENGTH = 20; PULLTYPE = NONE; }
@@ -121,22 +121,17 @@ set_pin_assignment	{ j_04 }	{ LOCATION = J3; IOSTANDARD = LVCMOS33; PULLTYPE = N
 set_pin_assignment	{ j_05 }	{ LOCATION = L3; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_06 }	{ LOCATION = M3; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_07 }	{ LOCATION = M5; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
-set_pin_assignment	{ j_08 }	{ LOCATION = M4; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_09 }	{ LOCATION = M14; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_10 }	{ LOCATION = J11; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
-set_pin_assignment	{ j_11 }	{ LOCATION = J12; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_12 }	{ LOCATION = K14; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_13 }	{ LOCATION = H14; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_14 }	{ LOCATION = H13; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_16 }	{ LOCATION = F12; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_17 }	{ LOCATION = E15; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_18 }	{ LOCATION = D14; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
+set_pin_assignment	{ j_19 }	{ LOCATION = E13; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_20 }	{ LOCATION = E12; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
-set_pin_assignment	{ j_21 }	{ LOCATION = E4; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_22 }	{ LOCATION = C3; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_23 }	{ LOCATION = C2; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_24 }	{ LOCATION = D3; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_25 }	{ LOCATION = E3; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
-set_pin_assignment	{ j_26 }	{ LOCATION = F4; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
-set_pin_assignment	{ j_27 }	{ LOCATION = F3; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
-set_pin_assignment	{ j_28 }	{ LOCATION = F5; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }

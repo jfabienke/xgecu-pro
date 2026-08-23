@@ -111,22 +111,17 @@
     input  wire j_05          ,  // L3    ISP:J05
     input  wire j_06          ,  // M3    ISP:J06
     input  wire j_07          ,  // M5    ISP:J07
-    input  wire j_08          ,  // M4    ISP:J08
     input  wire j_09          ,  // M14   ISP:J09
     input  wire j_10          ,  // J11   ISP:J10
-    input  wire j_11          ,  // J12   ISP:J11
     input  wire j_12          ,  // K14   ISP:J12
     input  wire j_13          ,  // H14   ISP:J13
     input  wire j_14          ,  // H13   ISP:J14
     input  wire j_16          ,  // F12   ISP:J16
     input  wire j_17          ,  // E15   ISP:J17
     input  wire j_18          ,  // D14   ISP:J18
+    input  wire j_19          ,  // E13   ISP:J19
     input  wire j_20          ,  // E12   ISP:J20
-    input  wire j_21          ,  // E4    ISP:J21
     input  wire j_22          ,  // C3    ISP:J22
     input  wire j_23          ,  // C2    ISP:J23
     input  wire j_24          ,  // D3    ISP:J24
-    input  wire j_25          ,  // E3    ISP:J25
-    input  wire j_26          ,  // F4    ISP:J26
-    input  wire j_27          ,  // F3    ISP:J27
-    input  wire j_28            // F5    ISP:J28
+    input  wire j_25            // E3    ISP:J25

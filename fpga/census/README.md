@@ -5,7 +5,7 @@ pin: its level when the frame was latched, whether it was ever low during the
 preceding window, and whether it was ever high. That is enough to separate
 *tied low*, *tied high* and *active* without decoding any protocol.
 
-**Status: builds to a real bitstream; never run on hardware.** The RTL passes a
+**Status: running on hardware; first inventory captured 2026-08-23.** The RTL passes a
 testbench that decodes the UART exactly as the host decoder does and checks the
 classification semantics, and Anlogic TD 4.6.116866 takes it through to a
 placed, routed bitstream for `eagle_20` / `BGA256X` using **549 LUTs and 727
@@ -136,6 +136,45 @@ ground from any `ISP:GND` pin. **115200 8N1.** A frame arrives every 250 ms.
   ruled out: `HD23`–`HD30` exist on the QFN68 package but are not wired.
 - **HSPI vs BUS** — a free-running clock on `HTCLK` says HSPI; strobe-driven
   activity on `BWR#` with changing address lines says BUS.
+
+## First hardware run — measured 2026-08-23
+
+24 consecutive frames, every CRC valid, **every frame byte-identical and not one
+pin varying**. The T76 was idle: powered, enumerated, our bitstream loaded, no
+operation in flight.
+
+**The MCU link is silent except for its clock.**
+
+| State | Count | Signals |
+|---|--:|---|
+| **ACTIVE** | **1** | **`HTCLK` (E8)** |
+| tied high | 18 | `HD0`–`HD7`, `HD9`–`HD13`, `HD16`, `HD18`, `HD19`, `HD21`, `HRVLD` |
+| tied low | 13 | `HD8`, `HD14`, `HD15`, `HD20`, `HD22`, `HD31`, `HRACT`, `HRCLK`, `HTACK`, `HTRDY`, `HTREQ`, `HTVLD`, `PA7/BD7/RXD1` |
+
+`HTCLK` toggling while every data and handshake line sits static is exactly what
+an idle-but-clocked link looks like, and it settles the question radiomanV's
+design raised: the ~80 MHz he consumed as a free-running clock **is** the HSPI
+transmit clock, and it runs whether or not a transfer is in progress. **0 of 24
+wired `HD` lines are active at idle**, which is expected — nothing has asked the
+MCU to move data yet. Distinguishing HSPI from the 8080-style BUS reading needs
+traffic, so that waits on stage 2.
+
+**Answers to the open questions:**
+
+- **`M0` (T11) = low, `M1` (N11) = high** — the FPGA's configuration-mode straps,
+  read directly rather than inferred.
+- **`? ro5 ?` (C4)** — the ball nobody could identify is **statically high**. Not
+  a signal: a pull-up or a strap.
+- **Two anomalies worth a second look.** With an empty socket, 47 of 48 ZIF pins
+  read high and **`zif_07` (F15) reads low**; on the ISP header 19 read high and
+  **`j_25` (E3) reads low**. Whatever pulls those two differs from all their
+  neighbours.
+
+The UART transmits on **`ISP:J08` (ball M4)**, not J19. J08 is the position the
+beacon proved reachable on the bench; J19 was the original choice and was never
+confirmed on hardware. All five switchable ISP grounds (11, 21, 26, 27, 28) are
+asserted, so the probe's ground lead can land anywhere along the header — those
+five positions are consequently not observed.
 
 ## What TD told us before the bitstream even built
 

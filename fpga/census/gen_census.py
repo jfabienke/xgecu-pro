@@ -74,7 +74,9 @@ def hspi_name(func):
 # --- pins we must NOT observe: they have a job ------------------------------
 CLK_BALL = "E10"      # CLK_20, our sampling clock - deliberately independent
                       # of the bus under test, so a dead bus is still reportable
-UART_BALL = "E13"     # ISP:J19, proven reachable by radiomanV's design
+UART_BALL = "M4"      # ISP:J08 -- the pin the beacon proved reachable on the
+                      # bench (47,936 bytes decoded as "J08"). J19/E13 was the
+                      # original choice and was never confirmed on hardware.
 
 # Rail control is DRIVEN to a static safe state, never observed: leaving these
 # floating would let the ZIF rail drivers do something undefined.  Polarity is
@@ -106,9 +108,9 @@ DEDICATED = {
 # fine. radiomanV's working design switches pins 27 and 28 to ground and leaves
 # everything else off; we mirror those proven values exactly.
 ISP_POWER = {
-    "ISP:GND11": ("j_gnd_11", 0),
-    "ISP:GND21": ("j_gnd_21", 0),
-    "ISP:GND26": ("j_gnd_26", 0),
+    "ISP:GND11": ("j_gnd_11", 1),
+    "ISP:GND21": ("j_gnd_21", 1),
+    "ISP:GND26": ("j_gnd_26", 1),
     "ISP:GND27": ("j_gnd_27", 1),   # ground reference for the UART
     "ISP:GND28": ("j_gnd_28", 1),   # ground reference for the UART
     "ISP:VCC4":  ("j_vcc_04", 0),
@@ -146,6 +148,11 @@ def main():
     for ball, net in sorted(balls.items()):
         if (ball in (CLK_BALL, UART_BALL) or ball in DEDICATED
                 or net in RAIL or net in ISP_POWER or SKIP.match(net)):
+            continue
+        # Positions switched to ground are not meaningful observations: they
+        # read low because of us. The beacon grounded all five and that is what
+        # let the probe's ground lead land anywhere on the header.
+        if re.match(r"^ISP:J(11|21|26|27|28)$", net):
             continue
         kind = classify(net)
         if kind is None:

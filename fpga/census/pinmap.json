@@ -1,8 +1,8 @@
 {
- "npins": 108,
- "nbytes": 14,
+ "npins": 103,
+ "nbytes": 13,
  "clock_ball": "E10",
- "uart_ball": "E13",
+ "uart_ball": "M4",
  "dedicated_excluded": {
   "T2": "program_b (FPGA reconfiguration control, driven by the MCU)",
   "C12": "TDI (dedicated JTAG)",
@@ -636,136 +636,101 @@
   },
   {
    "index": 89,
-   "name": "j_08",
-   "ball": "M4",
-   "net": "ISP:J08",
-   "signal": "ISP:J08"
-  },
-  {
-   "index": 90,
    "name": "j_09",
    "ball": "M14",
    "net": "ISP:J09",
    "signal": "ISP:J09"
   },
   {
-   "index": 91,
+   "index": 90,
    "name": "j_10",
    "ball": "J11",
    "net": "ISP:J10",
    "signal": "ISP:J10"
   },
   {
-   "index": 92,
-   "name": "j_11",
-   "ball": "J12",
-   "net": "ISP:J11",
-   "signal": "ISP:J11"
-  },
-  {
-   "index": 93,
+   "index": 91,
    "name": "j_12",
    "ball": "K14",
    "net": "ISP:J12",
    "signal": "ISP:J12"
   },
   {
-   "index": 94,
+   "index": 92,
    "name": "j_13",
    "ball": "H14",
    "net": "ISP:J13",
    "signal": "ISP:J13"
   },
   {
-   "index": 95,
+   "index": 93,
    "name": "j_14",
    "ball": "H13",
    "net": "ISP:J14",
    "signal": "ISP:J14"
   },
   {
-   "index": 96,
+   "index": 94,
    "name": "j_16",
    "ball": "F12",
    "net": "ISP:J16",
    "signal": "ISP:J16"
   },
   {
-   "index": 97,
+   "index": 95,
    "name": "j_17",
    "ball": "E15",
    "net": "ISP:J17",
    "signal": "ISP:J17"
   },
   {
-   "index": 98,
+   "index": 96,
    "name": "j_18",
    "ball": "D14",
    "net": "ISP:J18",
    "signal": "ISP:J18"
   },
   {
-   "index": 99,
+   "index": 97,
+   "name": "j_19",
+   "ball": "E13",
+   "net": "ISP:J19",
+   "signal": "ISP:J19"
+  },
+  {
+   "index": 98,
    "name": "j_20",
    "ball": "E12",
    "net": "ISP:J20",
    "signal": "ISP:J20"
   },
   {
-   "index": 100,
-   "name": "j_21",
-   "ball": "E4",
-   "net": "ISP:J21",
-   "signal": "ISP:J21"
-  },
-  {
-   "index": 101,
+   "index": 99,
    "name": "j_22",
    "ball": "C3",
    "net": "ISP:J22",
    "signal": "ISP:J22"
   },
   {
-   "index": 102,
+   "index": 100,
    "name": "j_23",
    "ball": "C2",
    "net": "ISP:J23",
    "signal": "ISP:J23"
   },
   {
-   "index": 103,
+   "index": 101,
    "name": "j_24",
    "ball": "D3",
    "net": "ISP:J24",
    "signal": "ISP:J24"
   },
   {
-   "index": 104,
+   "index": 102,
    "name": "j_25",
    "ball": "E3",
    "net": "ISP:J25",
    "signal": "ISP:J25"
-  },
-  {
-   "index": 105,
-   "name": "j_26",
-   "ball": "F4",
-   "net": "ISP:J26",
-   "signal": "ISP:J26"
-  },
-  {
-   "index": 106,
-   "name": "j_27",
-   "ball": "F3",
-   "net": "ISP:J27",
-   "signal": "ISP:J27"
-  },
-  {
-   "index": 107,
-   "name": "j_28",
-   "ball": "F5",
-   "net": "ISP:J28",
-   "signal": "ISP:J28"
   }
  ]
 }
