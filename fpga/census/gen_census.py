@@ -112,6 +112,9 @@ TX_CTRL = {
 # HD0..HD15 become bidirectional: the measured bus is 16-bit, and a transmitter
 # has to drive the same lines the MCU drives. Everything above HD15 held a
 # constant 0x2D throughout stage 2, so it is not data and stays input-only.
+# 16 = HD0-15 are bidirectional so the FPGA can transmit. The capture is not
+# used in this mode, so the (unexplained) interaction between the tristate and
+# the HTCLK-domain capture does not matter here: this build only needs to SEND.
 TX_DATA_BITS = 16
 
 DEDICATED = {

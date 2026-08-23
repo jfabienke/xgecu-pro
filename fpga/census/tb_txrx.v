@@ -42,7 +42,7 @@ module tb_txrx;
     always #5 tb_obs[IDX_HTCLK] = ~tb_obs[IDX_HTCLK];
 
     integer errors = 0, n, contention = 0;
-    reg [15:0] got [0:7];
+    reg [15:0] got [0:23];
     integer ngot = 0;
 
     task check(input cond, input [255:0] what);
@@ -68,7 +68,7 @@ module tb_txrx;
 
     // capture whatever the DUT clocks out while it owns the bus
     always @(posedge hrclk)
-        if (hrvld && !mcu_drive && ngot < 8) begin
+        if (hrvld && !mcu_drive && ngot < 24) begin
             got[ngot] = hd_read;
             ngot = ngot + 1;
         end
@@ -114,11 +114,13 @@ module tb_txrx;
         mcu_drive = 1'b1;                       // MCU takes the bus back
         #2000;
 
-        check(ngot == 5, "transmitted a 5-word packet");
-        check(got[2] == 16'hA55A && got[3] == 16'h5AA5, "payload signature intact");
+        check(ngot == 19, "transmitted a 19-word packet");
+        // payload words must be a contiguous counter starting at 0
+        for (n = 2; n < 18; n = n + 1)
+            check(got[n] == (n - 2), "payload counter in sequence");
         check(contention == 0, "NEVER drove HD while the MCU was driving");
-        $display("  words out: %04X %04X %04X %04X %04X",
-                 got[0], got[1], got[2], got[3], got[4]);
+        $display("  words out: %04X %04X | %04X %04X %04X %04X %04X %04X | crc %04X",
+                 got[0], got[1], got[2], got[3], got[4], got[5], got[6], got[7], got[18]);
 
         // --- interlock under fire: MCU asserts HTVLD mid-reply ---------------
         ngot = 0;

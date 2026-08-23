@@ -16,7 +16,7 @@ module tb_hspi;
     localparam integer CAP_OFF  = STAT_OFF + 10;
     localparam integer CAPN     = 32;
     localparam integer CAPDEPTH = 32;
-    localparam integer FRAME_LEN = CAP_OFF + 4*CAPN + 2;
+    localparam integer FRAME_LEN = CAP_OFF + 2*CAPN + 2;
     localparam integer BIT_NS   = 174*50;
 
     reg clk = 1'b0;
@@ -70,7 +70,7 @@ module tb_hspi;
         // --- the MCU side of a single packet ---------------------------------
         tb_obs[IDX_HTREQ] = 1'b0;
         tb_obs[IDX_HTVLD] = 1'b0;
-        #2000;
+        #4_000_000;   // let the capture arm (65536 clocks at 20 MHz)
 
         tb_obs[IDX_HTREQ] = 1'b1;            // "there is data to transmit"
         #500;
@@ -102,13 +102,12 @@ module tb_hspi;
         // --- read the frame back over the UART -------------------------------
         read_frame;
         for (n = 0; n < 32; n = n + 1) begin
-            capw = {frame[CAP_OFF+4*n+3], frame[CAP_OFF+4*n+2],
-                    frame[CAP_OFF+4*n+1], frame[CAP_OFF+4*n]};
+            capw = {16'd0, frame[CAP_OFF+2*n+1], frame[CAP_OFF+2*n]};
             // HD17 is program_b and permanently tied low in hd_bus, so it can
             // never carry data. Mask it rather than expect it.
-            if ((capw[23:0] & ~(24'd1 << 17)) !== (sent[n] & ~(24'd1 << 17))) begin
-                $display("  FAIL: word %0d captured %06h expected %06h",
-                         n, capw[23:0], sent[n]);
+            if (capw[15:0] !== sent[n][15:0]) begin
+                $display("  FAIL: word %0d captured %04h expected %04h",
+                         n, capw[15:0], sent[n][15:0]);
                 errors = errors + 1;
             end
         end
@@ -117,7 +116,7 @@ module tb_hspi;
         check(capwords == 16'd32, "capwords counted 32");
         check((frame[STAT_OFF+5] & 8'h08) != 8'd0, "one-shot reports frozen");
         check(bursts   == 16'd1, "one burst seen");
-        check(frame[4] == 8'h04, "version 4");
+        check(frame[4] == 8'h08, "version 8");
 
         if (errors == 0) $display("  HSPI capture: all checks passed (%0d-byte frame)", FRAME_LEN);
         else             $display("  %0d FAILURES", errors);

@@ -38,7 +38,7 @@ module t76_census #(
     // Overridden by the testbench so simulation need not run 250 ms.
     parameter integer FRAME_GAP = 5_000_000,
     // Shrunk by the testbench so a burst can actually fill the one-shot buffer.
-    parameter integer CAPDEPTH  = 256
+    parameter integer CAPDEPTH  = 64
 ) (
 `include "census_ports.vh"
 );
@@ -56,7 +56,7 @@ localparam integer HDR       = 8;                      // preamble+version+npins
 localparam integer EDGE_OFF  = HDR + 3*NBYTES;         // transition counters
 localparam integer STAT_OFF  = EDGE_OFF + 2*NDETAIL;   // capwords, bursts, win, flags
 localparam integer CAP_OFF   = STAT_OFF + 10;           // captured words, 4 bytes each
-localparam integer FRAME_LEN = CAP_OFF + 4*CAPN + 2;
+localparam integer FRAME_LEN = CAP_OFF + 2*CAPN + 2;
 
 // --- rail control: static, safe, never floating ----------------------------
 assign ser_clk = 1'b0;
@@ -138,25 +138,66 @@ assign htrdy = htreq_s1;   // ready whenever asked
 // seen: 308 words crossed the link and we reported 32 of them. Now the buffer
 // fills once, from the first valid word, and then freezes -- so what it holds
 // is the opening of the whole exchange rather than a late fragment.
-reg [23:0] capbuf [0:CAPDEPTH-1];
-reg [8:0]  capcnt   = 9'd0;
+// 16 bits, not 24: the bus measured 16-bit (HD16-HD22 and HD31 held a constant
+// 0x2D throughout), so the upper lines carry no data. Narrowing to 64x16 also
+// keeps the array in REGISTERS. At 256x24 TD inferred block RAM, and a block RAM
+// written on HTCLK but read on CLK_20 is a dual-clock primitive it does not
+// infer correctly -- every captured word read back as zero while the counters
+// correctly reported 308 words captured.
+reg [15:0] capbuf [0:CAPDEPTH-1];
+reg [7:0]  capcnt   = 8'd0;
 reg        capfull  = 1'b0;
 reg [15:0] capwords = 16'd0;   // total valid words seen, saturating
 reg [15:0] bursts   = 16'd0;   // HTVLD rising edges, saturating
 reg        htvld_d  = 1'b0;
 integer ci;
-initial for (ci = 0; ci < CAPDEPTH; ci = ci + 1) capbuf[ci] = 24'd0;
+initial for (ci = 0; ci < CAPDEPTH; ci = ci + 1) capbuf[ci] = 16'd0;
+
+// HTCLK free-runs during FPGA configuration, so registers in that domain clock
+// before their declared initial values settle -- capfull powered up as 1, the
+// `if (!capfull)` branch never ran, and every captured word read back as zero
+// while capwords (outside that branch) counted 308 words correctly. An
+// instrument reporting confidently about data it never stored.
+//
+// The 20 MHz domain does initialise reliably, so it arms the capture. The
+// two-flop synchroniser converges on the real value of `arm` within two HTCLK
+// edges no matter what those flops powered up as, so the clear always happens.
+reg [15:0] arm_cnt = 16'd0;
+reg        arm     = 1'b0;
+always @(posedge i_clock_20M)
+    if (!arm) begin
+        arm_cnt <= arm_cnt + 16'd1;
+        if (arm_cnt == 16'hFFFF) arm <= 1'b1;
+    end
+
+reg arm_s0 = 1'b0, arm_s1 = 1'b0;
 
 always @(posedge HTCLK) begin
+    arm_s0 <= arm;
+    arm_s1 <= arm_s0;
     htvld_d <= HTVLD;
+    if (!arm_s1) begin
+        capcnt   <= 8'd0;
+        capfull  <= 1'b0;
+        capwords <= 16'd0;
+        bursts   <= 16'd0;
+    end else begin
     if (HTVLD && !htvld_d && bursts != 16'hFFFF) bursts <= bursts + 16'd1;
     if (HTVLD) begin
+        // A SHIFT register, not an addressed array. TD infers block RAM from any
+        // addressed write -- it did so even at 64x16 -- and a block RAM written
+        // on HTCLK while read on CLK_20 is a dual-clock primitive it does not
+        // infer correctly, which is why every captured word read back as zero.
+        // A shift has no write address, so it can only be flip-flops.
         if (!capfull) begin
-            capbuf[capcnt] <= hd_bus;
-            if (capcnt == CAPDEPTH[8:0] - 9'd1) capfull <= 1'b1;
-            else capcnt <= capcnt + 9'd1;
+            for (ci = CAPDEPTH - 1; ci > 0; ci = ci - 1)
+                capbuf[ci] <= capbuf[ci-1];
+            capbuf[0] <= hd_bus[15:0];
+            if (capcnt == CAPDEPTH[7:0] - 8'd1) capfull <= 1'b1;
+            else capcnt <= capcnt + 8'd1;
         end
         if (capwords != 16'hFFFF) capwords <= capwords + 16'd1;
+    end
     end
 end
 
@@ -198,13 +239,14 @@ end
 // every HRCLK rising edge.
 assign hrclk = ~i_clock_20M;
 
-localparam integer TXLEN = 5;     // header(2) + payload(2) + crc(1), 16-bit words
+localparam integer TXLEN = 19;    // header(2) + payload(16) + crc(1), 16-bit words
 
 reg  [2:0]  tx_state  = 3'd0;     // 0 idle, 1 request, 2 data, 3 recover
-reg  [3:0]  tx_idx    = 4'd0;
+reg  [4:0]  tx_idx    = 5'd0;   // 5 bits: TXLEN is 19, and [3:0] truncated it to 3
 reg  [3:0]  tx_seq    = 4'd0;
 reg  [15:0] tx_word   = 16'd0;
 reg  [15:0] tx_crc    = 16'd0;
+reg [15:0] tx_ctr    = 16'd0;   // payload counter, persists across packets
 reg  [15:0] tx_count  = 16'd0;    // packets we have sent, saturating
 reg  [15:0] htack_hi  = 16'd0;    // times the MCU raised HTACK, saturating
 reg  [11:0] tx_wait   = 12'd0;
@@ -261,7 +303,7 @@ always @(posedge i_clock_20M) begin
     3'd1: begin                                  // requested, wait for HTACK
         tx_wait <= tx_wait + 12'd1;
         if (HTACK) begin
-            tx_idx   <= 4'd0;
+            tx_idx   <= 5'd0;
             tx_crc   <= 16'd0;
             tx_word  <= tx_hdr[15:0];
             tx_vld   <= 1'b1;
@@ -278,17 +320,19 @@ always @(posedge i_clock_20M) begin
             tx_req   <= 1'b0;
             tx_state <= 3'd3;
         end else begin
-            if (tx_idx < TXLEN[3:0] - 4'd1) tx_crc <= crc16_8005(tx_crc, tx_word);
-            case (tx_idx)
-            4'd0: tx_word <= tx_hdr[31:16];
-            // A recognisable signature rather than zeros: on a hardware capture
-            // it distinguishes "the FPGA replied" from "the bus was idle".
-            4'd1: tx_word <= 16'hA55A;           // payload word 0
-            4'd2: tx_word <= 16'h5AA5;           // payload word 1
-            4'd3: tx_word <= crc16_8005(tx_crc, tx_word);
-            default: tx_word <= 16'd0;
-            endcase
-            if (tx_idx == TXLEN[3:0] - 4'd1) begin
+            if (tx_idx < TXLEN[4:0] - 5'd1) tx_crc <= crc16_8005(tx_crc, tx_word);
+            // Payload is a free-running counter that persists across packets.
+            // If the MCU forwards our bytes to USB, a host-side read comes back
+            // as a monotonically increasing sequence -- unmistakable, and it
+            // shows exactly where any gaps or repeats fall.
+            if (tx_idx == 5'd0)
+                tx_word <= tx_hdr[31:16];
+            else if (tx_idx < TXLEN[4:0] - 5'd2) begin
+                tx_word <= tx_ctr;
+                tx_ctr  <= tx_ctr + 16'd1;
+            end else
+                tx_word <= crc16_8005(tx_crc, tx_word);
+            if (tx_idx == TXLEN[4:0] - 5'd1) begin
                 tx_vld   <= 1'b0;
                 tx_req   <= 1'b0;
                 tx_seq   <= tx_seq + 4'd1;
@@ -296,7 +340,7 @@ always @(posedge i_clock_20M) begin
                 if (tx_count != 16'hFFFF) tx_count <= tx_count + 16'd1;
                 tx_state <= 3'd3;
             end else begin
-                tx_idx <= tx_idx + 4'd1;
+                tx_idx <= tx_idx + 5'd1;
             end
         end
     end
@@ -383,10 +427,13 @@ reg [7:0] byte_idx = 8'd0;
 // Bytes leave at 115200 baud, ~1740 clocks apart, so a two-cycle address/data
 // latency is free.
 reg [7:0]  cap_addr = 8'd0;
-reg [23:0] cap_rd   = 24'd0;
+reg [15:0] cap_rd   = 16'd0;
 always @(posedge i_clock_20M) begin
-    cap_addr <= {f_win[2:0], 5'd0}
-                + ((byte_idx >= CAP_OFF[7:0]) ? ((byte_idx - CAP_OFF[7:0]) >> 2) : 8'd0);
+    // capbuf[0] is the MOST RECENT word after a shift, so the readout counts
+    // down: the frame ships words in the order the MCU sent them.
+    cap_addr <= CAPDEPTH[7:0] - 8'd1
+                - ({f_win[0], 5'd0}
+                   + ((byte_idx >= CAP_OFF[7:0]) ? ((byte_idx - CAP_OFF[7:0]) >> 1) : 8'd0));
     cap_rd   <= capbuf[cap_addr];
 end
 
@@ -398,7 +445,7 @@ function [7:0] frame_byte;
     begin
         if      (i == 8'd0 || i == 8'd2) frame_byte = 8'h55;
         else if (i == 8'd1 || i == 8'd3) frame_byte = 8'hAA;
-        else if (i == 8'd4)              frame_byte = 8'h04;               // version
+        else if (i == 8'd4)              frame_byte = 8'h08;               // version
         else if (i == 8'd5)              frame_byte = NPINS[7:0];
         else if (i == 8'd6)              frame_byte = NDETAIL[7:0];
         else if (i == 8'd7)              frame_byte = CAPN[7:0];
@@ -419,14 +466,14 @@ function [7:0] frame_byte;
         else if (i == STAT_OFF + 7)         frame_byte = f_txcount[15:8];
         else if (i == STAT_OFF + 8)         frame_byte = f_htack[7:0];
         else if (i == STAT_OFF + 9)         frame_byte = f_htack[15:8];
-        else if (i <  CAP_OFF + 4*CAPN) begin
+        else if (i <  CAP_OFF + 2*CAPN) begin
             // Byte lane must come from the offset WITHIN the capture region:
             // CAP_OFF is not a multiple of 4, so i[1:0] would skew every word
             // by CAP_OFF mod 4 -- a bug tb_hspi caught before hardware did.
-            cw = {8'd0, cap_rd};
-            frame_byte = cw[((i - CAP_OFF) & 8'd3) * 8 +: 8];
+            cw = {16'd0, cap_rd};
+            frame_byte = cw[((i - CAP_OFF) & 8'd1) * 8 +: 8];
         end
-        else if (i == CAP_OFF + 4*CAPN)     frame_byte = crc[15:8];
+        else if (i == CAP_OFF + 2*CAPN)     frame_byte = crc[15:8];
         else                                frame_byte = crc[7:0];
     end
 endfunction
@@ -481,7 +528,7 @@ always @(posedge i_clock_20M) begin
                 tx_data <= frame_byte(byte_idx);
                 tx_load <= 1'b1;
                 // CRC covers the version byte through the last payload byte.
-                if (byte_idx >= 8'd4 && byte_idx < (CAP_OFF + 4*CAPN))
+                if (byte_idx >= 8'd4 && byte_idx < (CAP_OFF + 2*CAPN))
                     crc <= crc16_step(crc, frame_byte(byte_idx));
                 if (byte_idx == FRAME_LEN - 1) state <= S_ARM;
                 else byte_idx <= byte_idx + 8'd1;
