@@ -1529,27 +1529,29 @@ impl MemoryOps for T76 {
                     0 => DEFAULT_BLOCK,
                     n => n,
                 };
-                match dir {
-                    // Reads deliberately keep the page-size/default stepping.
-                    // That path is hardware-verified — an `M27C256B@DIP28`
-                    // (page_size 0, read_buffer_size 1024) reads byte-identical
-                    // to a known-good dump with 4 KiB requests, so the firmware
-                    // evidently re-chunks reads itself. Switching to
-                    // `read_buffer_size` would change a proven path to fix a
-                    // problem nothing has exhibited.
-                    TransferDir::Read => fallback,
-                    // Writes honour the catalog's buffer, as the T48/T56
-                    // drivers already do. The device declares what it can take
-                    // in one program operation and the two numbers often differ
-                    // wildly: a `628256` SRAM asks for 32 bytes while its read
-                    // buffer is 128, and the battery-backed NVRAM parts
-                    // (DS1249/M48T/BQ4014, protocol 0x0e/0x29) ask for 256.
-                    // Sending 4 KiB regardless overshoots by up to 128x on a
-                    // path where — unlike a read — being wrong is destructive.
-                    TransferDir::Write => match u32::from(s.device.write_buffer_size) {
-                        0 => fallback,
-                        n => n,
-                    },
+                // Step by whichever buffer the catalog declares for this
+                // direction, matching the T48/T56 drivers. The device states
+                // what it accepts per operation and the two numbers often
+                // differ widely — a `628256` SRAM asks for 32-byte writes but
+                // 128-byte reads; the NVRAM parts (DS1249/M48T/BQ4014,
+                // protocol 0x0e/0x29) ask for 256/512. The page size stands in
+                // when the catalog carries no buffer, and 4 KiB when it carries
+                // neither.
+                //
+                // Reads were previously pinned to that fallback because the
+                // 4 KiB path was hardware-verified. Stepping by
+                // `read_buffer_size` was then checked on the same T76: a
+                // 32 KiB read of an `M27C256B@DIP28` (read_buffer_size 1024)
+                // completes and re-read-verifies stable, so the smaller
+                // requests are equally sound.
+                let buf = match dir {
+                    TransferDir::Read => u32::from(s.device.read_buffer_size),
+                    TransferDir::Write => u32::from(s.device.write_buffer_size),
+                };
+                if buf == 0 {
+                    fallback
+                } else {
+                    buf
                 }
             }
         }
@@ -3295,13 +3297,12 @@ mod tests {
         );
     }
 
-    /// Writes step by the catalog's `write_buffer_size`; reads deliberately do
-    /// not. The device declares what it accepts per program operation, and the
-    /// two numbers differ by up to 128x on the RAM/NVRAM parts — sending the
-    /// 4 KiB default regardless overshoots on the one path where being wrong is
-    /// destructive.
+    /// Each direction steps by the buffer the catalog declares for it. The two
+    /// numbers differ widely on the RAM/NVRAM parts — a `628256` asks for
+    /// 32-byte writes and 128-byte reads — so a single fixed 4 KiB request
+    /// overshoots both.
     #[test]
-    fn writes_step_by_the_declared_write_buffer() {
+    fn transfers_step_by_the_declared_buffers() {
         let (t76, _tx) = t76_with(vec![]);
 
         // A 628256 SRAM as the catalog describes it: no page size, tiny write
@@ -3321,14 +3322,15 @@ mod tests {
         );
         assert_eq!(
             t76.block_size(&s, MemoryKind::Code, TransferDir::Read),
-            DEFAULT_BLOCK,
-            "reads keep the hardware-verified stepping"
+            128,
+            "a read steps by the declared read buffer, not the 4 KiB default"
         );
 
         // Battery-backed NVRAM (DS1249Y (RW), protocol 0x0e): 256-byte writes.
         let mut dev = device(0x0e, Vec::new());
         dev.page_size = 0;
         dev.write_buffer_size = 256;
+        dev.read_buffer_size = 512;
         let s = Session {
             device: dev,
             emmc_capacity: 0,
@@ -3337,12 +3339,18 @@ mod tests {
             t76.block_size(&s, MemoryKind::Code, TransferDir::Write),
             256
         );
+        assert_eq!(
+            t76.block_size(&s, MemoryKind::Code, TransferDir::Read),
+            512,
+            "DS1249Y (RW) declares a 512-byte read buffer"
+        );
 
         // A catalog entry with no write buffer falls back to the page size,
         // and to DEFAULT_BLOCK when that is absent too.
         let mut dev = device(0x03, Vec::new());
         dev.page_size = 0x100;
         dev.write_buffer_size = 0;
+        dev.read_buffer_size = 0;
         let s = Session {
             device: dev,
             emmc_capacity: 0,
@@ -3355,6 +3363,7 @@ mod tests {
         let mut dev = device(0x03, Vec::new());
         dev.page_size = 0;
         dev.write_buffer_size = 0;
+        dev.read_buffer_size = 0;
         let s = Session {
             device: dev,
             emmc_capacity: 0,
