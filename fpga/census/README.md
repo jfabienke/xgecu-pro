@@ -230,6 +230,45 @@ Also worth noting: `cso_b`/`cclk`/`mosi`/`miso`/`dout` (T3/R11/T10/P10/M14) and
 `done` (P13) are configuration pins set to **gpio** mode, so they *are*
 observable — several of them carry `HD` nets.
 
+## Next: differential operation mapping
+
+Planned, and it needs **no rebuild** — the committed census already measures
+everything required. The idea is to use the host as a controlled stimulus: run
+each operation in turn with `MINIPRO_KEEP_BITSTREAM=1` so the census stays
+resident, capture the frames, and diff which pins move between operations.
+
+```sh
+# census must already be loaded; each run wedges the T76, so replug between them
+MINIPRO_KEEP_BITSTREAM=1 minipro info                    # MCU only, expect no HSPI
+MINIPRO_KEEP_BITSTREAM=1 minipro detect --skip-pincheck  # ID read
+MINIPRO_KEEP_BITSTREAM=1 minipro read   --skip-pincheck W27C512@DIP28 /tmp/r.bin
+MINIPRO_KEEP_BITSTREAM=1 minipro write  --skip-pincheck --force W27C512@DIP28 /tmp/zeros.bin
+MINIPRO_KEEP_BITSTREAM=1 minipro erase  --skip-pincheck W27C512@DIP28
+```
+
+What it should yield, from data we can already collect:
+
+- **Which pins are specific to which operation.** `info` should show no HSPI
+  traffic at all (it is answered by the MCU alone); everything else should. The
+  difference isolates the pins that carry operation setup.
+- **Burst and word counts per operation**, which bound the command length: a
+  read of 64 KiB versus an erase should differ enormously if payload crosses the
+  link, and barely at all if only commands do.
+- **Whether ZIF pins ever move.** With our bitstream loaded the FPGA does not
+  drive the socket, so any ZIF activity would mean something else does.
+- **Ordering.** `bursts` and per-pin transition counts across operations give a
+  coarse sequence without needing packet capture.
+
+Two things to know before starting:
+
+- **Each operation wedges the T76** and needs a physical replug, because our
+  FPGA acknowledges but never satisfies the MCU. Budget one replug per data
+  point and capture the UART for the whole run.
+- **Extending the census past ~90 counted pins needs a 9-bit `byte_idx`.** With
+  99 counters the frame reaches 260 bytes and the 8-bit index wraps at 255,
+  emitting garbage that decodes as scrambled pin classification. Found the hard
+  way; the committed build counts 32 pins and is safely under the limit.
+
 ## Known discrepancy
 
 `j_07` and `j_08` are **swapped** between the two sources: our ball map says
