@@ -209,6 +209,7 @@ Reverse-engineering and analysis, useful independently of the Rust code:
 | [`infoict76-dll-format.md`](docs/infoict76-dll-format.md) | `InfoICT76.dll` on-disk format: chip-descriptor offsets and field transforms |
 | [`firmware-updater.md`](docs/firmware-updater.md) | The `updateT76.dat` container and the bootloader flashing sequence |
 | [`ch569-usb3-notes.md`](docs/ch569-usb3-notes.md) | The CH569 USB 3.0 stack and the macOS SuperSpeed failure |
+| [`t76-dram-tester-feasibility.md`](docs/t76-dram-tester-feasibility.md) | Could the T76 test DRAM? The MCU↔FPGA link is CH569 HSPI; what a custom bitstream would take |
 | [`open-source-status.md`](docs/open-source-status.md) | Landscape of open-source T76 support |
 | [`minipro-codebase-report.md`](docs/minipro-codebase-report.md) | Review of the upstream C implementation |
 | [`minipro-setup.md`](docs/minipro-setup.md) | Building the C fork locally — the reference this project is checked against |
