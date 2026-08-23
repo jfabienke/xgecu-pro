@@ -83,10 +83,13 @@ the 40-pin socket with a passive edge adapter.
 | `gen_bit.py` | Anlogic TD `.bit` → T76 format |
 | `t76_uploader.py` | libusb uploader |
 | `clock_sniffer/t76.v` | working Verilog top level |
-| `clock_sniffer/t76.adc` | **every pin constrained** (123 lines: location, IO standard, drive strength, pull) |
+| `clock_sniffer/t76.adc` | 123 lines of pin constraints — clocks, rail latches, all 48 ZIF, ISP header. **No HSPI pins** (see below) |
 | `clock_sniffer/timing.sdc` | `clk_20` @ 50 ns, `clk_80` @ 12.5 ns |
 
-That `.adc` removes the usual bring-up risk on an undocumented board.
+That `.adc` removes most bring-up risk on an undocumented board — but only for the
+ZIF side. Neither `t76.v`'s port list nor the `.adc` mentions a single HSPI
+signal, so a sniffer must supply those ball locations itself, from
+`EG4X20BG256_pinout.ods` crossed with `fpga_t76_pinout.ods`.
 
 The Verilog exposes the whole I/O surface:
 
@@ -157,6 +160,36 @@ the counter pattern, results can reach the host through the standard path. No
 partial credit. That matters here — this project's write path once passed every
 golden test while programming nothing, and only a chip could tell.
 
+### Toolchain status: there is no open-source path to a bitstream (checked 2026-08-23)
+
+**Measured.** An open flow would be preferable to Anlogic's proprietary TD, but
+it does not exist for this part:
+
+- **nextpnr has no Anlogic architecture.** A local checkout carries `ice40`,
+  `ecp5`, `nexus`, `machxo2`, `mistral`, `generic`, and `himbaechel` (uarches:
+  `example`, `gatemate`, `gowin`, `ng-ultra`, `xilinx`). Nothing for Eagle, and
+  no source file mentions Anlogic.
+- **prjtang is bitstream tooling, not a flow.** It ships `tangbit`, `tangpack`,
+  `tangunpack` and a documented container format. Its README claims a
+  Yosys + nextpnr flow, but "Getting Started" and "Current Status" are empty
+  headings, no nextpnr integration exists in the tree, and the last commit is
+  2022-12-25.
+- **The bootstrap is circular.** `create_database.py` requires
+  `TD_HOME=/opt/TD` — generating the open database needs the proprietary tool
+  the flow is meant to replace.
+- Yosys is available, but there is no EG4 cell library or techmap either.
+
+What prjtang *does* give us for free is `devices.json`, which names our exact
+part — `EG4X20BG256`, family `eagle_20`, package `BGA256X`, idcode
+`0x00014c35`, 1259 frames, 3904 bits/frame, 9216 bram bits/frame — matching the
+header of radiomanV's prebuilt `T76.bit` (`Architecture: eagle_20`,
+`Package: BGA256X`, TD `Version: 5.0.28716`) exactly.
+
+So building a sniffer means **TD 5.0 on Windows or x86_64 Linux**, with the
+documented `RUN-003 ERROR: License expired!` risk. Writing a nextpnr Eagle
+backend is a fabric-documentation project before it is a uarch port — months,
+not a weekend.
+
 ### The question that could kill it: is HSPI traffic encrypted?
 
 The CH569 has an **ECDC** module (Chapter 15): AES and SM4, ECB and CTR, with
@@ -185,11 +218,23 @@ encrypted (~7.9 bits/byte entropy, never decrypted).
 4. **Measured.** ECDC is optional and must be configured; it is not implicit in
    HSPI operation.
 
-**How to confirm it, cheaply and first.** In Phase A, before building anything
-elaborate, capture traffic during a plain `minipro info` — a 5-byte request with
-a known 64-byte reply containing known ASCII (the manufacture date). If those
-bytes appear, it is plaintext. If the payload is high-entropy noise that does
-not correlate, ECDC is on and MS2 ends at out-of-band results.
+**How to confirm it without building anything — the one-wire test.**
+**Measured:** the MCU is a **CH569W in QFN68, 8 x 8 mm, 0.4 mm pitch** — leads on
+the package edge, within reach of a fine tip — and `cpu_fpga_schematic.pdf`
+names the `HD0`-`HD15` nets running to the FPGA. Probing *one* data line is
+enough, because the test is statistical rather than semantic:
+
+1. Load a normal vendor bitstream and start a **write** of a large uniform
+   block — all `0x00`, then all `0xFF`. `minipro-rs` controls the stimulus, so
+   the payload is exactly known.
+2. Watch transition density on the single probed `HD` line.
+
+Plaintext collapses the transition density: the line tracks the data and sits
+near-static through a uniform block. AES or SM4, in ECB or CTR, holds it near
+50 % regardless of input. The two cases are not subtle, and no FPGA build, TD
+licence, or toolchain is involved. A write is the right stimulus because
+`minipro info` is likely answered by the MCU alone and may never cross HSPI at
+all.
 
 That check costs a fraction of the total effort and decides whether the rest is
 worth starting. **Do not defer it.**
