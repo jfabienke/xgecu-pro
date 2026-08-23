@@ -47,8 +47,9 @@ module t76_census #(
 localparam integer CLK_HZ    = 20_000_000;
 localparam integer BAUD      = 115200;
 localparam integer BAUD_DIV  = CLK_HZ / BAUD;          // 173.6 -> 174, 0.2% error
-localparam integer HDR       = 6;                      // preamble+version+count
-localparam integer FRAME_LEN = HDR + 3*NBYTES + 2;     // + three bitfields + CRC
+localparam integer HDR       = 7;                      // preamble+version+npins+ndetail
+localparam integer EDGE_OFF  = HDR + 3*NBYTES;         // where the counters start
+localparam integer FRAME_LEN = EDGE_OFF + 2*NDETAIL + 2;
 
 // --- rail control: static, safe, never floating ----------------------------
 assign ser_clk = 1'b0;
@@ -83,6 +84,23 @@ end
 // --- sticky activity across the reporting window ---------------------------
 reg [NPINS-1:0] ever_hi = {NPINS{1'b0}};
 reg [NPINS-1:0] ever_lo = {NPINS{1'b0}};
+
+// --- transition counting on the MCU link -----------------------------------
+// Edge count is what answers the question this instrument exists for. Uniform
+// plaintext barely toggles a data line; AES or SM4 ciphertext toggles it about
+// half the time regardless of what was fed in. So the *rate* separates them,
+// with no need to decode a single byte or measure a duty cycle.
+//
+// Confined to indices 0..NDETAIL-1 (the HSPI/BUS candidates): the ZIF and ISP
+// pins are static and counting them would cost 3x the logic for nothing.
+reg [NPINS-1:0]  sync_prev = {NPINS{1'b0}};
+reg [15:0]       edges  [0:NDETAIL-1];
+reg [15:0]       f_edge [0:NDETAIL-1];
+integer ei;
+initial for (ei = 0; ei < NDETAIL; ei = ei + 1) begin
+    edges[ei]  = 16'd0;
+    f_edge[ei] = 16'd0;
+end
 
 // --- frame timer -----------------------------------------------------------
 reg [22:0] gap = 23'd0;
@@ -152,13 +170,18 @@ function [7:0] frame_byte;
     begin
         if      (i == 8'd0 || i == 8'd2) frame_byte = 8'h55;
         else if (i == 8'd1 || i == 8'd3) frame_byte = 8'hAA;
-        else if (i == 8'd4)              frame_byte = 8'h01;               // version
+        else if (i == 8'd4)              frame_byte = 8'h02;               // version
         else if (i == 8'd5)              frame_byte = NPINS[7:0];
+        else if (i == 8'd6)              frame_byte = NDETAIL[7:0];
         else if (i <  HDR +   NBYTES)    frame_byte = f_snap[(i-HDR)*8            +: 8];
         else if (i <  HDR + 2*NBYTES)    frame_byte = f_lo  [(i-HDR-NBYTES)*8     +: 8];
         else if (i <  HDR + 3*NBYTES)    frame_byte = f_hi  [(i-HDR-2*NBYTES)*8   +: 8];
-        else if (i == HDR + 3*NBYTES)    frame_byte = crc[15:8];
-        else                             frame_byte = crc[7:0];
+        else if (i <  EDGE_OFF + 2*NDETAIL)
+                                         frame_byte = (i[0] == (EDGE_OFF[0]))
+                                             ? f_edge[(i-EDGE_OFF)>>1][7:0]
+                                             : f_edge[(i-EDGE_OFF)>>1][15:8];
+        else if (i == EDGE_OFF + 2*NDETAIL) frame_byte = crc[15:8];
+        else                                frame_byte = crc[7:0];
     end
 endfunction
 
@@ -173,8 +196,13 @@ always @(posedge i_clock_20M) begin
         // Accumulate activity continuously; it is only ever cleared at the
         // moment a frame is latched, so each frame describes exactly the
         // window since the previous one.
-        ever_hi <= ever_hi |  sync_b;
-        ever_lo <= ever_lo | ~sync_b;
+        ever_hi   <= ever_hi |  sync_b;
+        ever_lo   <= ever_lo | ~sync_b;
+        sync_prev <= sync_b;
+        for (ei = 0; ei < NDETAIL; ei = ei + 1)
+            if (state == S_ARM && frame_due) edges[ei] <= 16'd0;
+            else if (sync_b[ei] != sync_prev[ei] && edges[ei] != 16'hFFFF)
+                edges[ei] <= edges[ei] + 16'd1;
 
         case (state)
         S_ARM: begin
@@ -184,6 +212,7 @@ always @(posedge i_clock_20M) begin
                 f_hi     <= {{(NBYTES*8-NPINS){1'b0}}, ever_hi |  sync_b};
                 ever_hi  <= {NPINS{1'b0}};
                 ever_lo  <= {NPINS{1'b0}};
+                for (ei = 0; ei < NDETAIL; ei = ei + 1) f_edge[ei] <= edges[ei];
                 gap      <= 23'd0;
                 byte_idx <= 8'd0;
                 crc      <= 16'hFFFF;
@@ -198,7 +227,7 @@ always @(posedge i_clock_20M) begin
                 tx_data <= frame_byte(byte_idx);
                 tx_load <= 1'b1;
                 // CRC covers the version byte through the last payload byte.
-                if (byte_idx >= 8'd4 && byte_idx < (HDR + 3*NBYTES))
+                if (byte_idx >= 8'd4 && byte_idx < (EDGE_OFF + 2*NDETAIL))
                     crc <= crc16_step(crc, frame_byte(byte_idx));
                 if (byte_idx == FRAME_LEN - 1) state <= S_ARM;
                 else byte_idx <= byte_idx + 8'd1;

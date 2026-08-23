@@ -36,9 +36,11 @@ def crc16(data):
     return c
 
 
-def frames(stream, nbytes):
-    """Yield (snapshot, ever_low, ever_high) bit-lists from a byte stream."""
-    flen = 6 + 3 * nbytes + 2
+def frames(stream, nbytes, ndetail):
+    """Yield (snapshot, ever_low, ever_high, edges) from a byte stream."""
+    HDR = 7
+    edge_off = HDR + 3 * nbytes
+    flen = edge_off + 2 * ndetail + 2
     buf = bytearray()
     for chunk in stream:
         buf.extend(chunk)
@@ -52,19 +54,23 @@ def frames(stream, nbytes):
                 break
             f = bytes(buf[i:i + flen])
             del buf[:i + flen]
-            if f[4] != 0x01:
+            if f[4] != 0x02:
                 continue
-            if crc16(f[4:6 + 3 * nbytes]) != (f[flen - 2] << 8 | f[flen - 1]):
+            if crc16(f[4:edge_off + 2 * ndetail]) != (f[flen - 2] << 8 | f[flen - 1]):
                 print("  (frame with bad CRC skipped)", file=sys.stderr)
                 continue
+            npins = f[5]
+
             def bits(off):
-                return [(f[6 + off + j // 8] >> (j % 8)) & 1 for j in range(f[5])]
-            yield bits(0), bits(nbytes), bits(2 * nbytes)
+                return [(f[HDR + off + j // 8] >> (j % 8)) & 1 for j in range(npins)]
+
+            edges = [f[edge_off + 2 * k] | (f[edge_off + 2 * k + 1] << 8)
+                     for k in range(f[6])]
+            yield bits(0), bits(nbytes), bits(2 * nbytes), edges
 
 
-# Header pins 27 and 28 are switched to ground by this design (see
-# census_isp_power.vh), so they read low because of us, not because of the
-# board. Flag them rather than let the reading be taken at face value.
+# Header positions 11, 21, 26, 27 and 28 are switched to ground by this design
+# (see census_isp_power.vh), so they read low because of us, not the board.
 SELF_GROUNDED = {"j_11", "j_21", "j_26", "j_27", "j_28"}
 
 
@@ -97,6 +103,7 @@ def main():
         return 1
     pm = json.loads((HERE / "pinmap.json").read_text())
     pins, nbytes = pm["pins"], pm["nbytes"]
+    ndetail = pm.get("ndetail", 32)
 
     src = args[0]
     if src.startswith("/dev/"):
@@ -110,7 +117,7 @@ def main():
     else:
         stream = iter([Path(src).read_bytes()])
 
-    for snap, lo, hi in frames(stream, nbytes):
+    for snap, lo, hi, edges in frames(stream, nbytes, ndetail):
         print("=" * 72)
         if raw:
             for p in pins:
@@ -140,7 +147,18 @@ def main():
                     print("  %-16s %2d  %s" % (state, len(sel), names))
                 if g.startswith("MCU link"):
                     hd = [p for p in act if p["signal"].startswith("HD")]
-                    print("  -> %d of 24 wired HD lines are active" % len(hd))
+                    print("  -> %d of 23 wired HD lines are active" % len(hd))
+                    busy = [(p, edges[p["index"]]) for p in groups[g]
+                            if p["index"] < len(edges) and edges[p["index"]] > 0]
+                    busy.sort(key=lambda e: -e[1])
+                    if busy:
+                        print("  transitions in the last 250 ms window:")
+                        for p, e in busy:
+                            sat = " (saturated)" if e == 0xFFFF else ""
+                            print("     %-10s %-5s %6d%s"
+                                  % (p["signal"], p["ball"], e, sat))
+                    else:
+                        print("  transitions: none on any MCU-link pin")
         break   # one frame is a census; use --raw or re-run for more
     return 0
 

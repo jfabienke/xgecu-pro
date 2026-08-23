@@ -709,6 +709,22 @@ impl T76 {
         bits: &[u8],
         finalize_last_block: bool,
     ) -> Result<()> {
+        // Reverse-engineering escape hatch. With MINIPRO_KEEP_BITSTREAM set, no
+        // bitstream is ever uploaded, so whatever is already configured in the
+        // FPGA stays there while the MCU still drives a full operation on the
+        // wire. That is what lets an instrumentation bitstream (fpga/census)
+        // watch the MCU-to-FPGA link during a real transfer -- otherwise the
+        // first thing any operation does is overwrite the instrument.
+        //
+        // The operation will not program anything: the FPGA is not a
+        // programmer while this is in effect. It is a bus-stimulus tool.
+        if std::env::var_os("MINIPRO_KEEP_BITSTREAM").is_some() {
+            tracing::warn!(
+                algorithm = name,
+                "MINIPRO_KEEP_BITSTREAM set: not uploading, keeping the resident bitstream"
+            );
+            return Ok(());
+        }
         if self.uploaded_algo.as_deref() == Some(name) {
             tracing::debug!(
                 algorithm = name,

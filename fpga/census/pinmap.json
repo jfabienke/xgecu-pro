@@ -10,6 +10,7 @@
   "C14": "TCK (dedicated JTAG)",
   "E14": "TDO (dedicated JTAG)"
  },
+ "ndetail": 32,
  "pins": [
   {
    "index": 0,

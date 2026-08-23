@@ -5,7 +5,9 @@
 
 module tb_census;
 `include "census_params.vh"
-    localparam integer FRAME_LEN = 6 + 3*NBYTES + 2;
+    localparam integer HDR       = 7;
+    localparam integer EDGE_OFF  = HDR + 3*NBYTES;
+    localparam integer FRAME_LEN = EDGE_OFF + 2*NDETAIL + 2;
     localparam integer BIT_NS = 174*50;   // 174 clocks of 50 ns
 
     reg clk = 1'b0;
@@ -71,6 +73,7 @@ module tb_census;
     integer errors = 0;
     reg [15:0] crc;
     reg [NPINS-1:0] snap, lo, hi;
+    reg [15:0] ec;
     integer idx, bit_in_byte;
 
     task check(input cond, input [255:0] what);
@@ -98,18 +101,19 @@ module tb_census;
         $display("T76 census testbench");
         check(frame[0]==8'h55 && frame[1]==8'hAA &&
               frame[2]==8'h55 && frame[3]==8'hAA, "preamble");
-        check(frame[4]==8'h01, "version == 1");
-        check(frame[5]==NPINS, "pin count == 113");
+        check(frame[4]==8'h02, "version == 2");
+        check(frame[5]==NPINS, "pin count matches");
+        check(frame[6]==NDETAIL, "detail count matches");
 
         crc = 16'hFFFF;
-        for (i = 4; i < 6 + 3*NBYTES; i = i + 1) crc = crc16_step(crc, frame[i]);
+        for (i = 4; i < EDGE_OFF + 2*NDETAIL; i = i + 1) crc = crc16_step(crc, frame[i]);
         check(frame[FRAME_LEN-2]==crc[15:8] && frame[FRAME_LEN-1]==crc[7:0], "CRC-16");
 
         for (i = 0; i < NPINS; i = i + 1) begin
             idx = i / 8; bit_in_byte = i % 8;
-            snap[i] = frame[6            + idx][bit_in_byte];
-            lo  [i] = frame[6 +   NBYTES + idx][bit_in_byte];
-            hi  [i] = frame[6 + 2*NBYTES + idx][bit_in_byte];
+            snap[i] = frame[HDR            + idx][bit_in_byte];
+            lo  [i] = frame[HDR +   NBYTES + idx][bit_in_byte];
+            hi  [i] = frame[HDR + 2*NBYTES + idx][bit_in_byte];
         end
 
         for (i = 0; i <= 9; i = i + 1)
@@ -120,6 +124,17 @@ module tb_census;
             check(lo[i]===1'b1 && hi[i]===1'b1, "pins 20-29 classify as active");
         for (i = 30; i < NPINS; i = i + 1)
             check(lo[i]===1'b1 && hi[i]===1'b0, "remaining pins classify as tied low");
+
+        // pins 20..29 toggle every 200 ns, so their counters must be non-zero;
+        // pins 0..9 are tied low and must have counted nothing.
+        for (i = 20; i <= 29; i = i + 1) begin
+            ec = {frame[EDGE_OFF + 2*i + 1], frame[EDGE_OFF + 2*i]};
+            check(ec != 16'd0, "toggling pin counted edges");
+        end
+        for (i = 0; i <= 9; i = i + 1) begin
+            ec = {frame[EDGE_OFF + 2*i + 1], frame[EDGE_OFF + 2*i]};
+            check(ec == 16'd0, "static pin counted no edges");
+        end
 
         check(ser_clk===1'b0 && ser_data===1'b0 && vpp_oe===1'b0 &&
               vcc_oe===1'b0 && gnd_oe===1'b0, "rail control held in the safe state");
