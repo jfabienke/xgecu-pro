@@ -54,7 +54,7 @@ def frames(stream, nbytes, ndetail):
                 break
             capn = buf[i + 7]
             cap_off = stat_off + 4
-            flen = cap_off + 4 * capn + 2
+            flen = cap_off + 2 * capn + 2
             if len(buf) - i < flen:
                 del buf[:i]
                 break
@@ -62,7 +62,7 @@ def frames(stream, nbytes, ndetail):
             del buf[:i + flen]
             if f[4] != 0x03:
                 continue
-            if crc16(f[4:cap_off + 4 * capn]) != (f[flen - 2] << 8 | f[flen - 1]):
+            if crc16(f[4:cap_off + 2 * capn]) != (f[flen - 2] << 8 | f[flen - 1]):
                 print("  (frame with bad CRC skipped)", file=sys.stderr)
                 continue
             npins = f[5]
@@ -75,8 +75,7 @@ def frames(stream, nbytes, ndetail):
             stats = {
                 "capwords": f[stat_off] | (f[stat_off + 1] << 8),
                 "bursts":   f[stat_off + 2] | (f[stat_off + 3] << 8),
-                "words":    [f[cap_off + 4 * k] | (f[cap_off + 4 * k + 1] << 8)
-                             | (f[cap_off + 4 * k + 2] << 16)
+                "words":    [f[cap_off + 2 * k] | (f[cap_off + 2 * k + 1] << 8)
                              for k in range(capn)],
             }
             yield bits(0), bits(nbytes), bits(2 * nbytes), edges, stats

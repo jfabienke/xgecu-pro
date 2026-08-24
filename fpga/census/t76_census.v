@@ -48,12 +48,12 @@ module t76_census #(
 localparam integer CLK_HZ    = 20_000_000;
 localparam integer BAUD      = 115200;
 localparam integer BAUD_DIV  = CLK_HZ / BAUD;          // 173.6 -> 174, 0.2% error
-localparam integer CAPN      = 32;                     // captured HSPI words
+localparam integer CAPN      = 63;   // 9 whole packets of 7 words                     // captured HSPI words
 localparam integer HDR       = 8;                      // preamble+version+npins+ndetail+capn
 localparam integer EDGE_OFF  = HDR + 3*NBYTES;         // transition counters
 localparam integer STAT_OFF  = EDGE_OFF + 2*NDETAIL;   // capwords, bursts
 localparam integer CAP_OFF   = STAT_OFF + 4;           // captured words, 4 bytes each
-localparam integer FRAME_LEN = CAP_OFF + 4*CAPN + 2;
+localparam integer FRAME_LEN = CAP_OFF + 2*CAPN + 2;
 
 // --- rail control: static, safe, never floating ----------------------------
 assign ser_clk = 1'b0;
@@ -130,13 +130,13 @@ assign htrdy = htreq_s1;   // ready whenever asked
 // faster than our 20 MHz sampling clock -- sampling it here would alias, exactly
 // as the HTCLK transition counter does. So the capture runs on HTCLK itself,
 // which is what a real HSPI receiver does.
-reg [31:0] capbuf [0:CAPN-1];
+reg [15:0] capbuf [0:CAPN-1];
 reg [7:0]  capcnt   = 8'd0;    // words captured in the current burst
 reg [15:0] capwords = 16'd0;   // total valid words seen, saturating
 reg [15:0] bursts   = 16'd0;   // HTVLD rising edges, saturating
 reg        htvld_d  = 1'b0;
 integer ci;
-initial for (ci = 0; ci < CAPN; ci = ci + 1) capbuf[ci] = 32'd0;
+initial for (ci = 0; ci < CAPN; ci = ci + 1) capbuf[ci] = 16'd0;
 
 always @(posedge HTCLK) begin
     htvld_d <= HTVLD;
@@ -154,7 +154,7 @@ always @(posedge HTCLK) begin
     end
     if (HTVLD) begin
         if (capcnt < CAPN[7:0]) begin
-            capbuf[capcnt] <= {8'd0, hd_bus};
+            capbuf[capcnt] <= hd_bus[15:0];
             capcnt <= capcnt + 8'd1;
         end
         if (capwords != 16'hFFFF) capwords <= capwords + 16'd1;
@@ -164,7 +164,7 @@ end
 // Frame-side copies. Refreshed only while HTVLD is low, so a burst in flight is
 // never latched half-written -- the clock-domain crossing is resolved by only
 // reading data that has stopped changing.
-reg [31:0] f_cap [0:CAPN-1];
+reg [15:0] f_cap [0:CAPN-1];
 reg [15:0] f_capwords = 16'd0;
 reg [15:0] f_bursts   = 16'd0;
 reg        htvld_s0 = 1'b0, htvld_s1 = 1'b0;
@@ -172,7 +172,7 @@ always @(posedge i_clock_20M) begin
     htvld_s0 <= HTVLD;
     htvld_s1 <= htvld_s0;
 end
-initial for (ci = 0; ci < CAPN; ci = ci + 1) f_cap[ci] = 32'd0;
+initial for (ci = 0; ci < CAPN; ci = ci + 1) f_cap[ci] = 16'd0;
 
 // --- frame timer -----------------------------------------------------------
 reg [22:0] gap = 23'd0;
@@ -257,13 +257,13 @@ function [7:0] frame_byte;
         else if (i == STAT_OFF + 1)         frame_byte = f_capwords[15:8];
         else if (i == STAT_OFF + 2)         frame_byte = f_bursts[7:0];
         else if (i == STAT_OFF + 3)         frame_byte = f_bursts[15:8];
-        else if (i <  CAP_OFF + 4*CAPN)
+        else if (i <  CAP_OFF + 2*CAPN)
                                             // Byte lane must come from the offset
                                             // WITHIN the capture region: CAP_OFF
                                             // is not a multiple of 4, so i[1:0]
                                             // skews every word by CAP_OFF mod 4.
-                                            frame_byte = f_cap[(i-CAP_OFF)>>2][((i-CAP_OFF)&8'd3)*8 +: 8];
-        else if (i == CAP_OFF + 4*CAPN)     frame_byte = crc[15:8];
+                                            frame_byte = f_cap[(i-CAP_OFF)>>1][((i-CAP_OFF)&8'd1)*8 +: 8];
+        else if (i == CAP_OFF + 2*CAPN)     frame_byte = crc[15:8];
         else                                frame_byte = crc[7:0];
     end
 endfunction
@@ -315,7 +315,7 @@ always @(posedge i_clock_20M) begin
                 tx_data <= frame_byte(byte_idx);
                 tx_load <= 1'b1;
                 // CRC covers the version byte through the last payload byte.
-                if (byte_idx >= 8'd4 && byte_idx < (CAP_OFF + 4*CAPN))
+                if (byte_idx >= 8'd4 && byte_idx < (CAP_OFF + 2*CAPN))
                     crc <= crc16_step(crc, frame_byte(byte_idx));
                 if (byte_idx == FRAME_LEN - 1) state <= S_ARM;
                 else byte_idx <= byte_idx + 8'd1;

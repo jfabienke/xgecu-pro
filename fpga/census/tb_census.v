@@ -5,12 +5,12 @@
 
 module tb_census;
 `include "census_params.vh"
-    localparam integer CAPN      = 32;
+    localparam integer CAPN      = 63;
     localparam integer HDR       = 8;
     localparam integer EDGE_OFF  = HDR + 3*NBYTES;
     localparam integer STAT_OFF  = EDGE_OFF + 2*NDETAIL;
     localparam integer CAP_OFF   = STAT_OFF + 4;
-    localparam integer FRAME_LEN = CAP_OFF + 4*CAPN + 2;
+    localparam integer FRAME_LEN = CAP_OFF + 2*CAPN + 2;
     localparam integer BIT_NS = 174*50;   // 174 clocks of 50 ns
 
     reg clk = 1'b0;
@@ -111,7 +111,7 @@ module tb_census;
         check(frame[7]==CAPN, "capture depth matches");
 
         crc = 16'hFFFF;
-        for (i = 4; i < CAP_OFF + 4*CAPN; i = i + 1) crc = crc16_step(crc, frame[i]);
+        for (i = 4; i < CAP_OFF + 2*CAPN; i = i + 1) crc = crc16_step(crc, frame[i]);
         check(frame[FRAME_LEN-2]==crc[15:8] && frame[FRAME_LEN-1]==crc[7:0], "CRC-16");
 
         for (i = 0; i < NPINS; i = i + 1) begin
