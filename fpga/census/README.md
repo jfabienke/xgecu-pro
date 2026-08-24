@@ -280,6 +280,39 @@ thread for decoding the command encoding:
 (around 60-78), consistent with a command field in the middle lines while the
 extremes carry something near-static.
 
+## CORRECTION: that bit tracks success, not operation — measured 2026-08-24
+
+Five chips swept in the operation-block window, all 45 packets CRC-valid, and
+**all five identical** -- including `AM28C64A`, a different family from the
+Winbond parts (Atmel EEPROM vs EPROM). So the operation block is chip-independent
+as well as operation-independent.
+
+That sweep also overturns the finding below. Register `0x24`, payload word 1:
+
+| run | exit | word 1 |
+|---|---|---|
+| `erase` earlier | **0** | `8000` |
+| `detect` earlier | 1 | `0000` |
+| `erase` this sweep, x5 | 1 | `0000` |
+
+The bit follows **whether the operation completed**, not which operation it was.
+The earlier erase-versus-detect comparison was confounded: erase happened to
+succeed and detect to fail, and `erase` is intermittent. A *failing* erase emits
+exactly the same bytes as a failing detect.
+
+**So "the operation is selected by one bit" is withdrawn.** What survives is the
+register-file reading itself -- USDF as an address, payload as contents -- which
+rests on the descending address runs, the sparse single-bit payloads, and `0x24`
+recurring with different contents. That does not depend on the erase/detect
+comparison.
+
+**And the open question is back, sharper:** nothing captured so far distinguishes
+one operation from another. Packets 0-8 are identical across operations and
+chips; packets 9-17 are identical across operations and chips. Whatever selects
+the operation is either past packet 17, or is not in the HSPI stream at all.
+Comparisons from here must control for exit status, since a failed run truncates
+the sequence.
+
 ## What selects the operation: one bit — measured 2026-08-24
 
 `erase` versus `detect`, same chip, operation block window (`SKIP=63`). Nine
