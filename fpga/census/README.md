@@ -280,6 +280,36 @@ thread for decoding the command encoding:
 (around 60-78), consistent with a command field in the middle lines while the
 extremes carry something near-static.
 
+## What selects the operation: one bit — measured 2026-08-24
+
+`erase` versus `detect`, same chip, operation block window (`SKIP=63`). Nine
+packets each; **exactly one differs, in exactly one bit**:
+
+| | TSQN 15, USDF `0x24` |
+|---|---|
+| `erase` | `0000 `**`8000`**` 0002 0000` |
+| `detect` | `0000 `**`0000`**` 0002 0000` |
+
+Every USDF value and every other payload word is byte-identical across all
+eighteen packets, on top of the nine init packets already known to match.
+
+**This reframes the protocol.** The operation is not encoded in USDF. USDF is a
+**register/table index** and the operation is selected by a control bit in the
+payload written to index `0x24`. What the MCU sends is not a command stream but
+a **register file being written**:
+
+- the descending USDF runs (`0x22 0x21 0x20 0x1F`, `0x26 0x25 0x24`, `0x29 0x28`)
+  are sequential register addresses, not opcodes
+- the sparse single-bit payloads are individual control bits
+- `0x0064` is an ordinary numeric parameter
+- `0x24` recurring at packets 8, 15 and 19 with different payloads each time is
+  one register being rewritten, not a command reissued
+
+That also explains why every earlier attempt to find an opcode failed: there
+isn't one. It explains why the init block is identical across operations and
+chips -- it is generic register setup -- and why operations of very different
+length (erase 21 packets, detect 23, write 44) share so much structure.
+
 ## The complete erase command sequence — measured 2026-08-24
 
 Three capture windows (`SKIP` = 0, 63, 126) cover all 21 packets of an erase.
