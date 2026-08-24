@@ -48,7 +48,8 @@ module t76_census #(
 localparam integer CLK_HZ    = 20_000_000;
 localparam integer BAUD      = 115200;
 localparam integer BAUD_DIV  = CLK_HZ / BAUD;          // 173.6 -> 174, 0.2% error
-localparam integer CAPN      = 63;   // 9 whole packets of 7 words                     // captured HSPI words
+localparam integer CAPN      = 63;
+localparam integer SKIP      = 63;   // window start, in words   // 9 whole packets of 7 words                     // captured HSPI words
 localparam integer HDR       = 8;                      // preamble+version+npins+ndetail+capn
 localparam integer EDGE_OFF  = HDR + 3*NBYTES;         // transition counters
 localparam integer STAT_OFF  = EDGE_OFF + 2*NDETAIL;   // capwords, bursts
@@ -131,14 +132,36 @@ assign htrdy = htreq_s1;   // ready whenever asked
 // as the HTCLK transition counter does. So the capture runs on HTCLK itself,
 // which is what a real HSPI receiver does.
 reg [15:0] capbuf [0:CAPN-1];
-reg [7:0]  capcnt   = 8'd0;    // words captured in the current burst
+reg [7:0]  capcnt   = 8'd0;
+reg [7:0]  skipped  = 8'd0;    // words captured in the current burst
 reg [15:0] capwords = 16'd0;   // total valid words seen, saturating
 reg [15:0] bursts   = 16'd0;   // HTVLD rising edges, saturating
 reg        htvld_d  = 1'b0;
 integer ci;
 initial for (ci = 0; ci < CAPN; ci = ci + 1) capbuf[ci] = 16'd0;
 
+// Registers in the HTCLK domain do NOT take their declared initial values:
+// HTCLK free-runs during FPGA configuration, so they clock before
+// initialisation settles. Measured twice -- capfull came up set, which stopped
+// the capture writing at all, and skipped came up >= SKIP, which bypassed the
+// window offset. Both looked like logic bugs and were neither.
+//
+// The 20 MHz domain does initialise reliably, so it arms this one. The two-flop
+// synchroniser converges on arm's real value within two HTCLK edges whatever
+// those flops powered up as, so the clear always happens.
+reg [15:0] arm_cnt = 16'd0;
+reg        arm     = 1'b0;
+always @(posedge i_clock_20M)
+    if (!arm) begin
+        arm_cnt <= arm_cnt + 16'd1;
+        if (arm_cnt == 16'hFFFF) arm <= 1'b1;
+    end
+
+reg arm_s0 = 1'b0, arm_s1 = 1'b0;
+
 always @(posedge HTCLK) begin
+    arm_s0 <= arm;
+    arm_s1 <= arm_s0;
     htvld_d <= HTVLD;
     // capcnt is deliberately NOT rewound at each burst. Rewinding meant the
     // buffer always held the *last* burst, and which packet that turned out to
@@ -149,15 +172,28 @@ always @(posedge HTCLK) begin
     //
     // One capture per upload, therefore. Uploads are cheap and erase does not
     // wedge, so a data point costs an upload plus two erases.
+    if (!arm_s1) begin
+        skipped  <= 8'd0;
+        capcnt   <= 8'd0;
+        capwords <= 16'd0;
+        bursts   <= 16'd0;
+    end else begin
     if (HTVLD && !htvld_d) begin
         if (bursts != 16'hFFFF) bursts <= bursts + 16'd1;
     end
     if (HTVLD) begin
-        if (capcnt < CAPN[7:0]) begin
+        // Skip SKIP words before capturing, so the window can be moved along the
+        // sequence without widening the frame. 63 words is 9 packets, and the
+        // frame stays at 241 bytes -- under the 255 an 8-bit byte index can
+        // address. SKIP = 0 gives packets 0-8, 63 gives 9-17, 126 gives 18-20.
+        if (skipped < SKIP[7:0])
+            skipped <= skipped + 8'd1;
+        else if (capcnt < CAPN[7:0]) begin
             capbuf[capcnt] <= hd_bus[15:0];
             capcnt <= capcnt + 8'd1;
         end
         if (capwords != 16'hFFFF) capwords <= capwords + 16'd1;
+    end
     end
 end
 

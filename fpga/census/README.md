@@ -280,6 +280,25 @@ thread for decoding the command encoding:
 (around 60-78), consistent with a command field in the middle lines while the
 extremes carry something near-static.
 
+## USDF is not an opcode — measured 2026-08-24
+
+`erase` and `detect`, same chip, deterministic capture position: **all nine
+opening packets byte-identical**, same USDF, same payloads, every CRC valid.
+
+Two entirely different operations issue the same opening. Combined with four
+chip capacities also opening identically, the reading is:
+
+**The first ~9 packets are a fixed initialisation sequence, independent of both
+operation and chip.** The descending USDF values -- `0x22 0x21 0x20 0x1F`,
+`0x26 0x25 0x24`, `0x29 0x28` -- are a **table walk**, not commands, and the
+sparse single-bit payloads (`0x0080`, `0x0020`, `0x8000`) are that table's
+contents being loaded one entry at a time.
+
+That also explains the packet counts measured earlier: erase 21, detect and
+read 23, write 44. If roughly the first nine are shared setup, operations
+diverge **later**, and everything that distinguishes them lies past a 9-packet
+window. The opcode hunt was looking at the wrong end of the sequence.
+
 ## PROVEN: the packet framing, by CRC — measured 2026-08-24
 
 With the capture position fixed, the erase command stream decodes and the
