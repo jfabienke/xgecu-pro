@@ -280,6 +280,49 @@ thread for decoding the command encoding:
 (around 60-78), consistent with a command field in the middle lines while the
 extremes carry something near-static.
 
+## PROVEN: the packet framing, by CRC — measured 2026-08-24
+
+With the capture position fixed, the erase command stream decodes and the
+framing is confirmed rather than inferred.
+
+**Determinism control first.** Seven upload-and-erase cycles produced seven
+byte-identical captures across all 16 words, sequence field included. The same
+experiment previously varied in six of twelve words. No cross-run comparison
+below this line should be trusted without that control passing.
+
+**Capture, identical for all four capacities** (32K, 64K, 128K, 256K):
+
+```
+[ 0] 0022  [ 1] C000  [ 2] 0000  [ 3] 0000  [ 4] 0000  [ 5] 0000  [ 6] 80B3
+[ 7] 0021  [ 8] C400  [ 9] 0000  [10] 0000  [11] 0000  [12] 0000  [13] 4485
+```
+
+**The first packet of an erase is chip-independent** -- a fixed setup packet.
+That is the properly-controlled version of the earlier "per-chip parameter
+block", which was an artifact of comparing non-corresponding packets.
+
+**Framing, proven:**
+
+| field | value |
+|---|---|
+| packet | 2 header words + 4 payload + 1 CRC = **7 words** |
+| header | `TLL2B[31:30]`, `TSQN[29:26]`, `USDF[25:0]` -- as datasheet 10.2.2 |
+| CRC | poly `0x8005`, init `0xFFFF`, refin, refout, xorout `0xFFFF`, LE bytes |
+| headers seen | `0xC0000022` then `0xC4000021` |
+| TSQN | 0 then 1 -- increments per packet, as 10.2.2 describes |
+| USDF | `0x22` then `0x21` -- the command field |
+
+The CRC parameters were found by search over standard CRC-16 variants and
+**match both packets simultaneously**. Two independent 16-bit values agreeing on
+one parameter set is not coincidence, so the packet boundaries, the header
+layout and the CRC are established fact. The datasheet gave the polynomial;
+this pins the full parameterisation.
+
+**What this unlocks.** Packets can now be parsed rather than eyeballed: split on
+7-word boundaries, verify the CRC, read TSQN and USDF. Differential work moves
+from "which words differ" to "which USDF values correspond to which operation
+and parameter", which is the actual protocol.
+
 ## CORRECTION: the captured words are not parameters — measured 2026-08-24
 
 Seven identical `erase W27C512@DIP28` runs, back to back, same chip, nothing
