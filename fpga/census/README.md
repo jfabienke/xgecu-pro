@@ -280,6 +280,42 @@ thread for decoding the command encoding:
 (around 60-78), consistent with a command field in the middle lines while the
 extremes carry something near-static.
 
+## Packets 9-15, and the init block repeats — measured 2026-08-24
+
+Moving the capture window with `SKIP=63` reaches the next nine packets. A
+distinct USDF range appears, and the sequence number wraps exactly as 10.2.2
+describes (0-15):
+
+| TSQN | USDF | payload |
+|---|---|---|
+| 9 | `0x27` | |
+| 10 | `0x3C` | |
+| 11 | `0x0E` | |
+| 12 | `0x3B` | `0064` |
+| 13 | `0x38` | |
+| 14 | `0x0E` | |
+| 15 | `0x22` | |
+| 0 | `0x21` | |
+| 1 | `0x26` | `0080` |
+
+Two things follow.
+
+**A second command range exists.** `0x38`-`0x3C` and `0x0E` are nowhere in the
+opening block's `0x1F`-`0x29`, and `0x0E` repeats at TSQN 11 and 14. The first
+real numeric parameter also appears here: `0x0064` (100).
+
+**The initialisation block repeats.** From TSQN 15 the sequence restarts with
+`0x22`, `0x21`, `0x26` + payload `0x0080` -- byte-identical to packets 0, 1 and
+2. So an erase issues that block twice, which accounts for 21 packets rather
+than the ~15 one block takes.
+
+**Regression, unexplained.** `erase` began failing consistently (exit 1) at this
+point, having run reliably all session. Changes since the last reliable build
+are capture-side only -- 16-bit words, `SKIP`, the arming logic -- and none touch
+the HTRDY handshake, though every rebuild is a fresh place-and-route so timing
+could have shifted. Not diagnosed. If erase reliability is needed, the build at
+`b01196f` is the last one measured working.
+
 ## USDF is not an opcode — measured 2026-08-24
 
 `erase` and `detect`, same chip, deterministic capture position: **all nine
