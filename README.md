@@ -199,6 +199,43 @@ submission/     Those dumps written up for preservation archives
 hardware/       USB identity notes for the T76
 ```
 
+## Running our own logic on the T76's FPGA
+
+The T76's programming engine is an Anlogic **EG4X20** FPGA that the MCU
+reconfigures per operation. That configuration path is open, so the board will
+run bitstreams of our own — and [`fpga/census/`](fpga/census/) does, as a
+working instrument rather than a demo.
+
+What it does, all hardware-verified:
+
+- **Loads a custom bitstream** built with Anlogic TD, converted and uploaded
+  over the ordinary USB path (`BEGIN_BS`/`BS_BLOCK`/`END_BS`).
+- **Reads 99 board nets** — every ZIF pin, ISP pin, MCU-link line, the
+  configuration straps — reporting level, activity and transition counts.
+- **Streams results to the host** over a UART on the ISP header, decoded by
+  [`decode_census.py`](fpga/census/decode_census.py). Tens of thousands of
+  bytes, CRC-checked, reproducible run to run.
+- **Captures the MCU↔FPGA HSPI traffic** and decodes it into packets with
+  [`parse_packets.py`](fpga/census/parse_packets.py).
+
+Findings worth naming, with the evidence in the census README:
+
+- The link is **plaintext**, not AES or SM4 — entropy 2.7 bits against a 16-bit
+  maximum. That was the risk that would have ended the effort.
+- The bus is **16-bit**, and the packet framing is **proven by CRC**: 7 words,
+  header per CH569 §10.2.2, poly `0x8005`.
+- `Cpu: 33` on ball `T2` is the FPGA's **`program_b`**, not a data line.
+- **`USDF` is a register address, not an opcode** — the MCU writes an FPGA
+  register file rather than issuing commands.
+- And the limit: **a resident instrument cannot see what distinguishes one
+  operation from another**, because the MCU branches on what the FPGA reports
+  back and ours reports nothing meaningful. Every operation fails at the same
+  point and runs a common abort path.
+
+Together these make the FPGA usable for purposes of our own — a memory tester,
+say — without needing the vendor's protocol at all: custom logic in the fabric,
+results out over the ISP UART.
+
 ## Documentation
 
 Reverse-engineering and analysis, useful independently of the Rust code:
@@ -210,6 +247,8 @@ Reverse-engineering and analysis, useful independently of the Rust code:
 | [`firmware-updater.md`](docs/firmware-updater.md) | The `updateT76.dat` container and the bootloader flashing sequence |
 | [`ch569-usb3-notes.md`](docs/ch569-usb3-notes.md) | The CH569 USB 3.0 stack and the macOS SuperSpeed failure |
 | [`t76-dram-tester-feasibility.md`](docs/t76-dram-tester-feasibility.md) | Could the T76 test DRAM? The MCU↔FPGA link is CH569 HSPI; what a custom bitstream would take |
+| [`fpga/census/README.md`](fpga/census/README.md) | **Custom FPGA bitstreams on the T76** — a 99-pin instrumentation design, the HSPI packet format proven by CRC, and where a resident instrument stops being able to see |
+| [`fpga/TOOLCHAIN.md`](fpga/TOOLCHAIN.md) | Building `eagle_20` bitstreams with Anlogic TD, and why no open-source flow exists for this part |
 | [`open-source-status.md`](docs/open-source-status.md) | Landscape of open-source T76 support |
 | [`minipro-codebase-report.md`](docs/minipro-codebase-report.md) | Review of the upstream C implementation |
 | [`minipro-setup.md`](docs/minipro-setup.md) | Building the C fork locally — the reference this project is checked against |
