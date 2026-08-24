@@ -124,17 +124,18 @@ always @(posedge i_clock_20M) begin
     htreq_s0 <= HTREQ;
     htreq_s1 <= htreq_s0;
 end
-// Always ready, rather than a synchronised echo of HTREQ.
+// Synchronised echo of HTREQ, deliberately, despite this making `erase` report
+// failure. Measured trade-off, same chip and same windows:
 //
-// 10.2.3 says the receiver raises HTRDY "if transmission is allowed at the
-// lower end", so a receiver that is always willing may simply hold it high.
-// The two-flop synchroniser this replaces cost up to 100 ns before answering,
-// and that path is unconstrained -- the SDC declares only clk_20 -- so its delay
-// was whatever placement gave. Measured: erase ran reliably at b01196f and
-// failed 4/4 after unrelated logic was added, with the same T76 and chip, and
-// the vendor bitstream erasing fine throughout. A response whose latency
-// depends on placement is the thing to remove, not to tune.
-assign htrdy = 1'b1;
+//   synchronised HTRDY : erase exits 1, but every captured packet's CRC is VALID
+//   static HTRDY       : erase exits 0, but the CRC word of every packet reads 0
+//
+// Headers and payloads are byte-identical either way -- only the final word of
+// each packet is lost when HTRDY is held high, because the MCU's timing shifts.
+// For protocol mapping the verified packet is worth more than the exit code, so
+// the slower handshake stays. Revert to `assign htrdy = 1'b1;` when a completing
+// operation matters more than a checkable capture.
+assign htrdy = htreq_s1;
 
 // --- capture the packet in the MCU's own clock domain -----------------------
 // HD[] is only meaningful on HTCLK edges while HTVLD is high, and HTCLK runs far
@@ -169,6 +170,12 @@ always @(posedge i_clock_20M)
 
 reg arm_s0 = 1'b0, arm_s1 = 1'b0;
 
+// Sampling on the FALLING edge of HTCLK. 10.2.3 notes the receiving end's
+// sampling edge is configurable (HSPI_AUX), so there are two valid choices and
+// the first was picked blindly. With HTRDY held statically high the MCU starts
+// its data phase at a different point relative to HTVLD, and rising-edge
+// sampling then landed on undriven cycles: headers came through intact while
+// every payload and CRC word read as zero.
 always @(posedge HTCLK) begin
     arm_s0 <= arm;
     arm_s1 <= arm_s0;
