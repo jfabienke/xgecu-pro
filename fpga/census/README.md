@@ -280,6 +280,48 @@ thread for decoding the command encoding:
 (around 60-78), consistent with a command field in the middle lines while the
 extremes carry something near-static.
 
+## CORRECTION: the captured words are not parameters — measured 2026-08-24
+
+Seven identical `erase W27C512@DIP28` runs, back to back, same chip, nothing
+varied:
+
+| run | [0] | [5] | [7] |
+|---|---|---|---|
+| 0 | `D400` | `3BC9` | `D800` |
+| 1 | `E400` | `B52C` | `E800` |
+| 2 | `F400` | `4DD9` | `F800` |
+| 3 | `D800` | `8C15` | `C800` |
+| 4 | `E800` | `5744` | `EC00` |
+| 5 | `F800` | `FA05` | `FC00` |
+| 6 | `C800` | `74E0` | `CC00` |
+
+Words 0 and 7 **vary between identical runs**, cycling `C800 D400 D800 E400
+E800 F400 F800` -- top nibble stepping C-D-E-F with bit 11 toggling. That is a
+sequence number, which 10.2.2 says hardware increments after each successful
+transmission (`TSQN`). The only words stable across all seven are [1], [3], [4],
+[8], [10], [11] -- and every one is zero.
+
+**Two findings below this section are withdrawn:**
+
+- The **"opcode at bit 12"** reading. The `0x1000` delta between `erase` and
+  `detect` lies inside the range those words wander across identical runs, so
+  it is consistent with sequence drift rather than a command field.
+- The **"per-chip parameter block"** reading. Word 0 across four chips gave
+  `C000 D000 F400 C400`, all inside the same `C/D/E/F` x `x000/x400/x800`
+  family as this noise. What looked like parameters was very likely the counter.
+
+**Root cause.** The capture keeps the *most recent* burst and `capcnt` resets at
+every burst start, so which packet is captured depends on where the run happens
+to stop. Every cross-run comparison so far compared arbitrary, non-corresponding
+packets and read the difference as meaning.
+
+**The fix, and how to know it worked.** Capture a deterministic packet -- the
+first burst after arming -- so the same position is compared each time. This is
+the one-shot idea again, but now with a reason rather than as extra mechanism,
+and with a control to verify it: seven identical runs must produce seven
+identical captures. Do not trust any cross-run comparison until that control
+passes.
+
 ## Reading the command words — measured 2026-08-24
 
 Reverting the capture to exactly `a93f729` restored it. Everything added after
