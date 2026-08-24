@@ -280,6 +280,55 @@ thread for decoding the command encoding:
 (around 60-78), consistent with a command field in the middle lines while the
 extremes carry something near-static.
 
+## The complete erase command sequence — measured 2026-08-24
+
+Three capture windows (`SKIP` = 0, 63, 126) cover all 21 packets of an erase.
+Every window was byte-identical across repeated upload-and-erase cycles.
+
+| pkt | TSQN | USDF | payload | block |
+|---:|---:|---|---|---|
+| 0 | 0 | `0x22` | | init |
+| 1 | 1 | `0x21` | | init |
+| 2 | 2 | `0x26` | `0080` | init |
+| 3 | 3 | `0x29` | | init |
+| 4 | 4 | `0x20` | | init |
+| 5 | 5 | `0x25` | `0020` (word 2) | init |
+| 6 | 6 | `0x28` | | init |
+| 7 | 7 | `0x1F` | | init |
+| 8 | 8 | `0x24` | `8000` | init |
+| 9 | 9 | `0x27` | | **operation** |
+| 10 | 10 | `0x3C` | | operation |
+| 11 | 11 | `0x0E` | | operation |
+| 12 | 12 | `0x3B` | `0064` | operation |
+| 13 | 13 | `0x38` | | operation |
+| 14 | 14 | `0x0E` | | operation |
+| 15 | 15 | `0x22`/`0x24` | | init again |
+| 16 | 0 | `0x21`/`0x27` | | init again |
+| 17 | 1 | `0x26` | `0080` | init again |
+| 18 | 2 | `0x01` | | tail |
+| 19 | 3 | `0x24` | `8000` | tail |
+| 20 | 4 | `0x27` | | tail |
+
+**Structure.** A ~9-packet init block, a ~6-packet operation block, the init
+block again, then a 3-packet tail. The init block is identical across `erase`
+and `detect` and across four chip capacities, so it is generic socket setup;
+only the operation block should carry what distinguishes one operation from
+another.
+
+**Command ranges.** Init uses `0x1F`-`0x29` in three interleaved descending
+runs. The operation block uses a different range -- `0x38`-`0x3C` plus `0x0E`,
+with `0x0E` appearing twice -- and carries the only non-trivial numeric
+parameter seen, `0x0064`.
+
+**Caveat on packets 15-17.** Those straddle a window boundary and were captured
+in different runs; the two readings disagree (`0x22`/`0x21` versus
+`0x24`/`0x27`). Treat that row as unsettled until captured within one window.
+
+**Correction to the handshake trade-off recorded below.** `erase` exited 0 with
+the synchronised HTRDY in this window, having failed 4/4 in the previous one.
+So the failure is not a clean function of the handshake choice; it is
+intermittent, and the earlier characterisation was too confident.
+
 ## Packets 9-15, and the init block repeats — measured 2026-08-24
 
 Moving the capture window with `SKIP=63` reaches the next nine packets. A
