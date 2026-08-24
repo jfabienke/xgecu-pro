@@ -280,6 +280,40 @@ thread for decoding the command encoding:
 (around 60-78), consistent with a command field in the middle lines while the
 extremes carry something near-static.
 
+## The limit, demonstrated: the instrument prevents the divergence — 2026-08-24
+
+`read` and `erase` captured in the tail window (`SKIP=126`), **both exiting 1**,
+so for once the truncation state matches and the comparison is clean. Both
+produce byte-identical packets: TSQN 2-6, USDF `0x37 0x3A 0x32 0x33 0x04`,
+payload `0008` on the first and zeros after.
+
+That completes the coverage:
+
+| packets | compared | result |
+|---|---|---|
+| 0-8 | erase vs detect, five chips | identical |
+| 9-17 | erase vs detect, five chips | identical |
+| 18-22 | erase vs read, both failing | identical |
+
+**Every observable packet is the same regardless of operation.** A second clue
+sits in the same data: this *failing* erase emitted five tail packets over a
+register set (`0x37 0x3A 0x32 0x33 0x04`) that the earlier *succeeding* erase
+never touched -- its tail was three packets, `0x01 0x24 0x27`.
+
+**So the instrument prevents the divergence it exists to observe.** The MCU
+branches on what the FPGA reports back. Ours reports nothing meaningful, so
+every operation fails at the same early point and runs a common abort path.
+What has been captured all along is the shared prefix plus the failure route,
+identically for every operation. Extending the windows further cannot fix this:
+the operation-specific traffic is not late in the sequence, it is in a branch
+that never executes while an instrument occupies the FPGA.
+
+This is the boundary of what a resident instrument can reach, and it is now
+demonstrated rather than argued. Going further needs an **external tap** on the
+CH569's QFN68 leads while the **vendor** bitstream runs a real operation --
+`HD0`-`HD15`, `HTCLK`, `HTVLD` on a logic analyser. That is the only
+configuration where the traffic that distinguishes operations actually exists.
+
 ## CORRECTION: that bit tracks success, not operation — measured 2026-08-24
 
 Five chips swept in the operation-block window, all 45 packets CRC-valid, and
