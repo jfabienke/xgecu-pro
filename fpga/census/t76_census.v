@@ -124,7 +124,17 @@ always @(posedge i_clock_20M) begin
     htreq_s0 <= HTREQ;
     htreq_s1 <= htreq_s0;
 end
-assign htrdy = htreq_s1;   // ready whenever asked
+// Always ready, rather than a synchronised echo of HTREQ.
+//
+// 10.2.3 says the receiver raises HTRDY "if transmission is allowed at the
+// lower end", so a receiver that is always willing may simply hold it high.
+// The two-flop synchroniser this replaces cost up to 100 ns before answering,
+// and that path is unconstrained -- the SDC declares only clk_20 -- so its delay
+// was whatever placement gave. Measured: erase ran reliably at b01196f and
+// failed 4/4 after unrelated logic was added, with the same T76 and chip, and
+// the vendor bitstream erasing fine throughout. A response whose latency
+// depends on placement is the thing to remove, not to tune.
+assign htrdy = 1'b1;
 
 // --- capture the packet in the MCU's own clock domain -----------------------
 // HD[] is only meaningful on HTCLK edges while HTVLD is high, and HTCLK runs far
