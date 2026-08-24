@@ -140,8 +140,16 @@ initial for (ci = 0; ci < CAPN; ci = ci + 1) capbuf[ci] = 32'd0;
 
 always @(posedge HTCLK) begin
     htvld_d <= HTVLD;
+    // capcnt is deliberately NOT rewound at each burst. Rewinding meant the
+    // buffer always held the *last* burst, and which packet that turned out to
+    // be depended on where the run stopped -- so cross-run comparisons compared
+    // non-corresponding packets, and a free-running sequence number read as
+    // "chip parameters" and "an opcode". Filling once and stopping gives a
+    // deterministic position: the first words after configuration, every time.
+    //
+    // One capture per upload, therefore. Uploads are cheap and erase does not
+    // wedge, so a data point costs an upload plus two erases.
     if (HTVLD && !htvld_d) begin
-        capcnt <= 8'd0;
         if (bursts != 16'hFFFF) bursts <= bursts + 16'd1;
     end
     if (HTVLD) begin
