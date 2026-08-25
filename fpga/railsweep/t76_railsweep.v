@@ -8,18 +8,23 @@
 // which is why 42 of 48 socket positions measured as isolated: with every
 // control held at 0, nothing reaches the socket.
 //
-// This asks the cheapest question first. Four states, each announced over the
-// ISP UART, each held long enough to read:
+// PHASE 1 (done, and it settled the question). Four states were cycled while an
+// RP2040 in the socket read levels. Only "register all-ones AND gnd_oe = 0"
+// grounded the socket, so a register bit of 1 selects a position and the output
+// enables are ACTIVE LOW: 0 drives, 1 releases. Every design in this repo had
+// been holding them at 0 believing that meant off, which is why 42 socket
+// positions were recorded as "isolated" while this very design grounded them.
 //
-//     S00   register all-zero, gnd_oe = 0     <- the known-safe resting state
-//     S01   register all-zero, gnd_oe = 1
-//     S02   register all-one,  gnd_oe = 0
-//     S03   register all-one,  gnd_oe = 1
+// PHASE 2 (this file now). Walk a single 1 through the chain, one step at a
+// time, and watch which socket position grounds. That is the bit-to-position
+// mapping, read directly rather than inferred.
 //
-// If any socket position changes level across those four, we have found the
-// enable and its polarity in one run. If nothing moves, the register is longer
-// than 48 bits or the latch needs different handling -- also worth knowing, and
-// far cheaper to learn here than buried inside a 48-step walking-ones sweep.
+//     S00        register all-zero, enables released   <- baseline
+//     S01..S48   a single 1 at shift index step-1, gnd_oe asserted
+//
+// The step index rides in the UART frame, so every observation the Pico makes
+// is tagged with the pattern that produced it and no step has to be counted by
+// hand at either end.
 //
 // GND is deliberately the first domain touched. Grounding a socket pin is the
 // least dangerous thing this board can be asked to do: no VCC, no VPP, nothing
@@ -45,8 +50,22 @@ module t76_railsweep (
 
 localparam integer BAUD_DIV  = 20_000_000 / 115200;   // 173.6 -> 174
 localparam integer SHIFT_DIV = 64;                    // ~312 kHz serial clock
-localparam integer NBITS     = 48;                    // assumed chain length
-parameter  integer HOLD_TICKS = 20_000_000 * 2;        // ~2 s per state (tb overrides)
+// Chain length: 48, and that is now measured rather than assumed.
+//
+// It was briefly widened to 64 on the theory that the chain carried control
+// bits beyond the socket. The result disproved it: every step's mapping moved
+// by EXACTLY 16, which is what over-shifting a 48-bit chain by 16 looks like --
+// the surplus bits fall out the far end. A longer chain would have produced new
+// positions at the new steps, and produced none.
+//
+// The conversion that made both runs comparable, and which agrees on all 42
+// observed bits across four placements:
+//
+//     chain position = NBITS - step
+//
+localparam integer NBITS     = 48;
+localparam integer NSTEPS    = NBITS + 1;             // step 0 is the baseline
+parameter  integer HOLD_TICKS = 20_000_000 * 4;        // ~4 s per step (tb overrides)
 
 // ISP header power/ground. 26 measured at true ground (0 V) and is asserted so
 // the header keeps a reference. 27 and 28 are NOT asserted: with the beacon
@@ -74,20 +93,22 @@ assign vcc_oe = 1'b0;
 // --- experiment sequencer ---------------------------------------------------
 localparam [1:0] P_SHIFT = 2'd0, P_LATCH = 2'd1, P_HOLD = 2'd2;
 
-reg [1:0]  state   = 2'd0;      // which of the four experiments
+reg [7:0]  state   = 8'd0;      // 0 = baseline, 1..48 = walking one
 reg [1:0]  phase   = P_SHIFT;
 reg [31:0] holdcnt = 32'd0;
 reg [15:0] divcnt  = 16'd0;
-reg [6:0]  bitcnt  = 7'd0;
+reg [7:0]  bitcnt  = 8'd0;
 reg        sclk    = 1'b0;
 reg        sdat    = 1'b0;
 reg        g_le    = 1'b0;
 reg        g_oe    = 1'b0;
 
-// state[1] selects the register pattern, state[0] the output-enable level, so
-// the four experiments are just the two bits counted through.
-wire pattern_bit = state[1];
-wire oe_level    = state[0];
+// Step 0 shifts all zeros and releases the enables, so the socket's resting
+// state is visible between sweeps and drift is obvious. Every other step drives
+// exactly one bit, and asserts the (active-low) enable to put it on the socket.
+wire baseline    = (state == 8'd0);
+wire pattern_bit = !baseline && (bitcnt == state - 8'd1);
+wire oe_level    = baseline ? 1'b1 : 1'b0;
 
 wire tick = (divcnt == SHIFT_DIV[15:0] - 16'd1);
 
@@ -96,18 +117,18 @@ always @(posedge i_clock_20M) begin
 
     case (phase)
     P_SHIFT: begin
-        // Output enable is held OFF while the pattern is clocked in, so a
-        // half-shifted register is never driven onto the socket.
-        g_oe <= 1'b0;
+        // Enables RELEASED while the pattern is clocked in, so a half-shifted
+        // register is never driven onto the socket. Active low, so that is 1.
+        g_oe <= 1'b1;
         g_le <= 1'b0;
         if (tick) begin
             sclk <= ~sclk;
             if (!sclk) begin              // about to rise: present the data
                 sdat <= pattern_bit;
             end else begin                // just fell: count the bit
-                bitcnt <= bitcnt + 7'd1;
-                if (bitcnt == NBITS[6:0] - 7'd1) begin
-                    bitcnt <= 7'd0;
+                bitcnt <= bitcnt + 8'd1;
+                if (bitcnt == NBITS[7:0] - 8'd1) begin
+                    bitcnt <= 8'd0;
                     phase  <= P_LATCH;
                 end
             end
@@ -125,8 +146,8 @@ always @(posedge i_clock_20M) begin
     P_HOLD: begin
         g_oe <= oe_level;
         if (holdcnt == HOLD_TICKS[31:0] - 32'd1) begin
-            g_oe  <= 1'b0;                // always leave OFF between states
-            state <= state + 2'd1;
+            g_oe  <= 1'b1;                // release between steps (active low)
+            state <= (state == NSTEPS[7:0] - 8'd1) ? 8'd0 : state + 8'd1;
             phase <= P_SHIFT;
         end else begin
             holdcnt <= holdcnt + 32'd1;
@@ -187,7 +208,9 @@ function tx_bit;
     end
 endfunction
 
-assign uart_tx = tx_bit(8'h30, 8'h30 + {6'd0, state}, ubyte, ubit);
+wire [7:0] tens  = 8'h30 + (state / 8'd10);
+wire [7:0] units = 8'h30 + (state % 8'd10);
+assign uart_tx = tx_bit(tens, units, ubyte, ubit);
 
 endmodule
 

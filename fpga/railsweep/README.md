@@ -49,10 +49,64 @@ hardware, and all of them passed before synthesis:
 - latch enable and output enable never overlapping
 - no VPP or VCC control moving at all during phase 1
 
+## Phase 2 — the bit-to-position map
+
+Walking a single `1` through the chain, across four board placements. The step
+index rides in the UART frame, so every observation is tagged with the pattern
+that produced it.
+
+**Chain length is 48, and that is measured.** It was briefly widened to 64 on
+the theory that the chain carried control bits beyond the socket. Every step's
+mapping moved by exactly 16 — which is what over-shifting a 48-bit chain by 16
+looks like, the surplus falling out the far end. A longer chain would have
+produced new positions at the new steps. It produced none.
+
+That gives the conversion, which agrees on all 42 observed bits across four
+placements and two chain widths:
+
+```
+    chain position = NBITS - step
+```
+
+### The chain is organised in groups of eight
+
+Sorted by chain position rather than step, the structure is immediate:
+
+```
+   chain 00-07  ->  Z01 Z08 Z07 Z06 Z05 Z04  __  Z02      = Z01..Z08
+   chain 08-15  ->  Z09 Z12 Z11 Z10 Z16 Z15 Z14 Z13      = Z09..Z16
+   chain 16-23  ->   __ Z17 Z18 Z19 Z20  __   __ Z21      = Z17..Z24
+   chain 24-31  ->  Z32 Z29 Z30 Z31 Z28  __ Z26 Z25      = Z25..Z32
+   chain 32-39  ->  Z33 Z37 Z38 Z39 Z40 Z34 Z35 Z36      = Z33..Z40
+   chain 40-47  ->  Z41 Z45  __  Z47 Z48 Z44 Z43 Z42     = Z41..Z48
+```
+
+Every group is a complete run of eight consecutive positions. The order *within*
+a group is scrambled, and not the same scramble in each group — so the grouping
+is a fact and the permutation is not yet a rule.
+
+**That closes three gaps by elimination.** A group with a single hole has only
+one position left to put in it:
+
+```
+   chain 06 -> Z03        chain 29 -> Z27        chain 42 -> Z46
+```
+
+**45 of 48 determined**: 42 measured directly, 3 forced by the structure.
+
+### Three positions that do not ground
+
+`Z22`, `Z23` and `Z24` belong to chain bits 16, 21 and 22. Those steps ran in
+both the 48-bit and 64-bit sweeps, with `Z23` on pin 02 and `Z24` on pin 01, and
+the beacon confirmed both contacts at 32 frames minutes before each run.
+**Neither ever grounded.**
+
+So either those socket positions are not in the ground chain, or those chain
+bits drive something else. Recorded as an open question rather than guessed at:
+the group structure says they should be there, and the measurement says they are
+not, and that disagreement is the interesting part.
+
 ## Next
 
-Phase 2 is walking-ones: with polarity known, walk a single `1` through the
-chain and watch which socket position grounds at each step. That gives the
-bit-to-position mapping directly, and the step index is already carried in the
-UART frame. VCC and VPP polarity confirmation comes after, and should be assumed
-active-low until measured — with the socket empty.
+VCC and VPP polarity, which should be assumed active-low by family until
+measured — **with the socket empty**, because VPP is 12 V+.

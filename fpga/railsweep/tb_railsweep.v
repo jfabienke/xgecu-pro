@@ -26,24 +26,28 @@ module tb_railsweep;
     defparam dut.HOLD_TICKS = 4000;     // short hold so the sim finishes
 
     integer shifted = 0;
+    integer ones    = 0;
     integer errs    = 0;
     integer states_seen = 0;
-    reg [1:0] last_state;
+    reg [7:0] last_state;
     reg last_sclk = 1'b0;
 
     // Count rising edges of the serial clock, and police the safety rule.
     always @(posedge clk) begin
         if (ser_clk && !last_sclk) begin
             shifted = shifted + 1;
-            if (gnd_oe !== 1'b0) begin
-                $display("FAIL: gnd_oe asserted while shifting (bit %0d)", shifted);
+            if (ser_data) ones = ones + 1;
+            // Active low: released is 1. Driving a half-shifted register onto
+            // the socket is the thing this must never do.
+            if (gnd_oe !== 1'b1) begin
+                $display("FAIL: gnd_oe ASSERTED while shifting (bit %0d)", shifted);
                 errs = errs + 1;
             end
         end
         last_sclk <= ser_clk;
 
-        if (gnd_le && gnd_oe) begin
-            $display("FAIL: latch enable and output enable overlap");
+        if (gnd_le && !gnd_oe) begin
+            $display("FAIL: latch enable while output enable asserted");
             errs = errs + 1;
         end
         if (vpp_le || vcc_le || vpp_oe || vcc_oe) begin
@@ -57,13 +61,24 @@ module tb_railsweep;
         last_state = dut.state;
         forever begin
             @(dut.state);
-            $display("  state %0d -> %0d after %0d shift clocks (pattern=%b oe_level=%b)",
-                     last_state, dut.state, shifted, dut.pattern_bit, dut.oe_level);
+            $display("  step %0d -> %0d : %0d shift clocks, %0d bit(s) set",
+                     last_state, dut.state, shifted, ones);
             if (shifted != 48) begin
                 $display("FAIL: expected 48 shift clocks, saw %0d", shifted);
                 errs = errs + 1;
             end
-            shifted = 0;
+            // Exactly one bit per walking step, none on the baseline. A step
+            // that sets two would ground two positions and make the mapping
+            // ambiguous without ever looking wrong in the output.
+            if (last_state == 0 && ones != 0) begin
+                $display("FAIL: baseline step shifted %0d ones, expected 0", ones);
+                errs = errs + 1;
+            end
+            if (last_state != 0 && ones != 1) begin
+                $display("FAIL: step %0d shifted %0d ones, expected 1", last_state, ones);
+                errs = errs + 1;
+            end
+            shifted = 0; ones = 0;
             last_state = dut.state;
             states_seen = states_seen + 1;
         end
@@ -87,7 +102,7 @@ module tb_railsweep;
     end
 
     initial begin
-        #40_000_000;                            // ~40 ms, several states
+        #200_000_000;                            // ~40 ms, several states
         $display("");
         if (states_seen < 3) begin
             $display("FAIL: only %0d state transitions in the run", states_seen);

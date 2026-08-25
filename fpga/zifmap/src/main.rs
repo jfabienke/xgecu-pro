@@ -479,13 +479,40 @@ fn report(buf: &[u32], pass: u32, out: &mut Out<'_, '_>, delay: &mut cortex_m::d
     // The sweep announces its state on GP16. Silent here simply means no sweep
     // is running -- the beacon does not use this channel.
     let step = decode(buf, STEP_CH);
-    l.clear();
-    if step.name_hits > 0 {
+
+    // Sweep mode gets ONE line per pass, not the full table. A 49-step walk at
+    // table width is four thousand lines to read for what is, per step, a
+    // single fact: which position went to ground. Listing only the grounded
+    // channels also makes a step that grounds two -- which would make the
+    // mapping ambiguous -- visible instead of buried.
+    // The leading letter is what distinguishes the two designs, and checking it
+    // is not pedantry: with the beacon loaded, GP16 decodes "J07" from the ISP
+    // header, which has a name and a frame count and looks exactly like a sweep
+    // state. Without this the tool drops into sweep mode under the beacon, and
+    // reports pull-probe noise off sixteen actively transmitting channels as if
+    // it were a grounding result.
+    if step.name_hits > 0 && step.name[0] == b'S' {
+        l.clear();
         let n = core::str::from_utf8(&step.name).unwrap_or("???");
-        let _ = write!(l, "RAIL SWEEP STATE: {}   ({} frames on GP{})", n, step.name_hits, STEP_CH);
-    } else {
-        let _ = write!(l, "no sweep state on GP{} (beacon mode, or no jumper)", STEP_CH);
+        let _ = write!(l, "{}  gnd:", n);
+        let mut any = false;
+        for (i, slot) in LEFT_ROW.iter().enumerate() {
+            let Some(ch) = *slot else { continue };
+            let (pu, pd) = pull_probe(ch, delay);
+            if pu == 0 && pd == 0 {
+                any = true;
+                let _ = write!(l, " pin{:02}", i + 1);
+            }
+        }
+        if !any {
+            let _ = write!(l, " none");
+        }
+        out.line(&l);
+        return;
     }
+
+    l.clear();
+    let _ = write!(l, "no sweep state on GP{} (beacon mode, or no jumper)", STEP_CH);
     out.line(&l);
 
     l.clear();
@@ -693,6 +720,6 @@ fn main() -> ! {
         // Re-run continuously so wires can be moved and the map re-read without
         // reflashing. Nothing is driven into the socket; every channel is a
         // pulled-down input.
-        out.idle(&mut delay, 3000);
+        out.idle(&mut delay, 1200);
     }
 }
