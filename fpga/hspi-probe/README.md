@@ -5,8 +5,21 @@ half is new; the combination is. The answering endpoint was built in `ef467fc`
 and the working capture is the one restored by reverting to `a93f729` — and that
 revert removed the answering code, so the two have never existed together.
 
-**Status: compiles. Not simulated against a testbench, not synthesised, never
-run.** Everything below is the plan and the reasoning, not a result.
+**Status: simulated, not synthesised, never run on hardware.**
+
+`tb_txrx.v` passes every check, including the two that matter for the board:
+
+```
+   DUT raised HRACT
+   DUT raised HRVLD and is transmitting
+   words out: 0000 0000 | 0000 0001 0002 0003 0004 0005 | crc f34e
+   transmitter: all checks passed
+```
+
+The safety checks are "NEVER drove HD while the MCU was driving" and "released
+HD immediately when HTVLD went high". HD is a shared bus between two live chips;
+contention on it is the one failure here that damages hardware, so it is
+asserted rather than reasoned about.
 
 ## Why this exists
 
@@ -86,6 +99,36 @@ never arrives.
   like a broken board.
 - Check every rail and control signal is assigned exactly once. The VCC probe
   shipped with two continuous drivers on `vcc_oe` and `iverilog` said nothing.
+
+## What the return path is worth
+
+```
+   HRCLK 20 MHz (this design)     34 MB/s after framing
+   HRCLK 80 MHz (from HTCLK)     135 MB/s
+   USB High Speed                ~30 MB/s real bulk     <-- binding constraint
+```
+
+**The link is not the bottleneck even at 20 MHz.** HRCLK as driven already
+exceeds what USB High Speed carries past the MCU, so clocking the transmitter
+faster buys nothing. That is ~2,600x the 115200 UART and ~300x a 1 Mbaud one.
+
+But against what actually needs it:
+
+| workload | UART 115k2 | USB HS |
+|---|--:|--:|
+| PAL/GAL typical (16V8) | 0.1 s | 0.00 s |
+| PAL/GAL worst (22V10) | 227.6 s | 0.09 s |
+| DRAM march, failure list | 0.7 s | 0.00 s |
+| 48-channel capture @10 MSa/s | 5208 s | 2.00 s |
+
+Only the last genuinely wants it -- and USB HS still cannot stream it in real
+time, since 10 MSa/s across 48 channels is 60 MB/s against a 30 MB/s pipe. It
+would need on-FPGA buffering either way.
+
+So the return path is worth a great deal on paper and little in practice for
+everything scoped so far. The CH569 supports SuperSpeed at 5 Gbit/s, which would
+change that, but it is broken on this host and forced to High Speed by the USB-2
+cable that makes bulk transfers work at all.
 
 ## Operating cost, stated plainly
 
