@@ -46,26 +46,70 @@ Confirmed across offsets +24, +25, +28 on the ascending row and `25 − pin`,
 *different* Pico pin at each placement, which is what makes the result
 positional rather than an artefact of how the board was sitting.
 
-### Only a few socket contacts reach the FPGA with the rails off
+### Only six socket contacts reach the FPGA with the rails off
 
-| Row | Tested | Live |
-|---|---|---|
-| 1–24 | 1–24 | **10, 23, 24** (21 marginal) |
-| 25–48 | 25–48 except 46 | **32, 40, 44** |
+All 48 positions measured, across ten placements on both columns and both board
+orientations:
 
-Three or four live out of every sixteen tested, on both rows. With every rail
-control (`vcc_oe`, `vpp_oe`, `gnd_oe`, the shift register, the latches) held at
-`0`, the remaining contacts are isolated behind the per-pin driver network and
-float — which the Pico's pull-downs read as a stable hard low.
+```
+                       ▲  L A T C H  ▲
+            ┌──────────────────────────────────┐
+   Z01 · ┤▫                              ▫├ · Z48
+   Z02 · ┤▫                              ▫├ · Z47
+   Z03 · ┤▫                              ▫├ · Z46
+   Z04 · ┤▫                              ▫├ · Z45
+   Z05 · ┤▫                              ▫├ ● Z44
+   Z06 · ┤▫                              ▫├ · Z43
+   Z07 · ┤▫                              ▫├ · Z42
+   Z08 · ┤▫                              ▫├ · Z41
+   Z09 · ┤▫                              ▫├ ● Z40
+   Z10 ● ┤▫                              ▫├ · Z39
+   Z11 · ┤▫                              ▫├ · Z38
+   Z12 · ┤▫                              ▫├ · Z37
+   Z13 · ┤▫                              ▫├ · Z36
+   Z14 · ┤▫                              ▫├ · Z35
+   Z15 · ┤▫                              ▫├ · Z34
+   Z16 · ┤▫                              ▫├ · Z33
+   Z17 · ┤▫                              ▫├ ● Z32
+   Z18 · ┤▫                              ▫├ · Z31
+   Z19 · ┤▫                              ▫├ · Z30
+   Z20 · ┤▫                              ▫├ · Z29
+   Z21 · ┤▫                              ▫├ · Z28
+   Z22 · ┤▫                              ▫├ · Z27
+   Z23 ● ┤▫                              ▫├ · Z26
+   Z24 ● ┤▫                              ▫├ · Z25
+            └──────────────────────────────────┘
 
-This is a structural fact about the board, and it was mistaken for a contact
-problem for hours. Pressing the board down and nudging it sideways changed
-*nothing*: the same positions answered every time. **A mechanical fault varies
-when you disturb it. This didn't.**
+   ● reaches the FPGA      · isolated behind the driver network
+   confirmations: Z10 x5  Z23 x3  Z24 x2  Z32 x3  Z40 x5  Z44 x4
+```
 
-Position 21 reported `activity, no framing` rather than `stuck low` — a real
-signal too degraded to frame. Distinguishing those two is why the tool reports
-*how* a channel failed instead of just that it did.
+**Six live, forty-two isolated**, with every rail control (`vcc_oe`, `vpp_oe`,
+`gnd_oe`, the shift register, the latches) held at `0`. The isolated contacts
+float, which the Pico's pull-downs read as a stable hard low.
+
+Left/right in the diagram is arbitrary: the measurements fix each column's
+numbering *direction* and which end the latch is, but nothing in the data says
+which physical column is which. If it is mirrored, the columns swap and
+everything else holds.
+
+This was mistaken for bad socket contact for hours. Pressing the board down and
+nudging it sideways changed *nothing* — the same positions answered every time.
+**A mechanical fault varies when you disturb it. This did not.** That
+distinction is the finding, and it is what the sparse result actually means.
+
+One position, `Z21`, reported `activity, no framing` on a single pass and then
+read cleanly isolated when a different Pico pin sat on it. Recorded as
+isolated; the one anomalous reading was most likely crosstalk from a
+neighbouring channel. Repeating a measurement on different hardware is what
+settled it.
+
+**An untested hypothesis about the six.** Bottom-justified in a 48-pin socket, a
+32-pin DIP puts its pin 32 on `Z40` and a 40-pin DIP puts its pin 40 on `Z44` --
+VCC in both cases -- while chip pin N/2, commonly GND, always lands on `Z24`.
+That would make three of the six the always-connected supply positions. It does
+not explain `Z10`, `Z23` or `Z32`, and 28-pin parts would predict `Z38`, which
+is isolated. Offered as something to test, not as a conclusion.
 
 ### ISP header
 
@@ -75,7 +119,7 @@ itself rather than inherited.
 
 ### What is still unknown
 
-The other 42 socket positions need the driver network enabled, which means
+The 42 isolated positions need the driver network enabled, which means
 characterising the rail shift register — bit order and OE/LE polarity, both
 still unknown. That job is now much more tractable: this tool is a 16-channel
 parallel observer that can watch which positions come alive as patterns are
