@@ -177,10 +177,16 @@ contradicted it within the hour. One channel did report `idle-high` somewhere in
 that batch and remains unexplained; it is not recorded as a finding, because
 which pin it was on is exactly what was never established.
 
-> **The committed `.bit` files predate this fix.** `t76_beacon_out.bit` and
-> `t76_census_out.bit` were synthesised before `PINOUT_FIXES` existed, so they
-> still carry the old M4/M5 assignment. The generated sources are correct; the
-> bitstreams need a TD re-synthesis to match.
+**The fix is confirmed on silicon.** Both designs were re-synthesised through
+TD after `PINOUT_FIXES` landed, the corrected beacon was loaded, and physical
+header pins 7 and 8 now report `J07` and `J08` -- their own names, where before
+each announced the other's. 32 frames apiece, zero framing errors.
+
+`t76_census_out.bit` rebuilt **byte-identical**. That is the right answer and
+worth recording: on the census side only a label moved, and labels never reach
+the hardware. It also explains why the mislabelling never broke anything -- the
+census worked exactly as designed while telling anyone reading it to probe the
+wrong pin.
 
 ### What is still unknown
 
