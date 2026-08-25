@@ -71,7 +71,44 @@ erase. But packets 0-22 are already known identical, and **both operations abort
 inside that range**. A read never reaches its data phase, so there is nothing
 further out to capture. Widening the window captures nothing.
 
-## What replaces it
+## Result: the MCU does not read our payload at all
+
+Three response modes, each a separate build and bench run:
+
+```
+   mode 0  counter   12 frames, 1 distinct   capwords=161 bursts=23   USDF 0x37 0x3a
+   mode 1  zeros     10 frames, 1 distinct   capwords=161 bursts=23   USDF 0x37 0x3a
+   mode 3  echo      12 frames, 1 distinct   capwords=161 bursts=23   USDF 0x37 0x3a
+```
+
+**Byte-identical.** Same word count, same burst count, same USDF sequence, same
+payload, each stable across 10-12 frames so none is noise.
+
+Those are three distinct classes of response -- arbitrary, constant, and
+content-derived. Echo was the one that could have mattered: if any part of the
+exchange were a challenge the FPGA is meant to reflect, echo is the only mode
+that satisfies it. It changed nothing.
+
+So `ef467fc`'s suspicion is now measured rather than inferred:
+
+> The MCU acknowledges our packets in hardware and discards them in firmware.
+
+It discards them **without inspecting their contents**. Well-formed packets --
+correct header, sequence number, valid CRC -- are necessary and nowhere near
+sufficient.
+
+### What that narrows
+
+The question is no longer *"what bytes should we send?"* It is *"how do we get
+the firmware into a state where it reads FPGA data at all?"* Payload content is
+eliminated as a variable, which is a smaller search space than the one we
+started with, even though the result is negative.
+
+It also means the remaining route is genuinely the vendor protocol -- the
+sequence and state that convince the firmware a real operation is underway --
+and not something reachable by varying what we answer with.
+
+## The method that got here
 
 Stop observing and start perturbing. The success/failure signal already exists
 in the census notes:

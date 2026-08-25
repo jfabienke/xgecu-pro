@@ -268,7 +268,7 @@ initial for (ci = 0; ci < CAPN; ci = ci + 1) f_cap[ci] = 16'd0;
 // capture, and see whether the MCU took a different path. That turns "guess the
 // vendor protocol" into "find one input that changes the output", which is a
 // far smaller question and one with a signal to follow.
-localparam [2:0] RESPONSE_MODE = 3'd0;   // 0 counter, 1 zeros, 2 ones, 3 echo
+localparam [2:0] RESPONSE_MODE = 3'd3;   // 0 counter, 1 zeros, 2 ones, 3 echo
 
 
 // --- FPGA -> MCU transmitter -------------------------------------------------
