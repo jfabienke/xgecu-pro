@@ -1,0 +1,41 @@
+# zifmap -- RP2040 bench tool that sits in the T76's ZIF socket and reports
+# which FPGA ball drives which physical socket position.
+#
+# Not a member of the minipro-rs workspace: different target architecture,
+# different toolchain, and it is a bench instrument rather than shipped code.
+[package]
+name = "zifmap"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+cortex-m = "0.7.9"
+cortex-m-rt = "0.7.6"
+defmt = "1.1.1"
+# disable-blocking-mode is essential, not cosmetic: by default defmt-rtt blocks
+# when its buffer fills, and with no probe attached nothing ever drains it, so
+# the firmware would hang a few lines in. USB is the primary output now, so RTT
+# must degrade to "drop it" rather than "stop the world".
+defmt-rtt = { version = "1.3.0", features = ["disable-blocking-mode"] }
+heapless = "0.9.3"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+pio = "0.3.0"
+pio-proc = "0.3.0"
+portable-atomic = { version = "1.15.0", features = ["critical-section"] }
+rp2040-boot2 = "0.3.0"
+rp2040-hal = { version = "0.12.0", features = ["rt", "critical-section-impl", "defmt"] }
+static_cell = "2.1.1"
+usb-device = "0.3.2"
+usbd-serial = "0.2.2"
+
+# defmt needs debug info in the ELF; opt-level 2 keeps the sample loop honest.
+[profile.release]
+debug = 2
+lto = "fat"
+opt-level = 2
+overflow-checks = true
+
+[profile.dev]
+opt-level = 1

@@ -205,6 +205,26 @@ enum Command {
         #[arg(long)]
         wide: bool,
     },
+    /// Upload a raw FPGA bitstream and leave it running (reverse-engineering).
+    ///
+    /// Takes a T76-format `.bit` directly, with no chip and no database lookup,
+    /// which is the only way an instrumentation bitstream that belongs to no
+    /// chip can be loaded. The socket is deliberately left energized so the
+    /// design keeps running after the command returns.
+    ///
+    /// The socket should be EMPTY unless you know what the bitstream drives:
+    /// an arbitrary bitstream can drive every ZIF pin and every rail control.
+    Bitstream {
+        /// A T76-format bitstream, e.g. fpga/beacon/t76_beacon_out.bit
+        file: PathBuf,
+        /// Stay running after the upload, holding the USB session open.
+        ///
+        /// Answers "does the FPGA keep its configuration once the host
+        /// disconnects?" -- which is not a question the upload path can settle
+        /// on its own. Ctrl-C to release.
+        #[arg(long)]
+        hold: bool,
+    },
 }
 
 impl Command {
@@ -221,6 +241,7 @@ impl Command {
             Command::Logic { .. } => "logic",
             Command::Update { .. } => "update",
             Command::Autodetect { .. } => "autodetect",
+            Command::Bitstream { .. } => "bitstream",
         }
     }
 }
@@ -386,6 +407,7 @@ fn main() -> ExitCode {
         Command::Logic { chip } => run_logic(db_dir, chip, mode),
         Command::Update { file, confirm } => run_update(file, *confirm, &mut *reporter_for(mode)),
         Command::Autodetect { wide } => run_autodetect(db_dir, *wide, mode),
+        Command::Bitstream { file, hold } => run_bitstream(file, *hold, mode),
     };
 
     match result {
@@ -1019,6 +1041,58 @@ fn run_logic(db_dir: Option<&Path>, chip: &str, mode: Mode) -> Result<()> {
             dev.name,
             if pass { "PASS" } else { "FAIL" }
         ),
+    }
+    Ok(())
+}
+
+/// Upload a raw bitstream and leave the FPGA running it.
+///
+/// No `Device`, no session, and deliberately no `end()`: ending the transaction
+/// de-energizes the socket, and the entire point of loading an instrument is
+/// that it is still running when the command returns.
+fn run_bitstream(file: &Path, hold: bool, mode: Mode) -> Result<()> {
+    // MINIPRO_KEEP_BITSTREAM makes write_bitstream_named a no-op, so with it set
+    // this command would report success while uploading nothing. That failure
+    // mode -- a tool that cheerfully does nothing -- is exactly what the rest of
+    // this codebase works to avoid, so refuse instead of silently obeying.
+    if std::env::var_os("MINIPRO_KEEP_BITSTREAM").is_some() {
+        return Err(Error::Unsupported(
+            "MINIPRO_KEEP_BITSTREAM is set, which suppresses all uploads; \
+             unset it to upload a bitstream",
+        ));
+    }
+    let bits = std::fs::read(file)?;
+    if bits.is_empty() {
+        return Err(Error::Unsupported("bitstream file is empty"));
+    }
+    let name = file
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("raw")
+        .to_owned();
+
+    let mut prog = open_programmer()?;
+    let bs = prog.bitstream().ok_or(Error::Unsupported(
+        "this programmer has no FPGA to load a bitstream into",
+    ))?;
+    bs.load_bitstream(&name, &bits)?;
+
+    match mode {
+        Mode::Json => println!(
+            "{{\"op\":\"bitstream\",\"ok\":true,\"name\":{name:?},\"bytes\":{}}}",
+            bits.len()
+        ),
+        _ => anstream::println!(
+            "Uploaded {} ({} bytes). The FPGA is running it; the socket stays energized.",
+            name,
+            bits.len()
+        ),
+    }
+    if hold {
+        anstream::println!("Holding the USB session open. Ctrl-C to release.");
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
     }
     Ok(())
 }

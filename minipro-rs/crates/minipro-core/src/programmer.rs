@@ -7,8 +7,8 @@
 //! the capabilities its hardware supports.
 
 use crate::caps::{
-    Calibration, EmmcOps, FirmwareUpdate, FuseOps, JedecOps, LogicTest, MemoryOps, PinTest,
-    Protect, SpiAutodetect,
+    BitstreamLoad, Calibration, EmmcOps, FirmwareUpdate, FuseOps, JedecOps, LogicTest, MemoryOps,
+    PinTest, Protect, SpiAutodetect,
 };
 use crate::device::{ChipId, Device};
 use crate::error::{FwVersion, Result};
@@ -121,6 +121,9 @@ pub trait Programmer: Send {
         None
     }
     fn autodetect(&mut self) -> Option<&mut dyn SpiAutodetect> {
+        None
+    }
+    fn bitstream(&mut self) -> Option<&mut dyn BitstreamLoad> {
         None
     }
 }

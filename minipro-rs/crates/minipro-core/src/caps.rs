@@ -124,6 +124,25 @@ pub trait Calibration {
     fn read_calibration(&mut self, len: usize) -> Result<Vec<u8>>;
 }
 
+/// Upload a raw FPGA bitstream and leave it resident, bypassing the chip
+/// database entirely.
+///
+/// This is the reverse-engineering path. Every other upload takes its bitstream
+/// from a `Device`'s algorithm, which means an instrumentation bitstream
+/// (`fpga/census`, `fpga/beacon`) — one that belongs to no chip — has no way in
+/// at all. `.bit` files were committed to the repo on the strength of a README
+/// step that pointed at a script which never existed; this is what makes them
+/// usable.
+///
+/// The bitstream stays resident afterwards: no session is opened and the socket
+/// is not de-energized, because an instrument that stops running the moment the
+/// command returns is not an instrument.
+pub trait BitstreamLoad {
+    /// `name` is only an identity for the driver's already-resident check and
+    /// for logging; it does not have to match any algorithm in the database.
+    fn load_bitstream(&mut self, name: &str, bits: &[u8]) -> Result<()>;
+}
+
 #[cfg(test)]
 mod step_tests {
     use super::*;

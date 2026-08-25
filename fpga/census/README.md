@@ -86,11 +86,28 @@ orb -m td-x86 bash -lc 'cd ~/census && TD_HOME=/opt/TD /opt/TD/bin/td < build.tc
 
 # convert to T76 format and upload
 python3 gen_bit.py t76_census.bit t76_census_out.bit   # radiomanV/Xgecu_T76
-python3 t76_uploader.py t76_census_out.bit
+minipro bitstream t76_census_out.bit
 ```
 
 `t76_census_out.bit` is committed, so a T76 owner can run the census without
 Anlogic TD at all.
+
+Earlier revisions of this file told you to run `python3 t76_uploader.py`. **That
+script never existed** -- not in this tree, not in any commit -- so the sentence
+above was false for as long as it stood: the bitstream was committed and
+unloadable. `minipro bitstream` is the real path, and it takes a raw T76-format
+`.bit` with no chip and no database lookup.
+
+Two things about it are load-bearing, both learned the hard way:
+
+- It deliberately does **not** end the transaction, so the socket stays
+  energized and the design keeps running. An instrument that stops when the
+  command returns is not an instrument.
+- The T76 driver's `Drop` resets the FPGA whenever a bitstream was uploaded,
+  which for this path erased the upload microseconds after it completed. The
+  tool printed "the FPGA is running it" while doing the opposite, and the
+  beacon read as silent on every pin for an entire bench session before the
+  cause was found. `load_bitstream` now suppresses that reset.
 
 ### What TD needed, that cost time
 

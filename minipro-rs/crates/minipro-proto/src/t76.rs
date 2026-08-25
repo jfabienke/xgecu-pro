@@ -22,8 +22,8 @@
 //! - bulk write payloads OUT on EP 0x05 (`write_payload`)
 
 use minipro_core::caps::{
-    Calibration, EmmcOps, FirmwareUpdate, FuseOps, JedecOps, LoadBitstream, LogicTest, MemoryOps,
-    PinTest, Protect, SpiAutodetect, TransferDir, DEFAULT_BLOCK,
+    BitstreamLoad, Calibration, EmmcOps, FirmwareUpdate, FuseOps, JedecOps, LoadBitstream,
+    LogicTest, MemoryOps, PinTest, Protect, SpiAutodetect, TransferDir, DEFAULT_BLOCK,
 };
 use minipro_core::device::{
     BlockReq, ChipId, Device, EraseKind, FuseKind, MemoryKind, Partition, Region,
@@ -503,6 +503,15 @@ pub struct T76 {
     /// the last 4096-byte block reads back erased. Set from `BlockReq`'s
     /// `init`/`block_count`, counted down per block, flush at zero.
     write_flush_left: Option<u32>,
+    /// Suppress the FPGA reset that `Drop` normally performs.
+    ///
+    /// The reset exists so a chip operation leaves the FPGA quiescent. For a
+    /// raw instrumentation bitstream the upload IS the whole operation, and
+    /// resetting on the way out erases it microseconds after it was written --
+    /// which is exactly what happened: `minipro bitstream` uploaded correctly,
+    /// printed "the FPGA is running it", then wiped it on the way out, and the
+    /// beacon read as silent on every pin for an entire bench session.
+    keep_fpga_on_drop: bool,
 }
 
 impl T76 {
@@ -524,6 +533,7 @@ impl T76 {
             emmc_geom: EmmcGeometry::default(),
             emmc_capacity: 0,
             write_flush_left: None,
+            keep_fpga_on_drop: false,
         }
     }
 
@@ -1222,6 +1232,33 @@ impl Programmer for T76 {
     fn autodetect(&mut self) -> Option<&mut dyn SpiAutodetect> {
         Some(self)
     }
+    fn bitstream(&mut self) -> Option<&mut dyn BitstreamLoad> {
+        Some(self)
+    }
+}
+
+impl BitstreamLoad for T76 {
+    /// Upload a raw bitstream and leave the FPGA running it.
+    ///
+    /// `finalize_last_block` is true, and that is load-bearing rather than
+    /// incidental. It puts the real length of the trailing short block into the
+    /// END packet; a zero there leaves the FPGA's last config word uncommitted.
+    ///
+    /// The chip path passes false for everything but NAND, which is safe there
+    /// because those uploads are followed by BEGIN_TRANS and a full operation.
+    /// A raw instrumentation bitstream is followed by nothing at all -- the
+    /// upload IS the operation -- so it has to be complete on its own. The
+    /// beacon is 622130 bytes, i.e. 1234 full 504-byte blocks plus a 194-byte
+    /// remainder, which is precisely the case this flag exists for. Uploading
+    /// it with false reported success and left the FPGA not running.
+    fn load_bitstream(&mut self, name: &str, bits: &[u8]) -> Result<()> {
+        self.write_bitstream_named(name, bits, true)?;
+        // Must come after the upload: `Drop` resets the FPGA whenever a
+        // bitstream was uploaded, and for this path that would erase the very
+        // thing the caller asked for.
+        self.keep_fpga_on_drop = true;
+        Ok(())
+    }
 }
 
 impl LogicTest for T76 {
@@ -1343,7 +1380,7 @@ impl Drop for T76 {
     /// uploaded. Best-effort — the device may already be gone,
     /// and the transport (USB) closes when `self.tx` drops right after this.
     fn drop(&mut self) {
-        if self.uploaded_algo.is_some() {
+        if self.uploaded_algo.is_some() && !self.keep_fpga_on_drop {
             let _ = self.reset_fpga();
         }
     }
