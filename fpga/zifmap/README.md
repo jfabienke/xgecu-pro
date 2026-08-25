@@ -46,70 +46,69 @@ Confirmed across offsets +24, +25, +28 on the ascending row and `25 − pin`,
 *different* Pico pin at each placement, which is what makes the result
 positional rather than an artefact of how the board was sitting.
 
-### Only six socket contacts reach the FPGA with the rails off
+### All 48 socket contacts reach the FPGA
 
-All 48 positions measured, across ten placements on both columns and both board
-orientations:
+Measured across six placements, 16 of 16 identified in every one:
 
 ```
-                       ▲  L A T C H  ▲
-            ┌──────────────────────────────────┐
-   Z01 · ┤▫                              ▫├ · Z48
-   Z02 · ┤▫                              ▫├ · Z47
-   Z03 · ┤▫                              ▫├ · Z46
-   Z04 · ┤▫                              ▫├ · Z45
-   Z05 · ┤▫                              ▫├ ● Z44
-   Z06 · ┤▫                              ▫├ · Z43
-   Z07 · ┤▫                              ▫├ · Z42
-   Z08 · ┤▫                              ▫├ · Z41
-   Z09 · ┤▫                              ▫├ ● Z40
-   Z10 ● ┤▫                              ▫├ · Z39
-   Z11 · ┤▫                              ▫├ · Z38
-   Z12 · ┤▫                              ▫├ · Z37
-   Z13 · ┤▫                              ▫├ · Z36
-   Z14 · ┤▫                              ▫├ · Z35
-   Z15 · ┤▫                              ▫├ · Z34
-   Z16 · ┤▫                              ▫├ · Z33
-   Z17 · ┤▫                              ▫├ ● Z32
-   Z18 · ┤▫                              ▫├ · Z31
-   Z19 · ┤▫                              ▫├ · Z30
-   Z20 · ┤▫                              ▫├ · Z29
-   Z21 · ┤▫                              ▫├ · Z28
-   Z22 · ┤▫                              ▫├ · Z27
-   Z23 ● ┤▫                              ▫├ · Z26
-   Z24 ● ┤▫                              ▫├ · Z25
-            └──────────────────────────────────┘
-
-   ● reaches the FPGA      · isolated behind the driver network
-   confirmations: Z10 x5  Z23 x3  Z24 x2  Z32 x3  Z40 x5  Z44 x4
+                          ^  L A T C H  ^
+               +--------------------------------+
+       Z01  #  |                                |  #  Z48
+       Z02  #  |          all 48 positions      |  #  Z47
+        ..  #  |          reach the FPGA        |  #   ..
+       Z24  #  |                                |  #  Z25
+               +--------------------------------+
 ```
 
-**Six live, forty-two isolated**, with every rail control (`vcc_oe`, `vpp_oe`,
-`gnd_oe`, the shift register, the latches) held at `0`. The isolated contacts
-float, which the Pico's pull-downs read as a stable hard low.
+**An earlier revision of this file said six.** That was wrong, and the way it
+was wrong is worth more than the number.
 
-Left/right in the diagram is arbitrary: the measurements fix each column's
-numbering *direction* and which end the latch is, but nothing in the data says
-which physical column is which. If it is mirrored, the columns swap and
-everything else holds.
+The socket's per-pin drivers are controlled by a 595-style chain, and the output
+enables are **ACTIVE LOW**: `0` drives, `1` releases. Every bitstream in this
+repo held `gnd_oe = 0` believing it was the safe off state. It is the *enabled*
+state, so the ground rail was pulling the socket down for the whole of the
+census and beacon work, with whatever pattern happened to be left in the shift
+register. The six positions that "reached the FPGA" were simply the ones whose
+leftover register bit was zero -- an artefact of instrument state, not a
+property of the board.
 
-This was mistaken for bad socket contact for hours. Pressing the board down and
-nudging it sideways changed *nothing* — the same positions answered every time.
-**A mechanical fault varies when you disturb it. This did not.** That
-distinction is the finding, and it is what the sparse result actually means.
+It also means the beacon was driving 48 outputs into a closed ground switch
+continuously: exactly the contention the census source warns about.
 
-One position, `Z21`, reported `activity, no framing` on a single pass and then
-read cleanly isolated when a different Pico pin sat on it. Recorded as
-isolated; the one anomalous reading was most likely crosstalk from a
-neighbouring channel. Repeating a measurement on different hardware is what
-settled it.
+Changing three constants from `0` to `1` took the count from 2 identified in a
+placement to **16 of 16, in the same placement, without moving the board.**
 
-**An untested hypothesis about the six.** Bottom-justified in a 48-pin socket, a
-32-pin DIP puts its pin 32 on `Z40` and a 40-pin DIP puts its pin 40 on `Z44` --
-VCC in both cases -- while chip pin N/2, commonly GND, always lands on `Z24`.
-That would make three of the six the always-connected supply positions. It does
-not explain `Z10`, `Z23` or `Z32`, and 28-pin parts would predict `Z38`, which
-is isolated. Offered as something to test, not as a conclusion.
+**The polarity is measured, not inferred.** `fpga/railsweep` walks all four
+combinations of register content and `gnd_oe` while an RP2040 in the socket
+reads levels, announcing its state over the ISP header so every reading is
+self-tagging:
+
+| state | register | `gnd_oe` | socket |
+|---|---|---|---|
+| S00 | all-zero | 0 | high |
+| S01 | all-zero | 1 | high |
+| **S02** | **all-one** | **0** | **grounded** |
+| S03 | all-one | 1 | high |
+
+Only one combination grounds it. A register bit of `1` selects a position; the
+enable is active low.
+
+> **The safe state is `OE = 1`.** If `vcc_oe` and `vpp_oe` share the polarity --
+> same driver family, so probably -- then every bitstream here had the VCC and
+> VPP drivers enabled too, with arbitrary register contents, and VPP is 12 V+.
+> Nothing was damaged, because those latches evidently held zeros. "We got away
+> with it" is the accurate description.
+
+**Why the two-sided pull probe exists.** Under a pull-down alone, a floating
+contact and a grounded one both read low -- which is exactly how 42 grounded
+positions were recorded as isolated. Sampling each channel under a pull-up *and*
+a pull-down separates them: `(1,0)` follows its own pull and is genuinely
+undriven, `(0,0)` is held low by the board. The single-sided reading is what
+made the original mistake invisible.
+
+Note the probe is meaningless on a channel that is actively transmitting -- it
+samples twice and catches whatever the UART was doing. It only has meaning on
+quiet lines.
 
 ### ISP header -- all 28 positions measured
 

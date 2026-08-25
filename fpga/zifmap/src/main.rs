@@ -77,6 +77,14 @@ const LEFT_ROW: [Option<u8>; 20] = [
     Some(15), // pin 20, the end furthest from USB
 ];
 
+/// The step-index channel. During a rail sweep the FPGA drives no socket pins
+/// at all, so it announces which experiment it is running on one ISP header pin
+/// instead. GP16 is on the Pico's right-hand row -- out of the socket and
+/// otherwise unused -- so one jumper tags every reading with the state that
+/// produced it. The sweep frames it exactly like a beacon name ("S00\r\n"), so
+/// the existing decoder handles it with no change to bit timing.
+const STEP_CH: u8 = 16;
+
 /// Which way round the board sits, for the report header only. With the USB
 /// connector pointing away from the ZIF latch, physical pin 1 is the end
 /// furthest from the latch.
@@ -427,7 +435,29 @@ fn selftest(buf: &mut [u32; N_SAMPLES], out: &mut Out<'_, '_>) -> bool {
     ok
 }
 
-fn report(buf: &[u32], pass: u32, out: &mut Out<'_, '_>) {
+/// Sample one channel under pull-up then pull-down.
+///
+/// The distinction the rail sweep turns on: with nothing driving a socket pin,
+/// the Pico's own pull decides the level, so a floating contact and a contact
+/// the board has grounded are indistinguishable under a single pull. Under
+/// both, they separate cleanly.
+///
+///   (1, 0)  follows its own pull -> nothing is driving it: ISOLATED
+///   (0, 0)  held low against a pull-up   -> the board is GROUNDING it
+///   (1, 1)  held high against a pull-down -> the board is DRIVING it high
+fn pull_probe(ch: u8, delay: &mut cortex_m::delay::Delay) -> (u32, u32) {
+    let pads = unsafe { &*pac::PADS_BANK0::ptr() };
+    let sio = unsafe { &*pac::SIO::ptr() };
+    pads.gpio(ch as usize).modify(|_, w| w.pue().set_bit().pde().clear_bit());
+    delay.delay_us(1500);
+    let hi = (sio.gpio_in().read().bits() >> ch) & 1;
+    pads.gpio(ch as usize).modify(|_, w| w.pue().clear_bit().pde().set_bit());
+    delay.delay_us(1500);
+    let lo = (sio.gpio_in().read().bits() >> ch) & 1;
+    (hi, lo)
+}
+
+fn report(buf: &[u32], pass: u32, out: &mut Out<'_, '_>, delay: &mut cortex_m::delay::Delay) {
     let mut l = Line::new();
 
     let _ = write!(
@@ -446,8 +476,20 @@ fn report(buf: &[u32], pass: u32, out: &mut Out<'_, '_>) {
     );
     out.line(&l);
 
+    // The sweep announces its state on GP16. Silent here simply means no sweep
+    // is running -- the beacon does not use this channel.
+    let step = decode(buf, STEP_CH);
     l.clear();
-    let _ = write!(l, "picopin  gpio  name   frames  bytes   err  duty%  minrun");
+    if step.name_hits > 0 {
+        let n = core::str::from_utf8(&step.name).unwrap_or("???");
+        let _ = write!(l, "RAIL SWEEP STATE: {}   ({} frames on GP{})", n, step.name_hits, STEP_CH);
+    } else {
+        let _ = write!(l, "no sweep state on GP{} (beacon mode, or no jumper)", STEP_CH);
+    }
+    out.line(&l);
+
+    l.clear();
+    let _ = write!(l, "picopin  gpio  name   pull   frames  bytes   err  duty%  minrun");
     out.line(&l);
 
     let mut identified = 0u32;
@@ -460,13 +502,20 @@ fn report(buf: &[u32], pass: u32, out: &mut Out<'_, '_>) {
             continue;
         };
         let c = decode(buf, ch);
+        let (pu, pd) = pull_probe(ch, delay);
+        let pull = match (pu, pd) {
+            (1, 0) => "isol",   // follows its own pull: nothing driving
+            (0, 0) => "GND!",   // held low against a pull-up: board grounds it
+            (1, 1) => "HIGH",   // held high against a pull-down
+            _ => "????",
+        };
         if c.name_hits > 0 {
             identified += 1;
             let name = core::str::from_utf8(&c.name).unwrap_or("???");
             let _ = write!(
                 l,
-                "   {:02}    GP{:02}  {}    {:04}   {:04}  {:04}   {:03}   {:04}",
-                pin, ch, name, c.name_hits, c.bytes_ok, c.framing_err, c.duty_pct, c.min_run
+                "   {:02}    GP{:02}  {}   {}   {:04}   {:04}  {:04}   {:03}   {:04}",
+                pin, ch, name, pull, c.name_hits, c.bytes_ok, c.framing_err, c.duty_pct, c.min_run
             );
         } else {
             // Say HOW it failed, not just that it did: a line stuck at a rail is
@@ -482,8 +531,8 @@ fn report(buf: &[u32], pass: u32, out: &mut Out<'_, '_>) {
             };
             let _ = write!(
                 l,
-                "   {:02}    GP{:02}  ----   {}  (bytes {}, err {}, duty {}%, minrun {})",
-                pin, ch, why, c.bytes_ok, c.framing_err, c.duty_pct, c.min_run
+                "   {:02}    GP{:02}  ----   {}   {}  (duty {}%, minrun {})",
+                pin, ch, pull, why, c.duty_pct, c.min_run
             );
         }
         out.line(&l);
@@ -639,7 +688,7 @@ fn main() -> ! {
         rx = r;
         buf = b;
 
-        report(buf, pass, &mut out);
+        report(buf, pass, &mut out, &mut delay);
 
         // Re-run continuously so wires can be moved and the map re-read without
         // reflashing. Nothing is driven into the socket; every channel is a

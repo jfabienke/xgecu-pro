@@ -57,14 +57,30 @@ localparam integer CAP_OFF   = STAT_OFF + 4;           // captured words, 4 byte
 localparam integer FRAME_LEN = CAP_OFF + 2*CAPN + 2;
 
 // --- rail control: static, safe, never floating ----------------------------
+// Rail control. The three output enables are held at 1, and that value is
+// MEASURED, not assumed: the rail sweep (fpga/railsweep) walked all four
+// combinations of register content and gnd_oe while an RP2040 in the socket
+// read levels, and only "register all-ones AND gnd_oe = 0" grounded the socket.
+// So a register bit of 1 selects a position, and the enables are ACTIVE LOW --
+// 0 drives, 1 releases. Standard for 595-class parts, where the enable is OE.
+//
+// Every earlier revision of this file held them at 0, believing that was "off".
+// It is the ENABLED state. The ground rail was therefore driving the socket for
+// the whole of the census and beacon work, with whatever pattern happened to be
+// left in the shift register -- which is why 42 socket positions looked
+// "isolated" when they were being grounded by this design, and why the beacon
+// was driving 48 outputs into a ground switch the entire time.
+//
+// The latch enables stay at 0: that holds the latches closed on their current
+// contents rather than making them transparent.
 assign ser_clk = 1'b0;
 assign ser_data = 1'b0;
 assign vpp_le  = 1'b0;
 assign vcc_le  = 1'b0;
 assign gnd_le  = 1'b0;
-assign vpp_oe  = 1'b0;
-assign vcc_oe  = 1'b0;
-assign gnd_oe  = 1'b0;
+assign vpp_oe  = 1'b1;   // released (active low)
+assign vcc_oe  = 1'b1;   // released (active low)
+assign gnd_oe  = 1'b1;   // released (active low)
 
 `include "census_isp_power.vh"
 
