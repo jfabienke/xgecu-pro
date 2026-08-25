@@ -36,7 +36,18 @@
 
 module t76_hspi_probe #(
     // Overridden by the testbench so simulation need not run 250 ms.
-    parameter integer FRAME_GAP = 5_000_000
+    // 100_000 cycles = 5 ms, not the census's 5_000_000 (250 ms).
+    //
+    // Sized against the receiver, which is the thing that actually constrains
+    // it. The frame is 235 bytes = 20.4 ms at 115200, and the Pico captures a
+    // 28.4 ms window. At a 250 ms period the window lands at a random point in
+    // the cycle and catches a partial frame eight times in nine -- and a
+    // truncated frame still carries a valid-looking preamble, so it decodes
+    // into plausible nonsense rather than announcing itself as broken.
+    //
+    // A 5 ms gap makes the period 25.4 ms, shorter than the window, so ANY
+    // window contains one whole frame wherever it starts.
+    parameter integer FRAME_GAP = 100_000
 ) (
 `include "probe_ports.vh"
 );

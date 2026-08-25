@@ -5,7 +5,33 @@ half is new; the combination is. The answering endpoint was built in `ef467fc`
 and the working capture is the one restored by reverting to `a93f729` — and that
 revert removed the answering code, so the two have never existed together.
 
-**Status: simulated, not synthesised, never run on hardware.**
+**Status: running on hardware, baseline captured.**
+
+```
+   RESPONSE_MODE 0 (counter), read under MINIPRO_KEEP_BITSTREAM
+
+   12 complete frames, 1 distinct state -- stable
+   capwords = 161   bursts = 23
+   0037 c800 0008 0000 0000 0000 1518 | 003a cc00 0000 0000 0000 0000 a0c6
+```
+
+The rig reproduces two prior measurements from separate sessions: `ef467fc`
+recorded "23 bursts in, 161 words" and gets exactly that, and at 7 words per
+packet the USDF values `0x37` then `0x3a` are the head of the failing tail the
+census recorded as `0x37 3A 32 33 04`. So mode 0 lands on the **failing** path,
+and that is the reference every other mode is compared against.
+
+Two things had to be fixed before a frame could be read at all, both of which
+produced confident wrong output first:
+
+- **The Pico's window was shorter than the frame.** 14.2 ms against a 20.4 ms
+  frame truncated every one, and a truncated frame still carries a valid-looking
+  preamble -- it decodes into plausible nonsense rather than announcing itself
+  as broken. The window is now 28.4 ms.
+- **The frame period was longer than the window.** At `FRAME_GAP` = 5,000,000
+  (250 ms) the window landed at a random point in the cycle and caught a whole
+  frame roughly one time in nine. `FRAME_GAP` is now 100,000, making the period
+  25.4 ms -- shorter than the window, so any window contains a whole frame.
 
 `tb_txrx.v` passes every check, including the two that matter for the board:
 

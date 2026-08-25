@@ -90,10 +90,16 @@ const STEP_CH: u8 = 16;
 /// furthest from the latch.
 const USB_AWAY_FROM_LATCH: bool = true;
 
-/// 16384 samples at ~1.152 MSa/s is 14.2 ms, about 32 beacon frames per
-/// channel -- far more than needed to be confident, and it still leaves most
-/// of the RP2040's 264 KB free.
-const N_SAMPLES: usize = 16_384;
+/// 32768 samples at ~1.152 MSa/s is 28.4 ms.
+///
+/// Sized by the census frame, not the beacon: that frame is 235 bytes, which at
+/// 115200 8N1 takes 20.4 ms. A 14.2 ms window truncated every one of them, and
+/// a truncated frame with a valid-looking preamble is worse than no frame --
+/// it decodes into plausible nonsense. 28.4 ms guarantees one whole frame
+/// lands inside the window wherever it starts.
+///
+/// 131 KB of the RP2040's 264 KB, which is affordable.
+const N_SAMPLES: usize = 32_768;
 
 /// PIO clock divider for a 1.152 MSa/s sample rate from a 125 MHz system
 /// clock: 125e6 / 1_152_000 = 108.5069, and 108 + 130/256 = 108.5078.
@@ -435,6 +441,42 @@ fn selftest(buf: &mut [u32; N_SAMPLES], out: &mut Out<'_, '_>) -> bool {
     ok
 }
 
+/// Decode one channel and return its raw byte stream, for reading a binary
+/// frame rather than a beacon name.
+///
+/// The census emits a length-prefixed binary frame, not `Xnn\r\n`, so the
+/// name decoder counts its bytes and understands none of them. This hands the
+/// bytes back so the host can parse the frame itself.
+fn decode_raw(buf: &[u32], ch: u8, out: &mut [u8]) -> usize {
+    let n = buf.len();
+    let half = SPB_Q8 / 2;
+    let mut got = 0usize;
+    let mut i = 1usize;
+    while i < n && got < out.len() {
+        if !(bit_at(buf, ch, i - 1) == 1 && bit_at(buf, ch, i) == 0) {
+            i += 1;
+            continue;
+        }
+        let base = (i as u32) << 8;
+        let pos = |k: u32| -> usize { ((base + half + k * SPB_Q8) >> 8) as usize };
+        if pos(9) >= n {
+            break;
+        }
+        if bit_at(buf, ch, pos(0)) != 0 || bit_at(buf, ch, pos(9)) != 1 {
+            i += 1;
+            continue;
+        }
+        let mut b = 0u8;
+        for k in 0..8u32 {
+            b |= bit_at(buf, ch, pos(k + 1)) << k;
+        }
+        out[got] = b;
+        got += 1;
+        i = pos(9) + 1;
+    }
+    got
+}
+
 /// Sample one channel under pull-up then pull-down.
 ///
 /// The distinction the rail sweep turns on: with nothing driving a socket pin,
@@ -509,6 +551,25 @@ fn report(buf: &[u32], pass: u32, out: &mut Out<'_, '_>, delay: &mut cortex_m::d
         }
         out.line(&l);
         return;
+    }
+
+    // Raw hex dump of GP0, for binary frames the name decoder cannot read.
+    // Emitted whenever GP0 carries bytes that are not a beacon name, so the
+    // same firmware serves both jobs without a mode switch to forget.
+    let mut raw = [0u8; 400];
+    let got = decode_raw(buf, 0, &mut raw);
+    let ch0 = decode(buf, 0);
+    if got > 0 && ch0.name_hits == 0 {
+        l.clear();
+        let _ = write!(l, "RAW GP0 {} bytes:", got);
+        out.line(&l);
+        for row in raw[..got].chunks(24) {
+            l.clear();
+            for b in row {
+                let _ = write!(l, "{:02x} ", b);
+            }
+            out.line(&l);
+        }
     }
 
     l.clear();
