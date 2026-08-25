@@ -143,17 +143,39 @@ That one had teeth: the census declares its UART on ball `M4`, which the pinout
 called `ISP:J08`, so the source told you to probe **pin 8** for a signal that
 comes out on **pin 7**.
 
-**Pin 26 is actively held high** while all four other switched grounds read low,
-reproduced across two passes. With the Pico's ~50k pull-down engaged, only a
-low-impedance source does that. Position 26 is the one that also carries
-`ISP:VPP26` alongside its ground switch. First hard evidence that rail control
-is not uniform -- directly relevant to the shift-register work, where polarity
-is the open question.
+**There is a negative rail on this board, and it reaches the ISP header.**
+Measured against the T76's USB-C shell -- a hard, unswitched ground:
 
-One position needed a re-seat: pin 25 first read 99% duty with narrow glitches
-and twelve framing errors, then decoded `J25` cleanly. A high line with noise is
-what a poor contact next to active neighbours looks like, and it is worth
-knowing that it does *not* resemble the flat `stuck low` of an open circuit.
+```
+    pin 26  ->    0 V     (true ground)
+    pin 27  ->   -3 V
+    pin 28  ->   -3 V
+```
+
+The beacon asserts `j_gnd_26`, `j_gnd_27` and `j_gnd_28` **identically**, all
+set to `1`. One lands at ground and two land at -3 V, so those switches do not
+all connect to the same rail and calling all five positions "switched grounds"
+is wrong. Nothing in the pinout or in this project's notes records a negative
+rail; this is the first sighting of one.
+
+It also explains the Pico's readings: a pin at -3 V reads as logic low through a
+clamped input, which is exactly what `stuck low` reported for 27 and 28.
+
+> **Do not connect an RP2040 to header pins 27 or 28 without protection.**
+> RP2040 GPIOs clamp to ground, so anything below about -0.3 V forward-biases
+> that diode and the pin sinks current from the die. This work wired a Pico
+> directly to both across two passes before the rail was found. It survived, but
+> a Schottky to ground per line -- or simply staying off those two positions --
+> is the right answer.
+
+**A finding withdrawn.** An earlier revision of this file claimed pin 26 was
+"actively held high" while the other switched grounds read low. That was wrong
+twice: wrong pin, and wrong phenomenon. Pin 26 is the one behaving normally. The
+claim rested on an inference about which wire sat on which Pico channel -- an
+attribution flagged as unconfirmed and then used anyway -- and a meter
+contradicted it within the hour. One channel did report `idle-high` somewhere in
+that batch and remains unexplained; it is not recorded as a finding, because
+which pin it was on is exactly what was never established.
 
 > **The committed `.bit` files predate this fix.** `t76_beacon_out.bit` and
 > `t76_census_out.bit` were synthesised before `PINOUT_FIXES` existed, so they
