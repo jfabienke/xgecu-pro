@@ -111,11 +111,54 @@ That would make three of the six the always-connected supply positions. It does
 not explain `Z10`, `Z23` or `Z32`, and 28-pin parts would predict `Z38`, which
 is isolated. Offered as something to test, not as a conclusion.
 
-### ISP header
+### ISP header -- all 28 positions measured
 
-`ISP:J02` confirmed: header position 2 decoded as `J02`, 32 frames, zero
-framing errors. First piece of radiomanV's pinout this project has verified
-itself rather than inherited.
+```
+    pos    1    2    3    4    5    6    7    8    9    10   11   12   13   14
+        +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+        | 02  | 04  | 06  | 08  | 10  | 12  | 14  | 16  | 18  | 20  | 22  | 24  | 26  | 28  |  TOP
+        | ### | ### | ### | XXX | ### | ### | ### | ### | ### | ### | ### | ### | HHH | ooo |  (even)
+        | J02 | J04 | J06 | J07 | J10 | J12 | J14 | J16 | J18 | J20 | J22 | J24 | HIGH| GND |
+        +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+        | J01 | J03 | J05 | J08 | J09 | GND | J13 | J15 | J17 | J19 | GND | J23 | J25 | GND |
+        | ooo | ### | ### | XXX | ### | ooo | ### | ooo | ### | ### | ooo | ### | ### | ooo |  BOTTOM
+        | 01  | 03  | 05  | 07  | 09  | 11  | 13  | 15  | 17  | 19  | 21  | 23  | 25  | 27  |  (odd)
+        +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
+         ^ pin 1
+
+   ### verified (19)   XXX transposed pair   ooo correctly silent (6)   HHH held HIGH
+```
+
+**The numbering is measured, not assumed.** Top row even, bottom row odd, pin 1
+at bottom-left. Six controls passed: two positions with no net (`J01`, `J15`)
+and four switched grounds all reported nothing, as predicted.
+
+**`J07` and `J08` are transposed in the pinout.** Physical pin 7 carries the net
+the `.ods` calls `J08`, and pin 8 carries `J07` -- caught independently from
+both rows. Corrected in `PINOUT_FIXES` in both generators rather than by editing
+radiomanV's file, so the vendor data keeps its provenance and every deviation we
+make is auditable.
+
+That one had teeth: the census declares its UART on ball `M4`, which the pinout
+called `ISP:J08`, so the source told you to probe **pin 8** for a signal that
+comes out on **pin 7**.
+
+**Pin 26 is actively held high** while all four other switched grounds read low,
+reproduced across two passes. With the Pico's ~50k pull-down engaged, only a
+low-impedance source does that. Position 26 is the one that also carries
+`ISP:VPP26` alongside its ground switch. First hard evidence that rail control
+is not uniform -- directly relevant to the shift-register work, where polarity
+is the open question.
+
+One position needed a re-seat: pin 25 first read 99% duty with narrow glitches
+and twelve framing errors, then decoded `J25` cleanly. A high line with noise is
+what a poor contact next to active neighbours looks like, and it is worth
+knowing that it does *not* resemble the flat `stuck low` of an open circuit.
+
+> **The committed `.bit` files predate this fix.** `t76_beacon_out.bit` and
+> `t76_census_out.bit` were synthesised before `PINOUT_FIXES` existed, so they
+> still carry the old M4/M5 assignment. The generated sources are correct; the
+> bitstreams need a TD re-synthesis to match.
 
 ### What is still unknown
 

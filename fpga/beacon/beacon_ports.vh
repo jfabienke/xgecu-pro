@@ -23,8 +23,8 @@
     output wire j_04      ,  // J3    J04
     output wire j_05      ,  // L3    J05
     output wire j_06      ,  // M3    J06
-    output wire j_07      ,  // M5    J07
-    output wire j_08      ,  // M4    J08
+    output wire j_07      ,  // M4    J07
+    output wire j_08      ,  // M5    J08
     output wire j_09      ,  // M14   J09
     output wire j_10      ,  // J11   J10
     output wire j_12      ,  // K14   J12

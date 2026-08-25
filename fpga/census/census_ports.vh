@@ -110,7 +110,7 @@
     input  wire j_04          ,  // J3    ISP:J04
     input  wire j_05          ,  // L3    ISP:J05
     input  wire j_06          ,  // M3    ISP:J06
-    input  wire j_07          ,  // M5    ISP:J07
+    input  wire j_08          ,  // M5    ISP:J08
     input  wire j_09          ,  // M14   ISP:J09
     input  wire j_10          ,  // J11   ISP:J10
     input  wire j_12          ,  // K14   ISP:J12

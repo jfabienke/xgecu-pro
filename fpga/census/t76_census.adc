@@ -122,7 +122,7 @@ set_pin_assignment	{ j_03 }	{ LOCATION = H4; IOSTANDARD = LVCMOS33; PULLTYPE = N
 set_pin_assignment	{ j_04 }	{ LOCATION = J3; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_05 }	{ LOCATION = L3; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_06 }	{ LOCATION = M3; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
-set_pin_assignment	{ j_07 }	{ LOCATION = M5; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
+set_pin_assignment	{ j_08 }	{ LOCATION = M5; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_09 }	{ LOCATION = M14; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_10 }	{ LOCATION = J11; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }
 set_pin_assignment	{ j_12 }	{ LOCATION = K14; IOSTANDARD = LVCMOS33; PULLTYPE = NONE; }

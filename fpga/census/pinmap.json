@@ -623,10 +623,10 @@
   },
   {
    "index": 87,
-   "name": "j_07",
+   "name": "j_08",
    "ball": "M5",
-   "net": "ISP:J07",
-   "signal": "ISP:J07"
+   "net": "ISP:J08",
+   "signal": "ISP:J08"
   },
   {
    "index": 88,

@@ -38,6 +38,25 @@ RAIL = {"T:SCLK": "ser_clk", "T:SDAT": "ser_data", "T:LE_VPP": "vpp_le",
 DEDICATED = {"T2", "C12", "A15", "C14", "E14"}
 
 
+# --- corrections to the third-party pinout ------------------------------------
+# docs/hardware/fpga_t76_pinout.ods is radiomanV's board tracing, byte-identical
+# to his copy, and is deliberately left untouched: its provenance is worth more
+# than the convenience of editing it. Corrections we have MEASURED live here
+# instead, so the vendor data stays pristine and every deviation is auditable.
+#
+# M4/M5: measured 2026-08-25 with an RP2040 reading the beacon on the ISP header,
+# from BOTH rows independently. Physical header pin 7 carried the name the pinout
+# gives to M4 ("J08") and pin 8 carried M5's ("J07"), so the two labels are
+# transposed. The .ods even lists them out of sequence -- J06, J08, J07 -- which
+# is the same mistake showing through in the source. Every other one of the 19
+# signal positions matched the pinout exactly, and six controls (two positions
+# with no net, four switched grounds) reported nothing as predicted.
+PINOUT_FIXES = {
+    "M4": "ISP:J07",   # .ods says ISP:J08
+    "M5": "ISP:J08",   # .ods says ISP:J07
+}
+
+
 def ball_map():
     x = ET.fromstring(zipfile.ZipFile(HW / "fpga_t76_pinout.ods").read("content.xml"))
     grid = []
@@ -57,6 +76,7 @@ def ball_map():
         for i, v in enumerate(row[1:len(cols) + 1]):
             if v:
                 m["%s%s" % (row[0], cols[i])] = v
+    m.update(PINOUT_FIXES)
     return m
 
 

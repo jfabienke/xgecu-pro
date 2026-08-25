@@ -36,6 +36,25 @@ def ods_rows(path):
     return out
 
 
+# --- corrections to the third-party pinout ------------------------------------
+# docs/hardware/fpga_t76_pinout.ods is radiomanV's board tracing, byte-identical
+# to his copy, and is deliberately left untouched: its provenance is worth more
+# than the convenience of editing it. Corrections we have MEASURED live here
+# instead, so the vendor data stays pristine and every deviation is auditable.
+#
+# M4/M5: measured 2026-08-25 with an RP2040 reading the beacon on the ISP header,
+# from BOTH rows independently. Physical header pin 7 carried the name the pinout
+# gives to M4 ("J08") and pin 8 carried M5's ("J07"), so the two labels are
+# transposed. The .ods even lists them out of sequence -- J06, J08, J07 -- which
+# is the same mistake showing through in the source. Every other one of the 19
+# signal positions matched the pinout exactly, and six controls (two positions
+# with no net, four switched grounds) reported nothing as predicted.
+PINOUT_FIXES = {
+    "M4": "ISP:J07",   # .ods says ISP:J08
+    "M5": "ISP:J08",   # .ods says ISP:J07
+}
+
+
 def ball_map():
     """ball id (e.g. 'E10') -> net name as silkscreened in the T76 pinout."""
     g = ods_rows(HW / "fpga_t76_pinout.ods")
@@ -47,6 +66,7 @@ def ball_map():
         for i, val in enumerate(row[1:len(cols) + 1]):
             if val:
                 m["%s%s" % (row[0], cols[i])] = val
+    m.update(PINOUT_FIXES)
     return m
 
 
@@ -74,9 +94,14 @@ def hspi_name(func):
 # --- pins we must NOT observe: they have a job ------------------------------
 CLK_BALL = "E10"      # CLK_20, our sampling clock - deliberately independent
                       # of the bus under test, so a dead bus is still reportable
-UART_BALL = "M4"      # ISP:J08 -- the pin the beacon proved reachable on the
-                      # bench (47,936 bytes decoded as "J08"). J19/E13 was the
-                      # original choice and was never confirmed on hardware.
+UART_BALL = "M4"      # ISP:J07 -> PHYSICAL HEADER PIN 7. Corrected 2026-08-25:
+                      # this ball was labelled ISP:J08 in the pinout and the
+                      # comment here said so, which sent anyone probing for the
+                      # census UART to pin 8, where they would find J07 and
+                      # nothing of ours. See PINOUT_FIXES. The ball is unchanged
+                      # -- it is the pin the beacon proved reachable on the bench
+                      # -- only its name and the header position it maps to.
+                      # J19/E13 was the original choice, never confirmed.
 
 # Rail control is DRIVEN to a static safe state, never observed: leaving these
 # floating would let the ZIF rail drivers do something undefined.  Polarity is
