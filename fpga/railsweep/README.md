@@ -68,43 +68,55 @@ placements and two chain widths:
     chain position = NBITS - step
 ```
 
-### The chain is organised in groups of eight
-
-Sorted by chain position rather than step, the structure is immediate:
+### The chain, complete
 
 ```
-   chain 00-07  ->  Z01 Z08 Z07 Z06 Z05 Z04  __  Z02      = Z01..Z08
-   chain 08-15  ->  Z09 Z12 Z11 Z10 Z16 Z15 Z14 Z13      = Z09..Z16
-   chain 16-23  ->   __ Z17 Z18 Z19 Z20  __   __ Z21      = Z17..Z24
-   chain 24-31  ->  Z32 Z29 Z30 Z31 Z28  __ Z26 Z25      = Z25..Z32
-   chain 32-39  ->  Z33 Z37 Z38 Z39 Z40 Z34 Z35 Z36      = Z33..Z40
-   chain 40-47  ->  Z41 Z45  __  Z47 Z48 Z44 Z43 Z42     = Z41..Z48
+   chain 00-07  ->  Z01 Z08 Z07 Z06 Z05 Z04 Z03 Z02      Z01..Z08
+   chain 08-15  ->  Z09 Z12 Z11 Z10 Z16 Z15 Z14 Z13      Z09..Z16
+   chain 16-23  ->   --  Z17 Z18 Z19 Z20  --  Z22 Z21     Z17..Z22
+   chain 24-31  ->  Z32 Z29 Z30 Z31 Z28 Z27 Z26 Z25      Z25..Z32
+   chain 32-39  ->  Z33 Z37 Z38 Z39 Z40 Z34 Z35 Z36      Z33..Z40
+   chain 40-47  ->  Z41 Z45 Z46 Z47 Z48 Z44 Z43 Z42      Z41..Z48
 ```
 
-Every group is a complete run of eight consecutive positions. The order *within*
-a group is scrambled, and not the same scramble in each group — so the grouping
-is a fact and the permutation is not yet a rule.
+**46 of 48 positions are ground-switchable and mapped. Two are not.**
 
-**That closes three gaps by elimination.** A group with a single hole has only
-one position left to put in it:
+The chain runs in groups of eight, each covering a run of consecutive socket
+positions, scrambled within the group and not the same scramble twice. Five
+groups are complete. The sixth is the exception: bits 16-23 cover only
+`Z17`-`Z22`, with **two bits driving no socket position at all** and `Z23`/`Z24`
+absent from the chain entirely. The chain allocates eight bits per group whether
+or not all eight positions are switchable.
 
-```
-   chain 06 -> Z03        chain 29 -> Z27        chain 42 -> Z46
-```
+Three positions were fixed by elimination rather than observed -- a group with a
+single hole has one position left to put in it -- giving `chain 06 -> Z03`,
+`chain 29 -> Z27`, `chain 42 -> Z46`.
 
-**45 of 48 determined**: 42 measured directly, 3 forced by the structure.
+### Z23 and Z24 are not in the ground chain
 
-### Three positions that do not ground
+Established with `fpga/railhold`: all 48 bits set, enable asserted, held
+**indefinitely** rather than for a four-second sweep step. Fourteen positions
+grounded; `Z23` and `Z24` stayed high while their immediate neighbours `Z20` and
+`Z21` went low in the same reading.
 
-`Z22`, `Z23` and `Z24` belong to chain bits 16, 21 and 22. Those steps ran in
-both the 48-bit and 64-bit sweeps, with `Z23` on pin 02 and `Z24` on pin 01, and
-the beacon confirmed both contacts at 32 frames minutes before each run.
-**Neither ever grounded.**
+That killed the boring explanation. The walking sweep had not missed them --
+there was nothing to miss. Static also let a **meter** read those positions
+directly, independent of the pull probe, the decoder, and contact timing, all
+three of which produced confident wrong answers during this work.
 
-So either those socket positions are not in the ground chain, or those chain
-bits drive something else. Recorded as an open question rather than guessed at:
-the group structure says they should be there, and the measurement says they are
-not, and that disagreement is the interesting part.
+`Z22` was a false member of that set. It read as missing only because it sat
+under one of the Pico's four ground pins in every placement that reached it; one
+position's move put it on a live pin and it grounded immediately, at chain bit
+22. **A gap in coverage looked exactly like a gap in the hardware** -- which is
+the same failure that made 42 grounded positions look isolated.
+
+### On cross-checks
+
+Every bit in the map was seen from at least two board placements at different
+offsets, and the final runs happened to use a 64-bit shift while the chain is
+48, which over-shifts harmlessly and shifts every step index by 16. That
+accident gave a third independent width to check against: `chain position =
+NBITS - step` reconciled all three, and no bit disagreed.
 
 ## Next
 
