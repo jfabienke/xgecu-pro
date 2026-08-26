@@ -1,0 +1,11 @@
+cargo:rustc-check-cfg=cfg(armv6m)
+cargo:rustc-check-cfg=cfg(armv7em)
+cargo:rustc-check-cfg=cfg(armv7m)
+cargo:rustc-check-cfg=cfg(armv8m)
+cargo:rustc-check-cfg=cfg(armv8m_base)
+cargo:rustc-check-cfg=cfg(armv8m_main)
+cargo:rustc-check-cfg=cfg(cortex_m)
+cargo:rustc-check-cfg=cfg(has_fpu)
+cargo:rustc-link-search=/Users/jvindahl/Development/xgecu-pro/uartbridge/target/release/build/cortex-m-rt-c5670ce3cf05e5bf/out
+cargo:rerun-if-changed=build.rs
+cargo:rerun-if-changed=link.x.in

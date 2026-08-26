@@ -1,0 +1,14 @@
+/Users/jvindahl/Development/xgecu-pro/uartbridge/target/release/deps/thiserror-b15c15cab2f724f6.d: /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /Users/jvindahl/Development/xgecu-pro/uartbridge/target/release/build/thiserror-2dcfbef875a85496/out/private.rs
+
+/Users/jvindahl/Development/xgecu-pro/uartbridge/target/release/deps/libthiserror-b15c15cab2f724f6.rlib: /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /Users/jvindahl/Development/xgecu-pro/uartbridge/target/release/build/thiserror-2dcfbef875a85496/out/private.rs
+
+/Users/jvindahl/Development/xgecu-pro/uartbridge/target/release/deps/libthiserror-b15c15cab2f724f6.rmeta: /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs /Users/jvindahl/Development/xgecu-pro/uartbridge/target/release/build/thiserror-2dcfbef875a85496/out/private.rs
+
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/lib.rs:
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/aserror.rs:
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/display.rs:
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/var.rs:
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.20/src/private.rs:
+/Users/jvindahl/Development/xgecu-pro/uartbridge/target/release/build/thiserror-2dcfbef875a85496/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/jvindahl/Development/xgecu-pro/uartbridge/target/release/build/thiserror-2dcfbef875a85496/out

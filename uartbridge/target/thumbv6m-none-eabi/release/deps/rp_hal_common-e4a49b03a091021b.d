@@ -1,0 +1,10 @@
+/Users/jvindahl/Development/xgecu-pro/uartbridge/target/thumbv6m-none-eabi/release/deps/rp_hal_common-e4a49b03a091021b.d: /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/lib.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/uart/mod.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/uart/common_configs.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/uart/utils.rs
+
+/Users/jvindahl/Development/xgecu-pro/uartbridge/target/thumbv6m-none-eabi/release/deps/librp_hal_common-e4a49b03a091021b.rlib: /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/lib.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/uart/mod.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/uart/common_configs.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/uart/utils.rs
+
+/Users/jvindahl/Development/xgecu-pro/uartbridge/target/thumbv6m-none-eabi/release/deps/librp_hal_common-e4a49b03a091021b.rmeta: /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/lib.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/uart/mod.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/uart/common_configs.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/uart/utils.rs
+
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/lib.rs:
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/uart/mod.rs:
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/uart/common_configs.rs:
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rp-hal-common-0.1.0/src/uart/utils.rs:

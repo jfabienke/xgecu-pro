@@ -1,0 +1,1 @@
+/Users/jvindahl/Development/xgecu-pro/uartbridge/target/thumbv6m-none-eabi/release/uartbridge: /Users/jvindahl/Development/xgecu-pro/uartbridge/build.rs /Users/jvindahl/Development/xgecu-pro/uartbridge/memory.x /Users/jvindahl/Development/xgecu-pro/uartbridge/src/main.rs

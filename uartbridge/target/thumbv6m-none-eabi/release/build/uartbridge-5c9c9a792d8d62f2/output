@@ -1,0 +1,2 @@
+cargo:rustc-link-search=/Users/jvindahl/Development/xgecu-pro/uartbridge
+cargo:rerun-if-changed=memory.x

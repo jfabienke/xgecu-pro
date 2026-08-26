@@ -1,0 +1,32 @@
+# uartbridge -- RP2040 as a plain USB-serial bridge for the T76's ISP header.
+#
+# Replaces zifmap's windowed capture for anything that streams. A window can
+# hold one 235-byte frame; it cannot hold a PAL/GAL result set at any sample
+# rate the RP2040 has memory for. PIO receives, DMA rings, USB forwards.
+[package]
+name = "uartbridge"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+cortex-m = "0.7.9"
+cortex-m-rt = "0.7.6"
+defmt = "1.1.1"
+defmt-rtt = { version = "1.3.0", features = ["disable-blocking-mode"] }
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+pio = "0.3.0"
+rp2040-boot2 = "0.3.0"
+rp2040-hal = { version = "0.12.0", features = ["rt", "critical-section-impl", "defmt"] }
+static_cell = "2.1.1"
+portable-atomic = { version = "1", features = ["critical-section"] }
+usb-device = "0.3.2"
+usbd-serial = "0.2.2"
+heapless = "0.9.3"
+
+[profile.release]
+debug = 2
+lto = "fat"
+opt-level = 2
+overflow-checks = true

@@ -1,0 +1,4 @@
+cargo:rustc-link-search=/Users/jvindahl/Development/xgecu-pro/uartbridge/target/thumbv6m-none-eabi/release/build/defmt-0bac09eab3b4b205/out
+cargo:rustc-cfg=no_cas
+cargo:rustc-check-cfg=cfg(c_variadic)
+cargo:rustc-check-cfg=cfg(no_cas)

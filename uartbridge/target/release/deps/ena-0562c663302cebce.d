@@ -1,0 +1,11 @@
+/Users/jvindahl/Development/xgecu-pro/uartbridge/target/release/deps/ena-0562c663302cebce.d: /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/lib.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/snapshot_vec.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/undo_log.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/unify/mod.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/unify/backing_vec.rs
+
+/Users/jvindahl/Development/xgecu-pro/uartbridge/target/release/deps/libena-0562c663302cebce.rlib: /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/lib.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/snapshot_vec.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/undo_log.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/unify/mod.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/unify/backing_vec.rs
+
+/Users/jvindahl/Development/xgecu-pro/uartbridge/target/release/deps/libena-0562c663302cebce.rmeta: /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/lib.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/snapshot_vec.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/undo_log.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/unify/mod.rs /Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/unify/backing_vec.rs
+
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/lib.rs:
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/snapshot_vec.rs:
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/undo_log.rs:
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/unify/mod.rs:
+/Users/jvindahl/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ena-0.14.4/src/unify/backing_vec.rs:
