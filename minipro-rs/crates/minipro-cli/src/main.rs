@@ -205,6 +205,23 @@ enum Command {
         #[arg(long)]
         wide: bool,
     },
+    /// Energize the socket for a chip and hold it, without programming anything.
+    ///
+    /// The FPGA routes power to socket pins but cannot switch the supplies on:
+    /// BEGIN_TRANS carries the VCC/VPP code and the MCU programs the levels, so
+    /// an FPGA-only bitstream can route a rail that does not exist. This runs
+    /// the transaction and stops, leaving the socket live so an instrumentation
+    /// bitstream can work against a powered part.
+    ///
+    /// Nothing is written. The socket is energized exactly as a read energizes
+    /// it, and de-energized on exit.
+    Energize {
+        /// The chip whose voltages and pin map to apply, e.g. "GAL16V8@DIP20"
+        chip: String,
+        /// Hold the socket live until interrupted, rather than releasing at once
+        #[arg(long)]
+        hold: bool,
+    },
     /// Upload a raw FPGA bitstream and leave it running (reverse-engineering).
     ///
     /// Takes a T76-format `.bit` directly, with no chip and no database lookup,
@@ -242,6 +259,7 @@ impl Command {
             Command::Update { .. } => "update",
             Command::Autodetect { .. } => "autodetect",
             Command::Bitstream { .. } => "bitstream",
+            Command::Energize { .. } => "energize",
         }
     }
 }
@@ -408,6 +426,7 @@ fn main() -> ExitCode {
         Command::Update { file, confirm } => run_update(file, *confirm, &mut *reporter_for(mode)),
         Command::Autodetect { wide } => run_autodetect(db_dir, *wide, mode),
         Command::Bitstream { file, hold } => run_bitstream(file, *hold, mode),
+        Command::Energize { chip, hold } => run_energize(db_dir, chip, *hold, mode),
     };
 
     match result {
@@ -1042,6 +1061,46 @@ fn run_logic(db_dir: Option<&Path>, chip: &str, mode: Mode) -> Result<()> {
             if pass { "PASS" } else { "FAIL" }
         ),
     }
+    Ok(())
+}
+
+/// Energize the socket and hold, so an instrumentation bitstream can work
+/// against a powered part.
+///
+/// The division of labour this exists for: the FPGA routes supplies to socket
+/// pins through its shift register, but the MCU switches them on and sets their
+/// level -- `BEGIN_TRANS` carries `raw_voltages` from the chip's algorithm, and
+/// `end()` de-energizes. So a bitstream that routes VCC to a pin correctly
+/// produces nothing when the rail behind it is off, which is exactly what
+/// measuring one showed.
+///
+/// Pair with `MINIPRO_KEEP_BITSTREAM=1` to keep an instrument resident while the
+/// MCU supplies the rails.
+fn run_energize(db_dir: Option<&Path>, chip: &str, hold: bool, mode: Mode) -> Result<()> {
+    let mut note = reporter_for(mode);
+    let db = load_db(db_dir, note.as_mut())?;
+    let dev = lookup_device(&*db, chip, ops::OpKind::Read)?;
+    let mut prog = open_programmer()?;
+    let session = prog.begin(&dev)?;
+
+    match mode {
+        Mode::Json => println!(
+            "{{\"op\":\"energize\",\"ok\":true,\"device\":{:?},\"hold\":{hold}}}",
+            dev.name
+        ),
+        _ => anstream::println!("Socket energized for {}.", dev.name),
+    }
+
+    if hold {
+        anstream::println!("Holding. Ctrl-C to de-energize.");
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
+    // Without --hold the socket is released at once, which makes this a safe
+    // way to confirm a chip's voltages apply without leaving a part powered
+    // unattended.
+    prog.end(session)?;
     Ok(())
 }
 

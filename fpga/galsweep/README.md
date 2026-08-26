@@ -70,9 +70,27 @@ is the one number here that could be wrong.
 
 ## Not done
 
-- **VCC is not routed.** `Z34` needs the MCU's `BEGIN_TRANS`; the FPGA cannot
-  energize the socket alone (see `fpga/vccprobe`). Without it no chip can be
-  read, and that is the next increment.
+- **Powering the part needs two halves, and both now exist.** The FPGA routes
+  supplies to socket pins through its shift register, but the MCU switches them
+  on and sets their level: `BEGIN_TRANS` carries `raw_voltages` from the chip's
+  algorithm, and `end()` de-energizes. A bitstream that routes VCC to a pin
+  correctly produces nothing when the rail behind it is off -- which is exactly
+  what measuring one showed, in both polarities.
+
+  `minipro energize` closes it:
+
+  ```sh
+  MINIPRO_KEEP_BITSTREAM=1 minipro bitstream fpga/galsweep/t76_galsweep_out.bit
+  MINIPRO_KEEP_BITSTREAM=1 minipro energize GAL16V8 --hold
+  ```
+
+  The MCU applies the GAL's voltages while our instrument stays resident.
+  Verified: "Socket energized for GAL16V8" with `algorithm="GAL16A1"` kept
+  rather than uploaded. Note the plain device name -- there is no `@DIP20`
+  suffix for these parts.
+
+  What is still untested is whether the FPGA's own VCC latch then routes that
+  live rail to `Z34`. The supply exists now; the routing is unproven.
 - **I/O direction is discovered, not configured.** Pins 12-19 can be inputs on a
   real part, in which case the input space is larger than 1024 and those pins
   must be driven rather than sampled. The command path exists to make that a
