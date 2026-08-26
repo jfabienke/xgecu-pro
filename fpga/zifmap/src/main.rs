@@ -107,6 +107,21 @@ const CLKDIV_INT: u16 = 108;
 const CLKDIV_FRAC: u8 = 130;
 const SAMPLE_HZ: u32 = 1_151_990;
 
+/// Baud-probe mode: sample far faster and derive the bit period from the
+/// waveform instead of assuming it.
+///
+/// The readback rate is the binding constraint on every tool built on the ISP
+/// header, so the useful number is not what the FPGA can generate -- anything --
+/// but what survives the path to a header pin and a jumper and still decodes.
+/// The sweep bitstream steps through six rates; this measures each.
+///
+/// 125 MHz / 4 = 31.25 MSa/s. At 4 Mbaud that is 7.8 samples per bit, enough to
+/// decode; at 115200 a five-byte frame is 435 us against a 1.05 ms window, so
+/// every rate in the sweep fits.
+const BAUD_PROBE: bool = true;
+const PROBE_CLKDIV_INT: u16 = 4;
+const PROBE_SAMPLE_HZ: u32 = 31_250_000;
+
 /// The beacon's real baud rate, not its nominal one. Its divider is
 /// `20_000_000 / 115200 = 173.6`, rounded to 174, so it actually transmits at
 /// 20e6/174 = 114_942.5 baud. Decoding against 115200 would drift 2.2% of a
@@ -441,6 +456,73 @@ fn selftest(buf: &mut [u32; N_SAMPLES], out: &mut Out<'_, '_>) -> bool {
     ok
 }
 
+/// Measure the bit period of a channel, in samples, from the waveform itself.
+///
+/// Taken as the SHORTEST run of identical samples that occurs often enough to be
+/// real, not the shortest outright: a single glitch would otherwise set the
+/// period and every decode after it would be wrong in a way that still produces
+/// bytes. Runs clipped by the window edges are excluded for the same reason.
+fn measure_bit_samples(buf: &[u32], ch: u8) -> u32 {
+    let mut hist = [0u32; 64];
+    let mut run: u32 = 0;
+    let mut prev = bit_at(buf, ch, 0);
+    let mut first = false;
+    for i in 0..buf.len() {
+        let s = bit_at(buf, ch, i);
+        if s == prev {
+            run += 1;
+        } else {
+            if first && (run as usize) < hist.len() {
+                hist[run as usize] += 1;
+            }
+            first = true;
+            run = 1;
+            prev = s;
+        }
+    }
+    // The bit period is the shortest run length seen at least a few times.
+    let total: u32 = hist.iter().sum();
+    let floor = core::cmp::max(2, total / 20);
+    for (n, &c) in hist.iter().enumerate().skip(2) {
+        if c >= floor {
+            return n as u32;
+        }
+    }
+    0
+}
+
+/// Decode a channel using a supplied bit period rather than the compiled-in one.
+fn decode_at(buf: &[u32], ch: u8, spb_q8: u32, out: &mut [u8]) -> (usize, u32) {
+    let n = buf.len();
+    let half = spb_q8 / 2;
+    let (mut got, mut err) = (0usize, 0u32);
+    let mut i = 1usize;
+    while i < n && got < out.len() {
+        if !(bit_at(buf, ch, i - 1) == 1 && bit_at(buf, ch, i) == 0) {
+            i += 1;
+            continue;
+        }
+        let base = (i as u32) << 8;
+        let pos = |k: u32| -> usize { ((base + half + k * spb_q8) >> 8) as usize };
+        if pos(9) >= n {
+            break;
+        }
+        if bit_at(buf, ch, pos(0)) != 0 || bit_at(buf, ch, pos(9)) != 1 {
+            err += 1;
+            i += 1;
+            continue;
+        }
+        let mut b = 0u8;
+        for k in 0..8u32 {
+            b |= bit_at(buf, ch, pos(k + 1)) << k;
+        }
+        out[got] = b;
+        got += 1;
+        i = pos(9) + 1;
+    }
+    (got, err)
+}
+
 /// Decode one channel and return its raw byte stream, for reading a binary
 /// frame rather than a beacon name.
 ///
@@ -550,6 +632,38 @@ fn report(buf: &[u32], pass: u32, out: &mut Out<'_, '_>, delay: &mut cortex_m::d
             let _ = write!(l, " none");
         }
         out.line(&l);
+        return;
+    }
+
+    if BAUD_PROBE {
+        let bits = measure_bit_samples(buf, 0);
+        l.clear();
+        if bits < 2 {
+            let _ = write!(l, "BAUD: no transitions on GP0");
+            out.line(&l);
+        } else {
+            let baud = PROBE_SAMPLE_HZ / bits;
+            let mut by = [0u8; 64];
+            let (got, err) = decode_at(buf, 0, bits * 256, &mut by);
+            // The step index rides in the payload as "Bnn", so the reading
+            // identifies which rate it is looking at rather than relying on
+            // timing alone.
+            let mut step = 0u8;
+            let mut frames = 0u32;
+            for w in by[..got].windows(5) {
+                if w[0] == b'B' && w[3] == b'\r' && w[4] == b'\n' {
+                    step = w[2].wrapping_sub(b'0');
+                    frames += 1;
+                }
+            }
+            let _ = write!(
+                l,
+                "BAUD step {}  measured {} baud ({} samp/bit)  bytes {}  frames {}  err {}",
+                step, baud, bits, got, frames, err
+            );
+            out.line(&l);
+        }
+        out.idle(delay, 1200);
         return;
     }
 
@@ -710,7 +824,10 @@ fn main() -> ! {
         .autopush(true)
         .push_threshold(32)
         .buffers(Buffers::OnlyRx)
-        .clock_divisor_fixed_point(CLKDIV_INT, CLKDIV_FRAC)
+        .clock_divisor_fixed_point(
+            if BAUD_PROBE { PROBE_CLKDIV_INT } else { CLKDIV_INT },
+            if BAUD_PROBE { 0 } else { CLKDIV_FRAC },
+        )
         .build(sm0);
     let _sm = sm.start();
 
